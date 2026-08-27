@@ -89,11 +89,17 @@ class ProviderBackend(Backend):
         self._owned = [self.con]
         self.con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog)")
         self.provider = FakeProvider(self.con)
-        self.provider.add_table("t", pa.table({
-            "id": pa.array([r[0] for r in ROWS], type=pa.int32()),
-            "name": pa.array([r[1] for r in ROWS]),
-            "n": pa.array([r[2] for r in ROWS], type=pa.int32()),
-        }), primary_key=["id"])
+        self.provider.add_table(
+            "t",
+            pa.table(
+                {
+                    "id": pa.array([r[0] for r in ROWS], type=pa.int32()),
+                    "name": pa.array([r[1] for r in ROWS]),
+                    "n": pa.array([r[2] for r in ROWS], type=pa.int32()),
+                }
+            ),
+            primary_key=["id"],
+        )
         self.provider.register()
         self.table = "app.main.t"
 
@@ -139,7 +145,9 @@ PROBES = [
     Probe("order_limit_offset", "read", "SELECT * FROM {t} ORDER BY n DESC LIMIT 2 OFFSET 1"),
     Probe("count_star", "read", "SELECT count(*) FROM {t}"),
     Probe("aggregate", "read", "SELECT sum(n), avg(n), min(id), max(id) FROM {t}"),
-    Probe("group_by_having", "read", "SELECT n > 15 AS big, count(*) FROM {t} GROUP BY 1 HAVING count(*) > 0 ORDER BY 1"),
+    Probe(
+        "group_by_having", "read", "SELECT n > 15 AS big, count(*) FROM {t} GROUP BY 1 HAVING count(*) > 0 ORDER BY 1"
+    ),
     Probe("distinct", "read", "SELECT DISTINCT n > 15 AS big FROM {t} ORDER BY 1"),
     Probe("self_join", "read", "SELECT a.id, b.id FROM {t} a JOIN {t} b ON a.id = b.id - 1 ORDER BY 1"),
     Probe("cte", "read", "WITH x AS (SELECT * FROM {t} WHERE n > 10) SELECT count(*) FROM x"),
@@ -149,7 +157,6 @@ PROBES = [
     Probe("scalar_subquery", "read", "SELECT (SELECT max(n) FROM {t})"),
     Probe("exists_subquery", "read", "SELECT count(*) FROM {t} a WHERE EXISTS (SELECT 1 FROM {t} b WHERE b.id = a.id)"),
     Probe("filter_on_unprojected", "read", "SELECT id FROM {t} WHERE name = 'b'"),
-
     # write ------------------------------------------------------------------------------------
     Probe("insert_values", "write", "INSERT INTO {t} VALUES (4, 'd', 40)"),
     Probe("insert_multi_row", "write", "INSERT INTO {t} VALUES (4, 'd', 40), (5, 'e', 50)"),
@@ -157,8 +164,11 @@ PROBES = [
     Probe("insert_partial_columns", "write", "INSERT INTO {t} (id, name) VALUES (4, 'd')"),
     Probe("insert_returning", "write", "INSERT INTO {t} VALUES (4, 'd', 40) RETURNING id"),
     Probe("insert_on_conflict_do_nothing", "write", "INSERT INTO {t} VALUES (1, 'dup', 0) ON CONFLICT DO NOTHING"),
-    Probe("insert_on_conflict_do_update", "write",
-          "INSERT INTO {t} VALUES (1, 'dup', 0) ON CONFLICT (id) DO UPDATE SET n = excluded.n"),
+    Probe(
+        "insert_on_conflict_do_update",
+        "write",
+        "INSERT INTO {t} VALUES (1, 'dup', 0) ON CONFLICT (id) DO UPDATE SET n = excluded.n",
+    ),
     Probe("insert_or_replace", "write", "INSERT OR REPLACE INTO {t} VALUES (1, 'replaced', 99)"),
     Probe("insert_or_ignore", "write", "INSERT OR IGNORE INTO {t} VALUES (1, 'dup', 0)"),
     Probe("insert_duplicate_key_raises", "write", "INSERT INTO {t} VALUES (1, 'dup', 0)"),
@@ -172,7 +182,6 @@ PROBES = [
     Probe("delete_using", "write", "DELETE FROM {t} USING (SELECT 2 AS k) s WHERE {t}.id = s.k"),
     Probe("delete_returning", "write", "DELETE FROM {t} WHERE id = 1 RETURNING id"),
     Probe("truncate", "write", "TRUNCATE {t}"),
-
     # ddl --------------------------------------------------------------------------------------
     Probe("add_column", "ddl", "ALTER TABLE {t} ADD COLUMN extra INTEGER"),
     Probe("drop_column", "ddl", "ALTER TABLE {t} DROP COLUMN n"),
@@ -184,36 +193,40 @@ PROBES = [
     Probe("drop_table", "ddl", "DROP TABLE {t}", verify=None),
     Probe("create_view_over", "ddl", "CREATE VIEW v_over AS SELECT * FROM {t}"),
     Probe("ctas_from", "ddl", "CREATE TABLE copy_of AS SELECT * FROM {t}"),
-
     # metadata ---------------------------------------------------------------------------------
     Probe("describe", "metadata", "SELECT column_name, column_type FROM (DESCRIBE {t})"),
     Probe("duckdb_tables", "metadata", "SELECT count(*) FROM duckdb_tables() WHERE table_name = 't'"),
-    Probe("duckdb_columns", "metadata",
-          "SELECT column_name, data_type FROM duckdb_columns() WHERE table_name = 't' ORDER BY column_index"),
-    Probe("duckdb_constraints", "metadata",
-          "SELECT constraint_type FROM duckdb_constraints() WHERE table_name = 't' ORDER BY 1"),
-    Probe("information_schema_columns", "metadata",
-          "SELECT column_name FROM information_schema.columns WHERE table_name = 't' ORDER BY ordinal_position"),
-    Probe("information_schema_tables", "metadata",
-          "SELECT count(*) FROM information_schema.tables WHERE table_name = 't'"),
+    Probe(
+        "duckdb_columns",
+        "metadata",
+        "SELECT column_name, data_type FROM duckdb_columns() WHERE table_name = 't' ORDER BY column_index",
+    ),
+    Probe(
+        "duckdb_constraints",
+        "metadata",
+        "SELECT constraint_type FROM duckdb_constraints() WHERE table_name = 't' ORDER BY 1",
+    ),
+    Probe(
+        "information_schema_columns",
+        "metadata",
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 't' ORDER BY ordinal_position",
+    ),
+    Probe(
+        "information_schema_tables", "metadata", "SELECT count(*) FROM information_schema.tables WHERE table_name = 't'"
+    ),
     Probe("pragma_table_info", "metadata", "SELECT name, type FROM pragma_table_info('{t}')"),
     Probe("show_tables_contains", "metadata", "SELECT count(*) FROM (SHOW ALL TABLES) WHERE name = 't'"),
     Probe("summarize", "metadata", "SELECT column_name FROM (SUMMARIZE SELECT * FROM {t}) ORDER BY 1"),
-
     # semantics --------------------------------------------------------------------------------
     Probe("rowid_select", "semantics", "SELECT count(rowid) FROM {t}"),
     Probe("not_null_is_enforced", "semantics", "INSERT INTO {t} VALUES (NULL, 'x', 1)"),
     Probe("type_error_surfaces", "semantics", "INSERT INTO {t} VALUES ('not an int', 'x', 1)"),
     Probe("empty_result_shape", "semantics", "SELECT * FROM {t} WHERE id = 999"),
     Probe("prepared_statement", "semantics", "PREPARE p AS SELECT count(*) FROM {t}; EXECUTE p"),
-
     # transactions -----------------------------------------------------------------------------
-    Probe("rollback_insert", "transactions",
-          "BEGIN; INSERT INTO {t} VALUES (4, 'd', 40); ROLLBACK"),
-    Probe("commit_insert", "transactions",
-          "BEGIN; INSERT INTO {t} VALUES (4, 'd', 40); COMMIT"),
-    Probe("rollback_delete", "transactions",
-          "BEGIN; DELETE FROM {t} WHERE id = 1; ROLLBACK"),
+    Probe("rollback_insert", "transactions", "BEGIN; INSERT INTO {t} VALUES (4, 'd', 40); ROLLBACK"),
+    Probe("commit_insert", "transactions", "BEGIN; INSERT INTO {t} VALUES (4, 'd', 40); COMMIT"),
+    Probe("rollback_delete", "transactions", "BEGIN; DELETE FROM {t} WHERE id = 1; ROLLBACK"),
 ]
 
 PROBES_BY_NAME = {p.name: p for p in PROBES}
@@ -247,7 +260,6 @@ LEDGER: dict[tuple[str, str], tuple[str, str]] = {
     ("update_returning", "provider"): _RETURNING,
     ("delete_returning", "bridge"): _RETURNING,
     ("delete_returning", "provider"): _RETURNING,
-
     ("insert_on_conflict_do_nothing", "bridge"): _NO_CONFLICT_TARGET,
     ("insert_on_conflict_do_nothing", "provider"): _NO_CONFLICT_TARGET,
     ("insert_on_conflict_do_update", "bridge"): _NO_CONFLICT_TARGET,
@@ -256,7 +268,6 @@ LEDGER: dict[tuple[str, str], tuple[str, str]] = {
     ("insert_or_replace", "provider"): _NO_CONFLICT_TARGET,
     ("insert_or_ignore", "bridge"): _NO_CONFLICT_TARGET,
     ("insert_or_ignore", "provider"): _NO_CONFLICT_TARGET,
-
     ("add_column", "bridge"): _BRIDGE_ALTER,
     ("drop_column", "bridge"): _BRIDGE_ALTER,
     ("rename_column", "bridge"): _BRIDGE_ALTER,
@@ -266,27 +277,26 @@ LEDGER: dict[tuple[str, str], tuple[str, str]] = {
     ("alter_column_type", "provider"): _PROVIDER_ALTER,
     ("set_default", "provider"): _PROVIDER_ALTER,
     ("add_not_null", "provider"): _PROVIDER_ALTER,
-
     ("drop_table", "bridge"): ("unsupported", "DROP on a bridge entry is rejected; detach instead"),
     ("drop_table", "provider"): ("unsupported", "DROP on a provider entry is rejected; invalidate instead"),
-
     # Not a deliberate rejection: COMMENT ON reaches neither entry kind and reports the table as
     # missing outright. Worth a real message if it is meant to stay unsupported.
     ("comment_on_table", "bridge"): ("unsupported", "reports 'Table with name t does not exist'"),
     ("comment_on_table", "provider"): ("unsupported", "reports 'Table with name t does not exist'"),
-
     ("duckdb_constraints", "bridge"): ("differs", "primary key is not reported as a catalog constraint"),
     ("duckdb_constraints", "provider"): ("differs", "primary key is not reported as a catalog constraint"),
-
     ("rollback_insert", "bridge"): _NO_ROLLBACK,
     ("rollback_insert", "provider"): _NO_ROLLBACK,
     ("rollback_delete", "bridge"): _NO_ROLLBACK,
     ("rollback_delete", "provider"): _NO_ROLLBACK,
-
     # Constraint enforcement lives in the backing store. The bridge inherits the source's, so it
     # matches native; a provider has none unless its host implements them.
-    ("insert_duplicate_key_raises", "provider"):
-        ("accepts-invalid", "provider host enforces no constraints; the stub accepts the duplicate"),
-    ("not_null_is_enforced", "provider"):
-        ("accepts-invalid", "provider host enforces no constraints; the stub accepts the NULL"),
+    ("insert_duplicate_key_raises", "provider"): (
+        "accepts-invalid",
+        "provider host enforces no constraints; the stub accepts the duplicate",
+    ),
+    ("not_null_is_enforced", "provider"): (
+        "accepts-invalid",
+        "provider host enforces no constraints; the stub accepts the NULL",
+    ),
 }

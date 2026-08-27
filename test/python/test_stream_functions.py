@@ -30,12 +30,12 @@ class Generator:
         # fourth argument (there are no pushed rows on the local path), and DuckDB's default NULL
         # handling short-circuits a UDF with any NULL input to NULL without calling it -- which the
         # extension reports as "returned no Arrow schema when opened".
-        self.con.create_function(f"{prefix}_open", self._open, [VARCHAR, VARCHAR, VARCHAR, BLOB], BLOB,
-                                 null_handling="special")
+        self.con.create_function(
+            f"{prefix}_open", self._open, [VARCHAR, VARCHAR, VARCHAR, BLOB], BLOB, null_handling="special"
+        )
         # next needs it too, for the other direction: returning NULL is how the protocol signals
         # exhaustion, and under DEFAULT handling DuckDB rejects a NULL the UDF returned itself.
-        self.con.create_function(f"{prefix}_next", self._next, [VARCHAR], BLOB,
-                                 null_handling="special")
+        self.con.create_function(f"{prefix}_next", self._next, [VARCHAR], BLOB, null_handling="special")
         self.con.create_function(f"{prefix}_close", self._close, [VARCHAR], VARCHAR)
 
     def _open(self, handle, function_name, args_json, pushed):
@@ -66,11 +66,15 @@ def batches(count, rows_each=3):
     out = []
     for b in range(count):
         base = b * rows_each
-        out.append(pa.RecordBatch.from_arrays(
-            [pa.array(range(base, base + rows_each), type=pa.int32()),
-             pa.array([f"r{i}" for i in range(base, base + rows_each)])],
-            schema=SCHEMA,
-        ))
+        out.append(
+            pa.RecordBatch.from_arrays(
+                [
+                    pa.array(range(base, base + rows_each), type=pa.int32()),
+                    pa.array([f"r{i}" for i in range(base, base + rows_each)]),
+                ],
+                schema=SCHEMA,
+            )
+        )
     return out
 
 
@@ -139,8 +143,6 @@ def test_early_termination_still_closes(con, gen):
 
 def test_dropping_the_stream_function_removes_it(con, gen):
     con.execute("SELECT vcat_drop_stream_function('app', 'main', 'gen')").fetchall()
-    assert con.execute(
-        "SELECT count(*) FROM vcat_stream_functions() WHERE catalog = 'app'"
-    ).fetchone() == (0,)
+    assert con.execute("SELECT count(*) FROM vcat_stream_functions() WHERE catalog = 'app'").fetchone() == (0,)
     with pytest.raises(Exception):
         con.execute("SELECT * FROM app.main.gen()").fetchall()

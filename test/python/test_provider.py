@@ -11,12 +11,14 @@ import pytest
 from conftest import BLOB, VARCHAR, VARCHAR_LIST, schema_message
 from provider_stub import FakeProvider
 
-USERS = pa.table({
-    "id": pa.array([1, 2, 3], type=pa.int32()),
-    "name": pa.array(["ana", "bo", None]),
-    "score": pa.array([10, 20, 30], type=pa.int32()),
-    "joined": pa.array([datetime.date(2024, 1, 1), datetime.date(2025, 6, 1), None], type=pa.date32()),
-})
+USERS = pa.table(
+    {
+        "id": pa.array([1, 2, 3], type=pa.int32()),
+        "name": pa.array(["ana", "bo", None]),
+        "score": pa.array([10, 20, 30], type=pa.int32()),
+        "joined": pa.array([datetime.date(2024, 1, 1), datetime.date(2025, 6, 1), None], type=pa.date32()),
+    }
+)
 
 
 @pytest.fixture
@@ -36,7 +38,10 @@ def test_provider_table_is_visible_and_typed(con, provider):
     ]
     described = con.execute("DESCRIBE app.main.users").fetchall()
     assert [(c[0], c[1]) for c in described] == [
-        ("id", "INTEGER"), ("name", "VARCHAR"), ("score", "INTEGER"), ("joined", "DATE"),
+        ("id", "INTEGER"),
+        ("name", "VARCHAR"),
+        ("score", "INTEGER"),
+        ("joined", "DATE"),
     ]
 
 
@@ -54,28 +59,27 @@ def test_describe_reports_provider_columns(con, provider):
     assert (primary_key, writeable, editable) == (["id"], True, True)
 
 
-@pytest.mark.parametrize("predicate", [
-    "id = 2",
-    "id != 2",
-    "id > 1",
-    "id <= 2",
-    "id IN (1, 3)",
-    "name IS NULL",
-    "name IS NOT NULL",
-    "name = 'ana'",
-    "joined >= DATE '2025-01-01'",
-    "joined IS NULL",
-    "score > 10 AND score < 30",
-])
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "id = 2",
+        "id != 2",
+        "id > 1",
+        "id <= 2",
+        "id IN (1, 3)",
+        "name IS NULL",
+        "name IS NOT NULL",
+        "name = 'ana'",
+        "joined >= DATE '2025-01-01'",
+        "joined IS NULL",
+        "score > 10 AND score < 30",
+    ],
+)
 def test_filter_pushdown_is_applied_by_the_provider(con, provider, predicate):
     """DuckDB does not re-apply filters pushed into an Arrow scan, so whatever reaches the provider
     IS the filter. The stub applies exactly what it was handed; the same predicate evaluated over
     the unfiltered data is the oracle."""
-    expected = [
-        row for row in con.execute(
-            "SELECT * FROM (SELECT * FROM app.main.users) WHERE true"
-        ).fetchall()
-    ]
+    expected = [row for row in con.execute("SELECT * FROM (SELECT * FROM app.main.users) WHERE true").fetchall()]
     con.execute("SET disabled_optimizers TO 'filter_pushdown'")
     unpushed = con.execute(f"SELECT * FROM app.main.users WHERE {predicate} ORDER BY id").fetchall()
     con.execute("RESET disabled_optimizers")
@@ -85,8 +89,7 @@ def test_filter_pushdown_is_applied_by_the_provider(con, provider, predicate):
 
 
 def test_projection_is_answered_positionally(con, provider):
-    assert con.execute("SELECT score, id FROM app.main.users ORDER BY id").fetchall() == \
-        [(10, 1), (20, 2), (30, 3)]
+    assert con.execute("SELECT score, id FROM app.main.users ORDER BY id").fetchall() == [(10, 1), (20, 2), (30, 3)]
     scans = [c for c in provider.calls if c[0] == "scan"]
     assert scans and scans[-1][2] == ["score", "id"]
 
@@ -108,22 +111,26 @@ def test_empty_result_is_not_an_error(con, provider):
 
 
 def test_multi_batch_scan(con, provider):
-    big = pa.table({
-        "id": pa.array(range(5000), type=pa.int32()),
-        "name": pa.array([f"n{i}" for i in range(5000)]),
-        "score": pa.array(range(5000), type=pa.int32()),
-        "joined": pa.array([None] * 5000, type=pa.date32()),
-    })
+    big = pa.table(
+        {
+            "id": pa.array(range(5000), type=pa.int32()),
+            "name": pa.array([f"n{i}" for i in range(5000)]),
+            "score": pa.array(range(5000), type=pa.int32()),
+            "joined": pa.array([None] * 5000, type=pa.date32()),
+        }
+    )
     provider.add_table("big", big, primary_key=["id"])
     provider.invalidate()
-    assert con.execute("SELECT count(*), sum(score) FROM app.main.big").fetchone() == \
-        (5000, sum(range(5000)))
+    assert con.execute("SELECT count(*), sum(score) FROM app.main.big").fetchone() == (5000, sum(range(5000)))
 
 
 def test_insert_reaches_the_provider(con, provider):
     con.execute("INSERT INTO app.main.users VALUES (4, 'di', 40, DATE '2026-01-01')")
     assert provider.rows("users")[-1] == {
-        "id": 4, "name": "di", "score": 40, "joined": datetime.date(2026, 1, 1),
+        "id": 4,
+        "name": "di",
+        "score": 40,
+        "joined": datetime.date(2026, 1, 1),
     }
     assert con.execute("SELECT count(*) FROM app.main.users").fetchone() == (4,)
 
@@ -166,9 +173,10 @@ def test_invalidate_picks_up_a_new_table(con, provider):
     assert con.execute("SELECT count(*) FROM vcat_table_permissions('app', schema := 'main')").fetchone() == (1,)
     provider.add_table("later", USERS, primary_key=["id"])
     provider.invalidate()
-    assert con.execute(
-        "SELECT name FROM vcat_table_permissions('app', schema := 'main') ORDER BY name"
-    ).fetchall() == [("later",), ("users",)]
+    assert con.execute("SELECT name FROM vcat_table_permissions('app', schema := 'main') ORDER BY name").fetchall() == [
+        ("later",),
+        ("users",),
+    ]
 
 
 def test_schema_changes_are_only_seen_after_invalidate(con, provider):
@@ -225,9 +233,7 @@ def test_a_raising_scan_udf_surfaces_as_a_query_error(con):
     con.create_function("b_list", boom_list, [], VARCHAR)
     con.create_function("b_schema", boom_schema, [VARCHAR], BLOB)
     con.create_function("b_scan", boom_scan, [VARCHAR, VARCHAR_LIST, VARCHAR], BLOB)
-    con.execute(
-        "SELECT vcat_register_provider('bad', 'main', 'probe', 'b_list', 'b_schema', 'b_scan', '', '', '', '')"
-    )
+    con.execute("SELECT vcat_register_provider('bad', 'main', 'probe', 'b_list', 'b_schema', 'b_scan', '', '', '', '')")
     with pytest.raises(Exception, match="provider exploded"):
         con.execute("SELECT * FROM bad.main.t").fetchall()
 

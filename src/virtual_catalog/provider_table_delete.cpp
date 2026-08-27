@@ -75,9 +75,9 @@ SinkFinalizeType ProviderTableDelete::Finalize(Pipeline &pipeline, Event &event,
 	}
 	auto chunks = builder.Finish();
 	auto arrow_ipc = vcat_provider::EncodeChunksAsIpc(*conn->context, pk_types, pk_cols, chunks);
-	gstate.affected_rows = NumericCast<idx_t>(vcat_provider::CallWriteUdf(*conn, table.table_info->provider->delete_udf,
-	                                                                     table.table_info->table_name, arrow_ipc,
-	                                                                     vector<Value>(), "vcat_provider: delete UDF"));
+	gstate.affected_rows = NumericCast<idx_t>(
+	    vcat_provider::CallWriteUdf(*conn, table.table_info->provider->delete_udf, table.table_info->table_name,
+	                                arrow_ipc, vector<Value>(), "vcat_provider: delete UDF"));
 
 	return SinkFinalizeType::READY;
 }

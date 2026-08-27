@@ -58,8 +58,16 @@ def unique_id(prefix="b"):
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
-def bridge(source, target, permissions, pk_overrides=None, catalog="app", schema="main",
-           source_catalog="memory", source_schema="main"):
+def bridge(
+    source,
+    target,
+    permissions,
+    pk_overrides=None,
+    catalog="app",
+    schema="main",
+    source_catalog="memory",
+    source_schema="main",
+):
     """Run the documented handshake across two connections. Returns the bridge id."""
     bridge_id = unique_id()
     target.execute(f"ATTACH ':memory:' AS {catalog} (TYPE virtual_catalog)")

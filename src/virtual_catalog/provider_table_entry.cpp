@@ -32,7 +32,7 @@ static string SerializeFlatFiltersOrThrow(ArrowStreamParameters &parameters, con
 	// filtered scan just to learn that '2026-05-01' was a DATE.
 	filter_json::FilterSerializeResult result;
 	auto json = filter_json::SerializeFilters(*parameters.filters, parameters.projected_columns.filter_to_col,
-	                                              column_names, result);
+	                                          column_names, result);
 	if (!result.all_exact) {
 		filter_json::ThrowUnrenderableFilter("vcat_provider scan", result.first_unsupported);
 	}
@@ -115,7 +115,7 @@ static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(uintpt
 		throw IOException("vcat_provider: read UDF for '%s' returned no Arrow data", provider_table);
 	}
 	vcat_provider::MakeStreamFromIpc(StringValue::Get(arrow_value), &wrapper->arrow_array_stream,
-	                                "vcat_provider: read UDF");
+	                                 "vcat_provider: read UDF");
 
 	auto trailing = vcat_provider::DescribeTrailingColumns(
 	    *stream_data->source_conn->context, wrapper->arrow_array_stream, pk_cols.size(), "vcat_provider: read UDF");

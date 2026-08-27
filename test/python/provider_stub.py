@@ -90,8 +90,12 @@ class FakeProvider:
         c.execute(
             "SELECT vcat_register_provider(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                self.catalog, self.schema, "probe",
-                f"{prefix}_list", f"{prefix}_schema", f"{prefix}_scan",
+                self.catalog,
+                self.schema,
+                "probe",
+                f"{prefix}_list",
+                f"{prefix}_schema",
+                f"{prefix}_scan",
                 f"{prefix}_insert" if self._writeable else "",
                 f"{prefix}_update" if self._writeable else "",
                 f"{prefix}_delete" if self._writeable else "",
@@ -173,8 +177,9 @@ class FakeProvider:
         self.calls.append(("delete", name, len(incoming)))
         keys = self.primary_keys[name]
         doomed = [{k: r[k] for k in keys} for r in incoming]
-        rows = [r for r in self.tables[name].to_pylist()
-                if not any(all(r[k] == v for k, v in d.items()) for d in doomed)]
+        rows = [
+            r for r in self.tables[name].to_pylist() if not any(all(r[k] == v for k, v in d.items()) for d in doomed)
+        ]
         self.tables[name] = pa.Table.from_pylist(rows, schema=self.tables[name].schema)
         return len(incoming)
 
@@ -183,9 +188,7 @@ class FakeProvider:
         detail = json.loads(details)
         table = self.tables[name]
         if kind == "add_column":
-            table = table.append_column(
-                detail["name"], pa.nulls(table.num_rows, type=pa.int32())
-            )
+            table = table.append_column(detail["name"], pa.nulls(table.num_rows, type=pa.int32()))
         elif kind == "drop_column":
             table = table.drop_columns([detail["name"]])
         elif kind == "rename_column":

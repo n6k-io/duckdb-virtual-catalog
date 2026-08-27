@@ -190,8 +190,8 @@ CatalogEntry *VirtualCatalogSchemaEntry::GetOrQueryProviderEntry(const string &n
 	}
 
 	Connection conn(*provider->db_instance);
-	auto sql =
-	    "SELECT " + KeywordHelper::WriteOptionallyQuoted(provider->schema_udf) + "(" + vcat::QuoteSqlLiteral(name) + ")";
+	auto sql = "SELECT " + KeywordHelper::WriteOptionallyQuoted(provider->schema_udf) + "(" +
+	           vcat::QuoteSqlLiteral(name) + ")";
 	auto result = conn.Query(sql);
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("vcat_provider: schema UDF failed: ");

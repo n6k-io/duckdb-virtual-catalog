@@ -98,15 +98,16 @@ def test_source_constraints_still_apply(bridged):
 
 
 def test_composite_primary_key_update_and_delete(source, target):
-    source.execute("""
+    source.execute(
+        """
         CREATE TABLE events(tenant INTEGER, eid INTEGER, note VARCHAR, PRIMARY KEY(tenant, eid));
         INSERT INTO events VALUES (1, 1, 'a'), (1, 2, 'b'), (2, 1, 'c');
-    """)
+    """
+    )
     bridge(source, target, {"events": "readwrite"})
     target.execute("UPDATE app.main.events SET note = 'B' WHERE tenant = 1 AND eid = 2")
     target.execute("DELETE FROM app.main.events WHERE tenant = 2")
-    assert source.execute("SELECT * FROM events ORDER BY tenant, eid").fetchall() == \
-        [(1, 1, 'a'), (1, 2, 'B')]
+    assert source.execute("SELECT * FROM events ORDER BY tenant, eid").fetchall() == [(1, 1, 'a'), (1, 2, 'B')]
 
 
 def test_primary_key_override_enables_writes_on_a_keyless_table(source, target):

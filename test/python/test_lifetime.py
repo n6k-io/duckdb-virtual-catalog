@@ -26,7 +26,10 @@ def run_script(body):
     script = PRELUDE + textwrap.dedent(body)
     return subprocess.run(
         [sys.executable, "-c", script],
-        capture_output=True, text=True, timeout=60, cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=REPO_ROOT,
     )
 
 
@@ -70,7 +73,8 @@ def test_target_detach_without_unregister_then_reattach():
 
 
 def test_process_exits_cleanly_with_a_bridge_still_bound():
-    result = run_script("""
+    result = run_script(
+        """
         source = connect()
         target = connect()
         source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY)")
@@ -80,13 +84,15 @@ def test_process_exits_cleanly_with_a_bridge_still_bound():
         ).fetchone()[0]
         target.execute("SELECT vcat_setup_bridge('leak', ?, 'app', 'main')", [tok]).fetchall()
         print(target.execute("SELECT count(*) FROM app.main.users").fetchone()[0])
-    """)
+    """
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "0"
 
 
 def test_process_exits_cleanly_after_unregister():
-    result = run_script("""
+    result = run_script(
+        """
         source = connect()
         target = connect()
         source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY)")
@@ -99,13 +105,15 @@ def test_process_exits_cleanly_after_unregister():
         source.close()
         target.close()
         print("ok")
-    """)
+    """
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
 
 def test_process_exits_cleanly_with_the_source_closed_first():
-    result = run_script("""
+    result = run_script(
+        """
         source = connect()
         target = connect()
         source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY); INSERT INTO users VALUES (1)")
@@ -116,13 +124,15 @@ def test_process_exits_cleanly_with_the_source_closed_first():
         target.execute("SELECT vcat_setup_bridge('orphan', ?, 'app', 'main')", [tok]).fetchall()
         source.close()
         print(target.execute("SELECT count(*) FROM app.main.users").fetchone()[0])
-    """)
+    """
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "1"
 
 
 def test_process_exits_cleanly_with_a_provider_still_registered():
-    result = run_script("""
+    result = run_script(
+        """
         import pyarrow as pa
         VARCHAR = duckdb.sqltype("VARCHAR")
         BLOB = duckdb.sqltype("BLOB")
@@ -135,7 +145,8 @@ def test_process_exits_cleanly_with_a_provider_still_registered():
             "SELECT vcat_register_provider('app', 'main', 'p', 'l', 's', 'sc', '', '', '', '')"
         ).fetchall()
         print(con.execute("SELECT count(*) FROM vcat_table_permissions('app', schema := 'main')").fetchone()[0])
-    """)
+    """
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "1"
 

@@ -19,8 +19,7 @@ namespace duckdb {
 // table_filters, so a clause omitted from this WHERE is not applied anywhere. Only OPTIONAL/
 // DYNAMIC/BLOOM filters are droppable -- DuckDB marks those optional exactly when it also keeps a
 // FILTER operator above the scan.
-static filter_json::FilterFidelity TryRenderFilterSQL(const TableFilter &filter, const string &col_name,
-                                                          string &out) {
+static filter_json::FilterFidelity TryRenderFilterSQL(const TableFilter &filter, const string &col_name, string &out) {
 	using filter_json::FilterFidelity;
 	switch (filter.filter_type) {
 	case TableFilterType::CONSTANT_COMPARISON:

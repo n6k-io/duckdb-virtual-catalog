@@ -91,8 +91,8 @@ static void AttachProviderToSchemaAndRegister(DataChunk &args, ExpressionState &
 		}
 		auto *local_schema = dynamic_cast<VirtualCatalogSchemaEntry *>(schema_entry.get());
 		if (!local_schema) {
-			throw CatalogException("vcat_provider: schema '%s.%s' is not a provider-capable schema", target_catalog_name,
-			                       target_schema_name);
+			throw CatalogException("vcat_provider: schema '%s.%s' is not a provider-capable schema",
+			                       target_catalog_name, target_schema_name);
 		}
 
 		auto info = make_shared_ptr<ProviderInfo>();

@@ -128,7 +128,7 @@ SinkFinalizeType ProviderTableUpdate::Finalize(Pipeline &pipeline, Event &event,
 	auto arrow_ipc = vcat_provider::EncodeChunksAsIpc(*conn->context, row_types, row_col_names, chunks);
 	gstate.affected_rows = NumericCast<idx_t>(
 	    vcat_provider::CallWriteUdf(*conn, table.table_info->provider->update_udf, table.table_info->table_name,
-	                               arrow_ipc, vector<Value> {Value(changed_cols_str)}, "vcat_provider: update UDF"));
+	                                arrow_ipc, vector<Value> {Value(changed_cols_str)}, "vcat_provider: update UDF"));
 
 	return SinkFinalizeType::READY;
 }

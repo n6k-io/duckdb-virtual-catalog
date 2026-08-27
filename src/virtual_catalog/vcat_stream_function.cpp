@@ -404,14 +404,18 @@ void CollectStreamFunctions(ClientContext &context, Catalog &catalog, vector<Str
 	for (auto &sref : schemas) {
 		auto &schema = sref.get();
 		schema.Scan(context, CatalogType::TABLE_FUNCTION_ENTRY, [&](CatalogEntry &e) {
+			// Table macros share this catalog set, so the scan yields them too.
+			if (e.type != CatalogType::TABLE_FUNCTION_ENTRY) {
+				return;
+			}
 			auto &fn_entry = e.Cast<TableFunctionCatalogEntry>();
 			for (auto &fn : fn_entry.functions.functions) {
 				if (fn.bind != OpenStreamAndBindSchema || !fn.function_info) {
 					continue;
 				}
 				auto &info = fn.function_info->Cast<StreamFunctionInfo>();
-				out.push_back({catalog.GetName(), schema.name, e.name, info.function_name, info.open_udf,
-				               info.next_udf, info.close_udf});
+				out.push_back({catalog.GetName(), schema.name, e.name, info.function_name, info.open_udf, info.next_udf,
+				               info.close_udf});
 			}
 		});
 	}

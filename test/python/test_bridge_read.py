@@ -59,12 +59,15 @@ def test_filter_pushdown_matches_source(bridged, predicate):
     assert actual == expected
 
 
-@pytest.mark.parametrize("projection", [
-    "id",
-    "name, id",
-    "score, score",
-    "ratio, joined, name, score, id",
-])
+@pytest.mark.parametrize(
+    "projection",
+    [
+        "id",
+        "name, id",
+        "score, score",
+        "ratio, joined, name, score, id",
+    ],
+)
 def test_projection_pushdown_matches_source(bridged, projection):
     source, target = bridged
     expected = source.execute(f"SELECT {projection} FROM users ORDER BY id").fetchall()
@@ -74,8 +77,10 @@ def test_projection_pushdown_matches_source(bridged, projection):
 
 def test_types_and_nulls_survive_the_crossing(bridged):
     source, target = bridged
-    assert target.execute("SELECT * FROM app.main.users ORDER BY id").fetchall() == \
-        source.execute("SELECT * FROM users ORDER BY id").fetchall()
+    assert (
+        target.execute("SELECT * FROM app.main.users ORDER BY id").fetchall()
+        == source.execute("SELECT * FROM users ORDER BY id").fetchall()
+    )
 
 
 def test_column_types_match_the_source(bridged):
@@ -93,9 +98,7 @@ def test_aggregate_over_the_bridge(bridged):
 def test_scan_function_is_directly_callable(source, target):
     source.execute(SETUP)
     bridge_id = bridge(source, target, {"users": "read"})
-    assert target.execute(
-        f"SELECT count(*) FROM vcat_scan('{bridge_id}', 'users')"
-    ).fetchone() == (5,)
+    assert target.execute(f"SELECT count(*) FROM vcat_scan('{bridge_id}', 'users')").fetchone() == (5,)
 
 
 def test_source_writes_are_visible_immediately(bridged):
