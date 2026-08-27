@@ -1,0 +1,214 @@
+# name: test/sql/virtual_catalog_handshake.test
+# description: bridge handshake -- validation, token rules, and registry lifecycle
+# group: [sql]
+
+require virtual_catalog
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
+
+statement ok
+INSERT INTO memory.main.users VALUES (1, 'a'), (2, 'b');
+
+statement ok
+CREATE TABLE memory.main.nopk(x INTEGER, y VARCHAR);
+
+statement ok
+ATTACH ':memory:' AS hs (TYPE virtual_catalog);
+
+# ---------------------------------------------------------------------------
+# vcat_register_source validates on the source side, before any token exists.
+# ---------------------------------------------------------------------------
+
+statement error
+SELECT vcat_register_source('v1', 'memory', 'main', MAP {}::MAP(VARCHAR, VARCHAR), MAP {}::MAP(VARCHAR, VARCHAR));
+----
+permissions cannot be empty
+
+statement error
+SELECT vcat_register_source('v2', 'memory', 'main', MAP {'other.users': 'read'}, MAP {}::MAP(VARCHAR, VARCHAR));
+----
+must be a bare table name (no dots)
+
+statement error
+SELECT vcat_register_source('v3', 'memory', 'main', MAP {'users': 'write'}, MAP {}::MAP(VARCHAR, VARCHAR));
+----
+invalid permission
+
+statement error
+SELECT vcat_register_source('v4', 'memory', 'main', MAP {'ghost': 'read'}, MAP {}::MAP(VARCHAR, VARCHAR));
+----
+not found in memory.main on source
+
+# A writable table must have a key the rowid-based UPDATE/DELETE path can use, and the failure is
+# raised at registration rather than at the first write.
+statement error
+SELECT vcat_register_source('v5', 'memory', 'main', MAP {'nopk': 'readwrite'}, MAP {}::MAP(VARCHAR, VARCHAR));
+----
+has no discoverable primary key
+
+# pk_overrides supply what discovery could not find.
+statement ok
+SELECT vcat_register_source('v6', 'memory', 'main', MAP {'nopk': 'readwrite'}, MAP {'nopk': 'x'});
+
+# READ tables skip key discovery entirely, so the same table registers read-only unaided.
+statement ok
+SELECT vcat_register_source('v7', 'memory', 'main', MAP {'nopk': 'read'}, MAP {}::MAP(VARCHAR, VARCHAR));
+
+# One pending source per id; the id is claimed from registration, not from setup.
+statement error
+SELECT vcat_register_source('v7', 'memory', 'main', MAP {'users': 'read'}, MAP {}::MAP(VARCHAR, VARCHAR));
+----
+a source is already registered for bridge
+
+# ---------------------------------------------------------------------------
+# vcat_setup_bridge validates the token, then the target.
+# ---------------------------------------------------------------------------
+
+statement error
+SELECT vcat_setup_bridge('v7', 'no-colon-here', 'hs', 'main');
+----
+invalid token format
+
+# The nonce is unique to the loaded extension binary, so a token minted elsewhere is refused.
+statement error
+SELECT vcat_setup_bridge('v7', '00000000-0000-0000-0000-000000000000:deadbeef', 'hs', 'main');
+----
+different copies of the virtual_catalog extension
+
+statement ok
+CREATE TEMP TABLE tok_hs AS SELECT vcat_register_source('hs_b', 'memory', 'main',
+    MAP {'users': 'readwrite'}, MAP {}::MAP(VARCHAR, VARCHAR)) AS t;
+
+# Right nonce, wrong body: the token is checked against the pending source's own UUID.
+statement error
+SELECT vcat_setup_bridge('hs_b', (SELECT split_part(t, ':', 1) || ':00000000-0000-0000-0000-000000000000' FROM tok_hs), 'hs', 'main');
+----
+invalid setup token
+
+# A valid token is still no use against an id nobody registered.
+statement error
+SELECT vcat_setup_bridge('never_registered', (SELECT t FROM tok_hs), 'hs', 'main');
+----
+no registered source for bridge
+
+# Target-side validation runs AFTER the pending source is consumed, so each of the three cases
+# below needs its own registration -- and each one strands that registration. Contrast with the
+# token checks above and the id-collision check below, which all refuse before consuming.
+
+statement ok
+CREATE TEMP TABLE tok_t1 AS SELECT vcat_register_source('hs_t1', 'memory', 'main',
+    MAP {'users': 'read'}, MAP {}::MAP(VARCHAR, VARCHAR)) AS t;
+
+statement error
+SELECT vcat_setup_bridge('hs_t1', (SELECT t FROM tok_t1), 'nosuchcatalog', 'main');
+----
+target catalog 'nosuchcatalog' does not exist
+
+# The pending source is gone: the caller must go back to the source connection and re-register.
+statement error
+SELECT vcat_setup_bridge('hs_t1', (SELECT t FROM tok_t1), 'hs', 'main');
+----
+no registered source for bridge 'hs_t1'
+
+statement ok
+CREATE TEMP TABLE tok_t2 AS SELECT vcat_register_source('hs_t2', 'memory', 'main',
+    MAP {'users': 'read'}, MAP {}::MAP(VARCHAR, VARCHAR)) AS t;
+
+statement error
+SELECT vcat_setup_bridge('hs_t2', (SELECT t FROM tok_t2), 'memory', 'main');
+----
+is not TYPE virtual_catalog
+
+statement ok
+CREATE TEMP TABLE tok_t3 AS SELECT vcat_register_source('hs_t3', 'memory', 'main',
+    MAP {'users': 'read'}, MAP {}::MAP(VARCHAR, VARCHAR)) AS t;
+
+statement error
+SELECT vcat_setup_bridge('hs_t3', (SELECT t FROM tok_t3), 'hs', 'nosuchschema');
+----
+does not exist; CREATE SCHEMA first
+
+# The token refusals earlier did not consume hs_b's pending source: its original token still works.
+query T
+SELECT vcat_setup_bridge('hs_b', (SELECT t FROM tok_hs), 'hs', 'main');
+----
+ok
+
+query IT
+SELECT * FROM hs.main.users ORDER BY id;
+----
+1	a
+2	b
+
+# ---------------------------------------------------------------------------
+# The id stays claimed while the bridge is live.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE tok_dup AS SELECT vcat_register_source('hs_b2', 'memory', 'main',
+    MAP {'users': 'read'}, MAP {}::MAP(VARCHAR, VARCHAR)) AS t;
+
+statement ok
+CREATE SCHEMA hs.other;
+
+statement error
+SELECT vcat_setup_bridge('hs_b', (SELECT t FROM tok_dup), 'hs', 'other');
+----
+bridge 'hs_b' already exists
+
+# ---------------------------------------------------------------------------
+# Teardown releases both halves: the schema binding and the registry entry.
+# ---------------------------------------------------------------------------
+
+statement error
+SELECT vcat_unregister_bridge('nosuchcatalog', 'main');
+----
+target catalog 'nosuchcatalog' does not exist
+
+statement error
+SELECT vcat_unregister_bridge('memory', 'main');
+----
+is not TYPE virtual_catalog
+
+statement error
+SELECT vcat_unregister_bridge('hs', 'other');
+----
+no bridge registered for hs.other
+
+query T
+SELECT vcat_unregister_bridge('hs', 'main');
+----
+ok
+
+statement error
+SELECT * FROM hs.main.users;
+----
+does not exist
+
+# Not idempotent: a second call has nothing to release and says so.
+statement error
+SELECT vcat_unregister_bridge('hs', 'main');
+----
+no bridge registered for hs.main
+
+# The registry entry is gone too, so the id is free again. Without this, a bridge id would be
+# consumed for the life of the process and BridgeInfo::source_db would pin the source
+# DatabaseInstance with it.
+statement ok
+CREATE TABLE tok_reuse AS SELECT vcat_register_source('hs_b', 'memory', 'main',
+    MAP {'users': 'read'}, MAP {}::MAP(VARCHAR, VARCHAR)) AS t;
+
+query T
+SELECT vcat_setup_bridge('hs_b', (SELECT t FROM tok_reuse), 'hs', 'main');
+----
+ok
+
+query IT
+SELECT * FROM hs.main.users ORDER BY id;
+----
+1	a
+2	b
+
+statement ok
+SELECT vcat_unregister_bridge('hs', 'main');

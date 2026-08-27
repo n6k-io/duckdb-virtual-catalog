@@ -4,6 +4,8 @@
 name: Main Extension Distribution Pipeline
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -13,18 +15,93 @@ concurrency:
 
 jobs:
   duckdb-stable-build:
-    name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.4.4
+    name: Build virtual_catalog extension binaries
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.4
     with:
-      duckdb_version: v1.4.4
-      ci_tools_version: v1.4.4
-      extension_name: quack
+      duckdb_version: v1.5.4
+      ci_tools_version: v1.5.4
+      extension_name: virtual_catalog
+      # coi-only: build wasm_threads, never eh/mvp (they can't load a shared-memory
+      # extension). On PRs also drop the non-amd64 native arches for speed.
+      exclude_archs: ${{ github.ref != 'refs/heads/main' && 'linux_arm64;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh' || 'wasm_mvp;wasm_eh' }}
+      opt_in_archs: 'linux_amd64_musl'
 
   code-quality-check:
     name: Code Quality Check
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.4.4
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5.4
     with:
-      duckdb_version: v1.4.4
-      ci_tools_version: v1.4.4
-      extension_name: quack
+      duckdb_version: v1.5.4
+      ci_tools_version: v1.5.4
+      extension_name: virtual_catalog
       format_checks: 'format;tidy'
+
+  duckdb-stable-deploy:
+    name: Deploy virtual_catalog (${{ matrix.duckdb_arch }})
+    needs: duckdb-stable-build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      matrix:
+        duckdb_arch:
+          - linux_amd64
+          - linux_arm64
+          - linux_amd64_musl
+          - osx_amd64
+          - osx_arm64
+          - windows_amd64
+          - windows_amd64_mingw
+          # coi-only: only the shared-memory (wasm_threads) extension is built/shipped.
+          - wasm_threads
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'recursive'
+
+      - name: Checkout DuckDB to version
+        run: |
+          if [ ! -d duckdb ]; then
+            git clone https://github.com/duckdb/duckdb.git
+          fi
+          cd duckdb
+          git checkout v1.5.4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: virtual_catalog-v1.5.4-extension-${{ matrix.duckdb_arch }}
+          path: /tmp/artifact
+
+      - uses: ./.github/actions/setup-gcloud
+
+      - name: Deploy
+        shell: bash
+        env:
+          BUCKET_NAME: n6k-duckdb-release
+          DUCKDB_EXTENSION_SIGNING_PK: ${{ secrets.S3_DUCKDB_ORG_EXTENSION_SIGNING_PK }}
+          DUCKDB_ARCH: ${{ matrix.duckdb_arch }}
+        run: |
+          DUCKDB_VERSION=$(git -C duckdb tag --points-at HEAD)
+          DUCKDB_VERSION=${DUCKDB_VERSION:=$(git -C duckdb log -1 --format=%h)}
+          EXT_VERSION=$(git tag --points-at HEAD)
+          EXT_VERSION=${EXT_VERSION:=$(git log -1 --format=%h)}
+
+          if [[ "$DUCKDB_ARCH" == wasm* ]]; then
+            suffix=".duckdb_extension.wasm"
+          else
+            suffix=".duckdb_extension"
+          fi
+
+          # The artifact nests the extension under a repository/ tree; extension-upload.sh
+          # reads /tmp/extension/<name><suffix>, so flatten it to that path first.
+          built="$(find /tmp/artifact -name "virtual_catalog$suffix" | head -1)"
+          if [ -z "$built" ]; then
+            echo "::error::virtual_catalog$suffix not found in artifact for $DUCKDB_ARCH"
+            exit 1
+          fi
+
+          mkdir -p /tmp/extension
+          cp "$built" "/tmp/extension/virtual_catalog$suffix"
+          ./scripts/extension-upload.sh virtual_catalog "$EXT_VERSION" "$DUCKDB_VERSION" "$DUCKDB_ARCH" "$BUCKET_NAME" true true
