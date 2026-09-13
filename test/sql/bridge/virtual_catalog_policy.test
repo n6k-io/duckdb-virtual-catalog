@@ -1,0 +1,174 @@
+# name: test/sql/bridge/virtual_catalog_policy.test
+# description: row policies -- what a granted verb can see and touch
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, tenant_id INTEGER, amt INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1, 1, 50), (2, 1, 250), (3, 2, 50), (4, 2, 250);
+
+statement ok
+CREATE TABLE memory.main.secrets(id INTEGER PRIMARY KEY, v VARCHAR);
+
+# ---------------------------------------------------------------------------
+# A select policy restricts what the target can see at all.
+# ---------------------------------------------------------------------------
+
+statement ok
+SELECT bridge_register_source('pol_ro', 'memory', 'tok_ro');
+
+statement ok
+SELECT bridge_policy('pol_ro', 'main.orders', 'select', 'tenant_id = 1');
+
+statement ok
+ATTACH '' AS ro (TYPE virtual_catalog_bridge, ID 'pol_ro', TOKEN 'tok_ro');
+
+query III
+SELECT * FROM ro.main.orders ORDER BY id;
+----
+1	1	50
+2	1	250
+
+# The count comes from the source, so the policy has to reach it -- not be applied afterwards.
+query I
+SELECT count(*) FROM ro.main.orders;
+----
+2
+
+# A pushed-down filter and the policy both apply; neither replaces the other.
+query I
+SELECT id FROM ro.main.orders WHERE amt > 100;
+----
+2
+
+# The policy names a column the query does not project. It binds on the source, before the source's
+# own projection, so this works -- it would not if the predicate were applied to the returned rows.
+query I
+SELECT id FROM ro.main.orders ORDER BY id;
+----
+1
+2
+
+# A select-only grant is still a table entry, and the row policy applies to it like any other.
+query I
+SELECT count(*) FROM ro.main.orders;
+----
+2
+
+# A table nobody granted is not in the catalog at all.
+statement error
+SELECT * FROM ro.main.secrets;
+----
+does not exist
+
+statement ok
+DETACH ro;
+
+# ---------------------------------------------------------------------------
+# Write policies restrict which rows a granted write may touch.
+# ---------------------------------------------------------------------------
+
+statement ok
+SELECT bridge_register_source('pol_rw', 'memory', 'tok_rw');
+
+statement ok
+SELECT bridge_policy('pol_rw', 'main.orders', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('pol_rw', 'main.orders', 'update', 'tenant_id = 1');
+
+statement ok
+SELECT bridge_policy('pol_rw', 'main.orders', 'delete', 'amt = 50');
+
+statement ok
+ATTACH '' AS rw (TYPE virtual_catalog_bridge, ID 'pol_rw', TOKEN 'tok_rw');
+
+# The statement selects every row; the policy is what decides which are written. The reported count
+# is the number the source actually changed, not the number the target's plan matched.
+query I
+UPDATE rw.main.orders SET amt = 0;
+----
+2
+
+query III
+SELECT * FROM memory.main.orders ORDER BY id;
+----
+1	1	0
+2	1	0
+3	2	50
+4	2	250
+
+# id 1 and 2 are now amt = 0, so only id 3 satisfies the delete policy.
+query I
+DELETE FROM rw.main.orders;
+----
+1
+
+query II
+SELECT id, tenant_id FROM memory.main.orders ORDER BY id;
+----
+1	1
+2	1
+4	2
+
+# Granted verbs are independent: no insert grant, no insert.
+statement error
+INSERT INTO rw.main.orders VALUES (9, 1, 1);
+----
+does not have 'insert' permission
+
+# An omitted WITH CHECK is the USING predicate (the Postgres rule), so an update cannot move a row
+# out of the policy that let it reach the row in the first place. The check reads the row as it will
+# be AFTER the update, which is what makes `tenant_id = 9` a violation rather than a no-op.
+statement error
+UPDATE rw.main.orders SET tenant_id = 9 WHERE id = 1;
+----
+violates the check predicate
+
+# Refused, so nothing was written: the row is untouched.
+query I
+SELECT tenant_id FROM memory.main.orders WHERE id = 1;
+----
+1
+
+# ...and still reachable, since it never left the policy.
+query I
+UPDATE rw.main.orders SET amt = 7 WHERE id = 1;
+----
+1
+
+statement ok
+DETACH rw;
+
+# ---------------------------------------------------------------------------
+# Verb-level denials name the verb that was refused.
+# ---------------------------------------------------------------------------
+
+statement ok
+SELECT bridge_register_source('pol_ins', 'memory', 'tok_ins');
+
+# Insert without select: legal, unlike update/delete, because an append needs no scan.
+statement ok
+SELECT bridge_policy('pol_ins', 'main.orders', 'insert', 'true', 'true');
+
+statement ok
+ATTACH '' AS ins (TYPE virtual_catalog_bridge, ID 'pol_ins', TOKEN 'tok_ins');
+
+statement ok
+INSERT INTO ins.main.orders VALUES (10, 3, 5);
+
+statement error
+SELECT * FROM ins.main.orders;
+----
+does not have 'select' permission
+
+query I
+SELECT count(*) FROM memory.main.orders WHERE id = 10;
+----
+1
+
+statement ok
+DETACH ins;

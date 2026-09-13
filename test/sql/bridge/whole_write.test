@@ -1,0 +1,120 @@
+# name: test/sql/bridge/whole_write.test
+# description: a write the source can run alone crosses whole, and EXPLAIN says which path it took
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, tenant INTEGER, amt INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1,1,10),(2,1,20),(3,2,30);
+
+statement ok
+SELECT bridge_register_source('ww', 'memory', 'tok_ww');
+
+statement ok
+SELECT bridge_policy('ww', 'main.orders', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('ww', 'main.orders', 'update', 'true', 'true');
+
+statement ok
+SELECT bridge_policy('ww', 'main.orders', 'delete', 'true');
+
+statement ok
+ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ww', TOKEN 'tok_ww');
+
+# ---------------------------------------------------------------------------
+# Everything the statement holds is something the source can compute, so the source runs it alone.
+# "Crossing: update on source" is the whole write; the streaming path renders "rows -> main.orders"
+# instead, which is what the last case in this file asserts.
+# ---------------------------------------------------------------------------
+
+query II
+EXPLAIN UPDATE w.main.orders SET amt = 0 WHERE tenant = 1;
+----
+physical_plan	<REGEX>:.*Crossing:.*update on source.*
+
+query II
+EXPLAIN DELETE FROM w.main.orders WHERE tenant = 2;
+----
+physical_plan	<REGEX>:.*Crossing:.*delete on source.*
+
+# A whole write is still a write: the rows change and the count is what the source changed.
+
+query I
+UPDATE w.main.orders SET amt = 0 WHERE tenant = 1;
+----
+2
+
+query III
+SELECT id, tenant, amt FROM memory.main.orders ORDER BY id;
+----
+1	1	0
+2	1	0
+3	2	30
+
+query I
+DELETE FROM w.main.orders WHERE tenant = 2;
+----
+1
+
+query I
+SELECT count(*) FROM memory.main.orders;
+----
+2
+
+# ---------------------------------------------------------------------------
+# A USING policy is a filter in the plan the source builds. Looking past it is what lets the write
+# still cross; before that it was mistaken for a shape nothing recognised and every write streamed.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE memory.main.scoped(id INTEGER PRIMARY KEY, tenant INTEGER, amt INTEGER);
+
+statement ok
+INSERT INTO memory.main.scoped VALUES (1,1,10),(2,2,20);
+
+statement ok
+SELECT bridge_register_source('ws', 'memory', 'tok_ws');
+
+statement ok
+SELECT bridge_policy('ws', 'main.scoped', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('ws', 'main.scoped', 'update', 'tenant = 1');
+
+statement ok
+ATTACH '' AS s (TYPE virtual_catalog_bridge, ID 'ws', TOKEN 'tok_ws');
+
+query II
+EXPLAIN UPDATE s.main.scoped SET amt = 99;
+----
+physical_plan	<REGEX>:.*Crossing:.*update on source.*
+
+query I
+UPDATE s.main.scoped SET amt = 99;
+----
+1
+
+query III
+SELECT id, tenant, amt FROM memory.main.scoped ORDER BY id;
+----
+1	1	99
+2	2	20
+
+# ---------------------------------------------------------------------------
+# A SET the source cannot compute keeps the write on the target, and the plan says so.
+# ---------------------------------------------------------------------------
+
+query II
+EXPLAIN UPDATE w.main.orders SET amt = (SELECT max(amt) FROM memory.main.orders);
+----
+physical_plan	<REGEX>:.*Not whole because.*
+
+statement ok
+DETACH w;
+
+statement ok
+DETACH s;

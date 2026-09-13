@@ -1,0 +1,79 @@
+# name: test/sql/bridge/delete.test
+# description: S6 -- DELETE addresses rows by the declared key, under the USING policy.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1,'ada',50,7),(2,'grace',150,7),(3,'alan',250,9),(4,'edsger',350,7);
+
+statement ok
+CREATE TABLE memory.main.nokey(x INTEGER, y VARCHAR);
+
+statement ok
+INSERT INTO memory.main.nokey VALUES (1,'a');
+
+statement ok
+SELECT bridge_register_source('v2_delete', 'memory', 'tok_delete');
+
+statement ok
+SELECT bridge_policy('v2_delete', 'main.orders', 'select', 'tenant = 7');
+
+statement ok
+SELECT bridge_policy('v2_delete', 'main.orders', 'delete', 'tenant = 7');
+
+statement ok
+SELECT bridge_policy('v2_delete', 'main.nokey', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('v2_delete', 'main.nokey', 'delete', 'true');
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_delete', TOKEN 'tok_delete');
+
+statement ok
+DELETE FROM b.main.orders WHERE id = 2;
+
+# The row went from the source.
+query I
+SELECT count(*) FROM memory.main.orders;
+----
+3
+
+query I
+SELECT id FROM b.main.orders ORDER BY id;
+----
+1
+4
+
+# A row the policy hides cannot be deleted: it is not reachable to be addressed.
+statement ok
+DELETE FROM b.main.orders WHERE id = 3;
+
+query I
+SELECT count(*) FROM memory.main.orders WHERE id = 3;
+----
+1
+
+# A table with no key cannot address rows at all.
+statement error
+DELETE FROM b.main.nokey WHERE x = 1;
+----
+has no key
+
+# Deleting everything reachable leaves the hidden row behind.
+statement ok
+DELETE FROM b.main.orders;
+
+query I
+SELECT count(*) FROM b.main.orders;
+----
+0
+
+query II
+SELECT id, tenant FROM memory.main.orders ORDER BY id;
+----
+3	9

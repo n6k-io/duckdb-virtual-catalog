@@ -29,13 +29,19 @@ set(EXTENSION_SOURCES
   src/virtual_catalog/arrow_frame_decoder.cpp
   src/virtual_catalog/vcat_extension.cpp
   src/virtual_catalog/bridge_bridge.cpp
+  src/virtual_catalog/bridge_plan.cpp
+  src/virtual_catalog/bridge_write_plan.cpp
+  src/virtual_catalog/bridge_seam.cpp
+  src/virtual_catalog/bridge_scan.cpp
+  src/virtual_catalog/bridge_pushdown.cpp
+  src/virtual_catalog/bridge_pushdown_rules.cpp
+  src/virtual_catalog/bridge_merger.cpp
+  src/virtual_catalog/bridge_policy.cpp
   src/virtual_catalog/bridge_catalog.cpp
   src/virtual_catalog/bridge_insert.cpp
-  src/virtual_catalog/bridge_delete.cpp
-  src/virtual_catalog/bridge_dml.cpp
   src/virtual_catalog/bridge_update.cpp
+  src/virtual_catalog/bridge_delete.cpp
   src/virtual_catalog/bridge_table_entry.cpp
-  src/virtual_catalog/bridge_table_function.cpp
   src/virtual_catalog/vcat_stream_function.cpp
   src/virtual_catalog/bridge_transaction.cpp
   src/virtual_catalog/vcat_catalog.cpp
@@ -59,3 +65,24 @@ install(
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
+
+# C++ unit tests. Out-of-tree extensions get no hook into duckdb's own `unittest`
+# binary, so this is a standalone Catch runner over the same static extension lib.
+option(VCAT_BUILD_CPP_TESTS "Build the virtual_catalog C++ unit tests" ON)
+if(VCAT_BUILD_CPP_TESTS)
+  # CONFIGURE_DEPENDS: a newly added test_*.cpp is picked up by the next build
+  # without a manual reconfigure.
+  file(GLOB_RECURSE VCAT_TEST_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/cpp/test_*.cpp)
+  add_executable(vcat_unittest test/cpp/unittest_main.cpp ${VCAT_TEST_SOURCES})
+  # test/cpp so `framework/...` includes resolve from any depth under it.
+  target_include_directories(vcat_unittest PRIVATE
+    ${DUCKDB_MODULE_BASE_DIR}/third_party/catch
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/cpp)
+  target_link_libraries(vcat_unittest duckdb_static duckdb_yyjson Threads::Threads)
+  # Pulls in the generated loader plus every statically linked extension
+  # (parquet, core_functions, and this one), same as duckdb's own unittest.
+  link_extension_libraries(vcat_unittest "")
+  set_target_properties(vcat_unittest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+endif()

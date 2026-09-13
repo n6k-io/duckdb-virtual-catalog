@@ -1,0 +1,64 @@
+# name: test/sql/bridge/policy.test
+# description: S4 -- the USING half sits under every read, and nothing the target does can lift it.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1,'ada',50,7),(2,'grace',150,7),(3,'alan',250,9),(4,'edsger',350,7);
+
+statement ok
+SELECT bridge_register_source('v2_policy', 'memory', 'tok_policy');
+
+statement ok
+SELECT bridge_policy('v2_policy', 'main.orders', 'select', 'tenant = 7');
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_policy', TOKEN 'tok_policy');
+
+# Tenant 9 is not reachable at all.
+query II
+SELECT id, name FROM b.main.orders ORDER BY id;
+----
+1	ada
+2	grace
+4	edsger
+
+# Nor through a filter the target pushes down.
+query I
+SELECT count(*) FROM b.main.orders WHERE amt > 100;
+----
+2
+
+# Nor through an aggregate that crosses whole.
+query II
+SELECT tenant, count(*) FROM b.main.orders GROUP BY tenant ORDER BY tenant;
+----
+7	3
+
+# Nor by naming the hidden row directly.
+query I
+SELECT count(*) FROM b.main.orders WHERE id = 3;
+----
+0
+
+# Nor by asking for the tenant the policy excludes.
+query I
+SELECT count(*) FROM b.main.orders WHERE tenant = 9;
+----
+0
+
+# The source's own table is untouched: the policy is the bridge's, not the table's.
+query I
+SELECT count(*) FROM memory.main.orders;
+----
+4
+
+# The key came off the source's PRIMARY KEY, not from an assertion.
+query II
+SELECT name, primary_key FROM bridge_table_permissions('b') ORDER BY name;
+----
+orders	[id]

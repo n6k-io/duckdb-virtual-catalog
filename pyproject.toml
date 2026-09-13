@@ -8,13 +8,31 @@ dependencies = []
 
 [tool.pytest.ini_options]
 testpaths = ["test/python"]
+pythonpath = ["test/python"]
 timeout = 120
+markers = [
+    "bridge: exercises the crossing/plan-IR bridge path",
+    "provider: exercises the Arrow/UDF provider path",
+    "parity: compares a backend against a native DuckDB table",
+]
 
 [dependency-groups]
 dev = [
+    "black>=24,<26",
+    "clang-format==11.0.1",
+    "clang-tidy>=22.1.8",
+    "cmake-format>=0.6.13",
     "duckdb==1.5.4",
     "numpy>=2.5.2",
     "pyarrow>=25.0.1",
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
+    "scipy>=1.16.3",
 ]
+
+[tool.black]
+# format.py treats any stderr from black as a failure, and black otherwise warns that the running
+# CPython is older than its default target.
+target-version = ["py314"]
+skip-string-normalization = true
+line-length = 120

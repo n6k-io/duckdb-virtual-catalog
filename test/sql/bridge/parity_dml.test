@@ -1,0 +1,41 @@
+# name: test/sql/bridge/parity_dml.test
+# description: SET col = DEFAULT, and what a bridged table answers once its source is gone.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR DEFAULT 'dflt');
+
+statement ok
+INSERT INTO memory.main.users VALUES (1, 'a'), (2, 'b');
+
+statement ok
+SELECT bridge_register_source('v2_oc', 'memory', 'tok_oc');
+
+statement ok
+SELECT bridge_policy('v2_oc', 'main.users', v, 'true') FROM (VALUES ('select'), ('update'), ('delete')) _(v);
+
+statement ok
+SELECT bridge_policy('v2_oc', 'main.users', 'insert', 'true', 'true');
+
+statement ok
+ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_oc', TOKEN 'tok_oc');
+
+statement ok
+UPDATE ws.main.users SET name = DEFAULT WHERE id = 1;
+
+query II
+SELECT id, name FROM ws.main.users ORDER BY id;
+----
+1	NULL
+2	b
+
+statement ok
+DETACH ws;
+
+# The source is gone; nothing routes to it any more.
+statement error
+SELECT * FROM ws.main.users;
+----
+<REGEX>:.*(no source|does not exist).*

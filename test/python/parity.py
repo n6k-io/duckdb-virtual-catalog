@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
-from conftest import bridge, new_connection
+from conftest import READWRITE, bridge, new_connection
 from provider_stub import FakeProvider
 
 COLUMNS = "id INTEGER PRIMARY KEY, name VARCHAR, n INTEGER"
@@ -31,6 +31,11 @@ class Probe:
     #: Read back after the statement to compare the resulting table state. None for probes that
     #: leave no table to read (DROP, RENAME).
     verify: str | None = "SELECT * FROM {t} ORDER BY id"
+    #: Index into a ';'-split `sql` after which to snapshot the backing store through a second
+    #: connection (backend.observe()). Only a mid-transaction snapshot separates "the write landed
+    #: at COMMIT" from "the write landed at the statement and COMMIT was a no-op" -- the end state
+    #: is identical either way.
+    observe_at: int | None = None
 
 
 @dataclass
@@ -38,10 +43,11 @@ class Outcome:
     status: str  # "ok" | "error"
     rows: object = None
     state: object = None
+    observed: object = None
     error: str = ""
 
     def comparable(self):
-        return (self.rows, self.state)
+        return (self.rows, self.state, self.observed)
 
 
 class Backend:
@@ -51,6 +57,10 @@ class Backend:
 
     def execute(self, sql):
         return self.con.execute(sql).fetchall()
+
+    def observe(self):
+        """The backing store's rows, read outside the transaction driving `self.con`."""
+        raise NotImplementedError
 
     def close(self):
         for con in getattr(self, "_owned", []):
@@ -65,7 +75,11 @@ class NativeBackend(Backend):
         self._owned = [self.con]
         self.con.execute(f"CREATE TABLE t({COLUMNS})")
         self.con.executemany("INSERT INTO t VALUES (?, ?, ?)", ROWS)
+        self.observer = self.con.cursor()
         self.table = "memory.main.t"
+
+    def observe(self):
+        return self.observer.execute("SELECT * FROM t ORDER BY id").fetchall()
 
 
 class BridgeBackend(Backend):
@@ -77,17 +91,21 @@ class BridgeBackend(Backend):
         self._owned = [self.source, self.con]
         self.source.execute(f"CREATE TABLE t({COLUMNS})")
         self.source.executemany("INSERT INTO t VALUES (?, ?, ?)", ROWS)
-        bridge(self.source, self.con, {"t": "readwrite"})
+        bridge(self.source, self.con, {"t": READWRITE})
+        self.observer = self.source.cursor()
         self.table = "app.main.t"
+
+    def observe(self):
+        return self.observer.execute("SELECT * FROM t ORDER BY id").fetchall()
 
 
 class ProviderBackend(Backend):
     name = "provider"
 
     def __init__(self):
-        self.con = new_connection()
+        self.con = new_connection(bridge=False, provider=True)
         self._owned = [self.con]
-        self.con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog)")
+        self.con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
         self.provider = FakeProvider(self.con)
         self.provider.add_table(
             "t",
@@ -103,14 +121,27 @@ class ProviderBackend(Backend):
         self.provider.register()
         self.table = "app.main.t"
 
+    def observe(self):
+        # The backing store is the stub's own Arrow table, read out-of-band -- there is no second
+        # connection to take, and no transaction it could be enrolled in.
+        return sorted(tuple(row.values()) for row in self.provider.rows("t"))
+
 
 BACKENDS = {b.name: b for b in (BridgeBackend, ProviderBackend)}
 
 
 def run_probe(backend, probe):
     sql = probe.sql.format(t=backend.table)
+    observed = None
     try:
-        rows = backend.execute(sql)
+        if probe.observe_at is None:
+            rows = backend.execute(sql)
+        else:
+            statements = [s.strip() for s in sql.split(";") if s.strip()]
+            for i, statement in enumerate(statements):
+                rows = backend.execute(statement)
+                if i == probe.observe_at:
+                    observed = backend.observe()
     except Exception as exc:  # noqa: BLE001 -- the failure itself is the datum
         return Outcome("error", error=f"{type(exc).__name__}: {str(exc).splitlines()[0][:160]}")
     state = None
@@ -119,7 +150,7 @@ def run_probe(backend, probe):
             state = backend.execute(probe.verify.format(t=backend.table))
         except Exception as exc:  # noqa: BLE001
             state = f"verify-error: {str(exc).splitlines()[0][:120]}"
-    return Outcome("ok", rows=rows, state=state)
+    return Outcome("ok", rows=rows, state=state, observed=observed)
 
 
 def classify(native: Outcome, other: Outcome) -> str:
@@ -224,9 +255,9 @@ PROBES = [
     Probe("empty_result_shape", "semantics", "SELECT * FROM {t} WHERE id = 999"),
     Probe("prepared_statement", "semantics", "PREPARE p AS SELECT count(*) FROM {t}; EXECUTE p"),
     # transactions -----------------------------------------------------------------------------
-    Probe("rollback_insert", "transactions", "BEGIN; INSERT INTO {t} VALUES (4, 'd', 40); ROLLBACK"),
-    Probe("commit_insert", "transactions", "BEGIN; INSERT INTO {t} VALUES (4, 'd', 40); COMMIT"),
-    Probe("rollback_delete", "transactions", "BEGIN; DELETE FROM {t} WHERE id = 1; ROLLBACK"),
+    Probe("rollback_insert", "transactions", "BEGIN; INSERT INTO {t} VALUES (4, 'd', 40); ROLLBACK", observe_at=1),
+    Probe("commit_insert", "transactions", "BEGIN; INSERT INTO {t} VALUES (4, 'd', 40); COMMIT", observe_at=1),
+    Probe("rollback_delete", "transactions", "BEGIN; DELETE FROM {t} WHERE id = 1; ROLLBACK", observe_at=1),
 ]
 
 PROBES_BY_NAME = {p.name: p for p in PROBES}
@@ -238,35 +269,29 @@ PROBES_BY_NAME = {p.name: p for p in PROBES}
 # Adding a row here is a decision, not bookkeeping: it says this divergence is known and accepted.
 # Removing one is how a closed gap gets noticed.
 
-_RETURNING = ("unsupported", "RETURNING is refused at bind time; documented as not yet supported")
+_RETURNING = ("unsupported", "the provider refuses RETURNING at bind time")
 
-# No UNIQUE/PK constraint is exposed to the binder for bridge or provider tables, so DuckDB has no
-# conflict target to plan against. This is the same root cause as the duckdb_constraints row below:
-# the key is reported by vcat_table_permissions but never as a catalog constraint. Closing that one
-# gap would plausibly close all five of these.
-_NO_CONFLICT_TARGET = ("unsupported", "no UNIQUE/PK constraint is exposed to the binder")
+# Two blockers. The binder takes its conflict target from GetStorageInfo().index_info, which the
+# provider entry leaves empty -- so declaring a PK constraint does not help. And 1.5.4 rewrites every
+# on_conflict_info (INSERT OR REPLACE/IGNORE included) into MERGE INTO, which lands on
+# Catalog::PlanMergeInto; the provider implements only PlanInsert/Update/Delete.
+_NO_CONFLICT_TARGET = ("unsupported", "no unique index_info to plan against, and no PlanMergeInto")
 
 _BRIDGE_ALTER = ("unsupported", "ALTER TABLE on bridge entries is rejected by design")
 _PROVIDER_ALTER = ("unsupported", "provider ALTER covers only ADD/DROP/RENAME COLUMN")
 
-# Stateless by design: a write commits on the source independently of the target transaction, so a
-# target-side ROLLBACK does not take it back.
-_NO_ROLLBACK = ("differs", "writes commit on the backing store; target rollback does not undo them")
+# Stateless by design: a write commits on the backing store as the statement runs, independently of
+# the target transaction. ROLLBACK does not take it back, and COMMIT has nothing left to do -- an
+# outside reader already sees the row.
+_NO_TXN = ("differs", "writes commit on the backing store as they run, outside the target transaction")
 
 LEDGER: dict[tuple[str, str], tuple[str, str]] = {
-    ("insert_returning", "bridge"): _RETURNING,
     ("insert_returning", "provider"): _RETURNING,
-    ("update_returning", "bridge"): _RETURNING,
     ("update_returning", "provider"): _RETURNING,
-    ("delete_returning", "bridge"): _RETURNING,
     ("delete_returning", "provider"): _RETURNING,
-    ("insert_on_conflict_do_nothing", "bridge"): _NO_CONFLICT_TARGET,
     ("insert_on_conflict_do_nothing", "provider"): _NO_CONFLICT_TARGET,
-    ("insert_on_conflict_do_update", "bridge"): _NO_CONFLICT_TARGET,
     ("insert_on_conflict_do_update", "provider"): _NO_CONFLICT_TARGET,
-    ("insert_or_replace", "bridge"): _NO_CONFLICT_TARGET,
     ("insert_or_replace", "provider"): _NO_CONFLICT_TARGET,
-    ("insert_or_ignore", "bridge"): _NO_CONFLICT_TARGET,
     ("insert_or_ignore", "provider"): _NO_CONFLICT_TARGET,
     ("add_column", "bridge"): _BRIDGE_ALTER,
     ("drop_column", "bridge"): _BRIDGE_ALTER,
@@ -279,16 +304,14 @@ LEDGER: dict[tuple[str, str], tuple[str, str]] = {
     ("add_not_null", "provider"): _PROVIDER_ALTER,
     ("drop_table", "bridge"): ("unsupported", "DROP on a bridge entry is rejected; detach instead"),
     ("drop_table", "provider"): ("unsupported", "DROP on a provider entry is rejected; invalidate instead"),
-    # Not a deliberate rejection: COMMENT ON reaches neither entry kind and reports the table as
-    # missing outright. Worth a real message if it is meant to stay unsupported.
-    ("comment_on_table", "bridge"): ("unsupported", "reports 'Table with name t does not exist'"),
-    ("comment_on_table", "provider"): ("unsupported", "reports 'Table with name t does not exist'"),
-    ("duckdb_constraints", "bridge"): ("differs", "primary key is not reported as a catalog constraint"),
-    ("duckdb_constraints", "provider"): ("differs", "primary key is not reported as a catalog constraint"),
-    ("rollback_insert", "bridge"): _NO_ROLLBACK,
-    ("rollback_insert", "provider"): _NO_ROLLBACK,
-    ("rollback_delete", "bridge"): _NO_ROLLBACK,
-    ("rollback_delete", "provider"): _NO_ROLLBACK,
+    # A bridge entry copies the source's constraints; a provider has no source table to copy from,
+    # and its declared key is metadata the host does not enforce (see insert_duplicate_key_raises).
+    ("duckdb_constraints", "provider"): ("differs", "nothing backs a constraint, so none is declared"),
+    # The bridge's writes ride the source connection the target's transaction owns, so they commit
+    # and roll back with it. A provider's host has no transaction to join.
+    ("rollback_insert", "provider"): _NO_TXN,
+    ("commit_insert", "provider"): _NO_TXN,
+    ("rollback_delete", "provider"): _NO_TXN,
     # Constraint enforcement lives in the backing store. The bridge inherits the source's, so it
     # matches native; a provider has none unless its host implements them.
     ("insert_duplicate_key_raises", "provider"): (

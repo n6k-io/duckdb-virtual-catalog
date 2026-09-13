@@ -1,7 +1,7 @@
 """Print the parity matrix, and the LEDGER literal that pins it.
 
-    uv run python test/python/parity_report.py            # markdown matrix
-    uv run python test/python/parity_report.py --ledger   # paste-able LEDGER for parity.py
+uv run python test/python/parity_report.py            # markdown matrix
+uv run python test/python/parity_report.py --ledger   # paste-able LEDGER for parity.py
 """
 
 import sys
@@ -42,14 +42,12 @@ def main():
         print("}")
         return
 
-    print("| probe | category | bridge | provider |")
+    print("| backend | probe | category | status |")
     print("|---|---|---|---|")
-    for probe in PROBES:
-        cells = []
-        for backend in BACKENDS:
+    for backend in BACKENDS:
+        for probe in PROBES:
             status = results[(probe.name, backend)][0]
-            cells.append(f"{SYMBOL[status]} {status}")
-        print(f"| `{probe.name}` | {probe.category} | {cells[0]} | {cells[1]} |")
+            print(f"| {backend} | `{probe.name}` | {probe.category} | {SYMBOL[status]} {status} |")
 
     print()
     totals = {}

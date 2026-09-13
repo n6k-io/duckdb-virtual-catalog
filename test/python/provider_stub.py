@@ -78,7 +78,8 @@ class FakeProvider:
     def rows(self, name):
         return self.tables[name].to_pylist()
 
-    def register(self, prefix="p"):
+    def create_udfs(self, prefix="p"):
+        """Register the UDF set on the connection and return the name of each verb's UDF."""
         c = self.con
         c.create_function(f"{prefix}_list", self._list, [], VARCHAR)
         c.create_function(f"{prefix}_schema", self._schema, [VARCHAR], BLOB)
@@ -87,37 +88,62 @@ class FakeProvider:
         c.create_function(f"{prefix}_update", self._update, [VARCHAR, BLOB, VARCHAR], BIGINT)
         c.create_function(f"{prefix}_delete", self._delete, [VARCHAR, BLOB], BIGINT)
         c.create_function(f"{prefix}_alter", self._alter, [VARCHAR, VARCHAR, VARCHAR], VARCHAR)
-        c.execute(
-            "SELECT vcat_register_provider(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        return {
+            "list": f"{prefix}_list",
+            "schema": f"{prefix}_schema",
+            "scan": f"{prefix}_scan",
+            "insert": f"{prefix}_insert" if self._writeable else "",
+            "update": f"{prefix}_update" if self._writeable else "",
+            "delete": f"{prefix}_delete" if self._writeable else "",
+            "alter": f"{prefix}_alter" if self._editable else "",
+        }
+
+    def register(self, prefix="p"):
+        udfs = self.create_udfs(prefix)
+        self.con.execute(
+            "SELECT provider_register(?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 self.catalog,
-                self.schema,
-                "probe",
-                f"{prefix}_list",
-                f"{prefix}_schema",
-                f"{prefix}_scan",
-                f"{prefix}_insert" if self._writeable else "",
-                f"{prefix}_update" if self._writeable else "",
-                f"{prefix}_delete" if self._writeable else "",
-                f"{prefix}_alter" if self._editable else "",
+                udfs["list"],
+                udfs["schema"],
+                udfs["scan"],
+                udfs["insert"],
+                udfs["update"],
+                udfs["delete"],
+                udfs["alter"],
             ],
         )
         self._registered = True
 
+    def attach(self, prefix="p"):
+        """The other half of the same contract: the UDF set rides on ATTACH instead."""
+        udfs = self.create_udfs(prefix)
+        options = ", ".join(f"{verb} '{udf}'" for verb, udf in udfs.items() if udf)
+        self.con.execute(f"ATTACH '' AS {self.catalog} (TYPE virtual_catalog_provider, {options})")
+        self._registered = True
+
     def invalidate(self):
-        self.con.execute("SELECT vcat_invalidate_provider_tables(?, ?)", [self.catalog, self.schema])
+        self.con.execute("SELECT provider_invalidate_tables(?)", [self.catalog])
 
     def unregister(self):
-        self.con.execute("SELECT vcat_unregister_provider(?, ?)", [self.catalog, self.schema])
+        self.con.execute("SELECT provider_unregister(?)", [self.catalog])
         self._registered = False
 
     # --- UDFs -----------------------------------------------------------------------------------
 
+    def _local(self, name: str) -> str:
+        """Every UDF is called with the `schema.table` name that list() answered."""
+        schema, _, table = name.rpartition(".")
+        if schema != self.schema:
+            raise KeyError(f"unknown schema {schema!r}")
+        return table
+
     def _list(self) -> str:
         self.calls.append(("list",))
-        return "|".join(self.tables)
+        return "|".join(f"{self.schema}.{name}" for name in self.tables)
 
     def _schema(self, name: str) -> bytes:
+        name = self._local(name)
         self.calls.append(("schema", name))
         table = self.tables.get(name)
         if table is None:
@@ -129,6 +155,7 @@ class FakeProvider:
         return schema_message(schema)
 
     def _scan(self, name: str, columns, filters: str) -> bytes:
+        name = self._local(name)
         self.calls.append(("scan", name, list(columns), filters))
         table = self.tables[name]
         rows = table.to_pylist()
@@ -146,6 +173,7 @@ class FakeProvider:
         return stream_bytes(pa.table(arrays, names=names))
 
     def _insert(self, name: str, payload: bytes) -> int:
+        name = self._local(name)
         incoming = read_stream(payload)
         self.calls.append(("insert", name, incoming.num_rows))
         existing = self.tables[name]
@@ -153,6 +181,7 @@ class FakeProvider:
         return incoming.num_rows
 
     def _update(self, name: str, payload: bytes, changed_columns: str) -> int:
+        name = self._local(name)
         incoming = read_stream(payload)
         self.calls.append(("update", name, changed_columns, incoming.num_rows))
         keys = self.primary_keys[name]
@@ -173,6 +202,7 @@ class FakeProvider:
         return incoming.num_rows
 
     def _delete(self, name: str, payload: bytes) -> int:
+        name = self._local(name)
         incoming = read_stream(payload).to_pylist()
         self.calls.append(("delete", name, len(incoming)))
         keys = self.primary_keys[name]
@@ -184,6 +214,7 @@ class FakeProvider:
         return len(incoming)
 
     def _alter(self, name: str, kind: str, details: str) -> str:
+        name = self._local(name)
         self.calls.append(("alter", name, kind, details))
         detail = json.loads(details)
         table = self.tables[name]

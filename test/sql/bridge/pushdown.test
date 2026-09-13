@@ -1,0 +1,108 @@
+# name: test/sql/bridge/pushdown.test
+# description: S3 -- work the source can run moves into the fragment, and the answers stay right.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1,'ada',50,7),(2,'grace',150,7),(3,'alan',250,9),(4,'edsger',350,7);
+
+statement ok
+CREATE TABLE memory.main.customers(id INTEGER PRIMARY KEY, city VARCHAR);
+
+statement ok
+INSERT INTO memory.main.customers VALUES (1,'london'),(2,'nyc'),(3,'paris'),(4,'delft');
+
+statement ok
+SELECT bridge_register_source('v2_pushdown', 'memory', 'tok_pushdown');
+
+statement ok
+SELECT bridge_policy('v2_pushdown', 'main.orders', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('v2_pushdown', 'main.customers', 'select', 'true');
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_pushdown', TOKEN 'tok_pushdown');
+
+# A filter the source can run reaches the fragment, and shows up in the plan the scan carries.
+query II
+EXPLAIN SELECT name FROM b.main.orders WHERE amt > 100;
+----
+physical_plan	<REGEX>:.*FILTER.*
+
+query I
+SELECT name FROM b.main.orders WHERE amt > 100 ORDER BY id;
+----
+grace
+alan
+edsger
+
+# An aggregate -- one of the things bridge_absorber.cpp refuses outright.
+query II
+EXPLAIN SELECT tenant, sum(amt) FROM b.main.orders GROUP BY tenant;
+----
+physical_plan	<REGEX>:.*AGGREGATE.*
+
+query II
+SELECT tenant, sum(amt) FROM b.main.orders GROUP BY tenant ORDER BY tenant;
+----
+7	550
+9	250
+
+# A join of two tables on one source, also refused by the old absorber.
+query II
+SELECT o.name, c.city FROM b.main.orders o JOIN b.main.customers c ON o.id = c.id
+WHERE o.amt > 100 ORDER BY o.id;
+----
+grace	nyc
+alan	paris
+edsger	delft
+
+# ORDER BY crosses like anything else the source can compute. The rows come back meaning something in
+# the sequence they arrive in, which holds because one reader drains the scan.
+query I
+SELECT name FROM b.main.orders ORDER BY amt DESC;
+----
+edsger
+alan
+grace
+ada
+
+# ORDER BY ... LIMIT binds as a TOP_N. If the sort had stayed on the target there would be one in the
+# physical plan; there is not, so the source is the thing picking the rows.
+query II
+EXPLAIN SELECT name FROM b.main.orders ORDER BY amt DESC LIMIT 2;
+----
+physical_plan	<!REGEX>:.*TOP_N.*
+
+query I
+SELECT name FROM b.main.orders ORDER BY amt DESC LIMIT 2;
+----
+edsger
+alan
+
+# The order survives however many threads the target is given, because MaxThreads pins an ordered
+# fragment to one reader. Raising it without giving chunks a batch index would break this.
+statement ok
+SET threads=8;
+
+query I
+SELECT name FROM b.main.orders ORDER BY amt DESC;
+----
+edsger
+alan
+grace
+ada
+
+statement ok
+RESET threads;
+
+# A function the source does not have stays on the target, and the answer is still right.
+query I
+SELECT count(*) FROM b.main.orders WHERE amt > 100 AND length(name) > 4;
+----
+2

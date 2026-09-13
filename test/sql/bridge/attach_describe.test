@@ -1,0 +1,137 @@
+# name: test/sql/bridge/attach_describe.test
+# description: S1 -- a real source's granted tables become catalog entries on the target.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1,'ada',50,7),(2,'grace',150,7),(3,'alan',250,9),(4,'edsger',350,7);
+
+statement ok
+CREATE TABLE memory.main.customers(id INTEGER PRIMARY KEY, name VARCHAR);
+
+statement ok
+CREATE TABLE memory.main.secrets(id INTEGER, payload VARCHAR);
+
+# Nothing is reachable until an ATTACH redeems the token.
+statement error
+SELECT * FROM b.main.orders;
+----
+does not exist
+
+statement ok
+SELECT bridge_register_source('v2_attach_describe', 'memory', 'tok_attach_describe');
+
+statement error
+SELECT bridge_register_source('v2_attach_describe', 'memory');
+----
+a source is already registered for bridge
+
+statement error
+SELECT bridge_policy('v2_attach_describe', 'orders', 'select', 'true');
+----
+must be schema-qualified
+
+statement error
+SELECT bridge_policy('v2_attach_describe', 'main.nosuch', 'select', 'true');
+----
+not found in catalog
+
+statement error
+SELECT bridge_policy('v2_attach_describe', 'main.orders', 'levitate', 'true');
+----
+invalid verb
+
+statement error
+SELECT bridge_policy('v2_attach_describe', 'main.orders', 'select', 'nosuchcolumn = 1');
+----
+is not a valid WHERE clause on the source
+
+statement error
+SELECT bridge_policy('v2_attach_describe', 'main.orders', 'select', 'amt');
+----
+must be BOOLEAN
+
+statement ok
+SELECT bridge_policy('v2_attach_describe', 'main.orders', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('v2_attach_describe', 'main.orders', 'update', 'true');
+
+statement ok
+SELECT bridge_policy('v2_attach_describe', 'main.customers', 'select', 'true');
+
+statement error
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_attach_describe', TOKEN 'not-the-token');
+----
+invalid setup token
+
+statement error
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_attach_describe');
+----
+requires a 'token' option
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_attach_describe', TOKEN 'tok_attach_describe');
+
+# Only what was granted is a table. `secrets` was never named.
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'b' ORDER BY 1;
+----
+customers
+orders
+
+# Columns and types are the source's own, read off its catalog entry.
+query II
+SELECT column_name, data_type FROM duckdb_columns()
+WHERE database_name = 'b' AND table_name = 'orders' ORDER BY column_index;
+----
+id	INTEGER
+name	VARCHAR
+amt	INTEGER
+tenant	INTEGER
+
+query III
+SELECT name, kind, verbs FROM bridge_table_permissions('b') ORDER BY name;
+----
+customers	crossing	[select]
+orders	crossing	[select, update]
+
+statement error
+SELECT * FROM b.main.secrets;
+----
+does not exist
+
+statement error
+DROP TABLE b.main.orders;
+----
+is bridge-managed; DROP is not supported
+
+query IIII
+SELECT * FROM b.main.orders ORDER BY id;
+----
+1	ada	50	7
+2	grace	150	7
+3	alan	250	9
+4	edsger	350	7
+
+query I
+SELECT name FROM b.main.orders ORDER BY id;
+----
+ada
+grace
+alan
+edsger
+
+query I
+SELECT count(*) FROM b.main.orders WHERE amt > 100;
+----
+3
+
+query I
+SELECT id FROM b.main.orders ORDER BY id LIMIT 1;
+----
+1

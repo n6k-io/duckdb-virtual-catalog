@@ -1,0 +1,60 @@
+# name: test/sql/bridge/merge_crossing.test
+# description: a MERGE INTO a bridged table crosses what it can, the target's own scan included
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.target(id INTEGER PRIMARY KEY, tenant INTEGER, amt INTEGER);
+
+statement ok
+INSERT INTO memory.main.target VALUES (1,1,10),(2,1,20),(3,2,30);
+
+statement ok
+CREATE TABLE memory.main.feed(id INTEGER, amt INTEGER, live BOOLEAN);
+
+statement ok
+INSERT INTO memory.main.feed VALUES (1,100,true),(2,200,false),(3,300,true);
+
+statement ok
+SELECT bridge_register_source('mg', 'memory', 'tok_mg');
+
+statement ok
+SELECT bridge_policy('mg', 'main.target', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('mg', 'main.target', 'update', 'true', 'true');
+
+statement ok
+SELECT bridge_policy('mg', 'main.feed', 'select', 'true');
+
+statement ok
+ATTACH '' AS m (TYPE virtual_catalog_bridge, ID 'mg', TOKEN 'tok_mg');
+
+# The feed is a bridged table the merge only reads, so its filter crosses and the source returns the
+# two live rows rather than all three. Before the pass learned about merge it was skipped outright
+# and this filter stayed on the target.
+
+query II
+EXPLAIN MERGE INTO m.main.target t USING (SELECT id, amt FROM m.main.feed WHERE live) s
+  ON t.id = s.id
+  WHEN MATCHED THEN UPDATE SET amt = s.amt;
+----
+physical_plan	<REGEX>:.*Plan Columns: 2.*
+
+query I
+MERGE INTO m.main.target t USING (SELECT id, amt FROM m.main.feed WHERE live) s
+  ON t.id = s.id
+  WHEN MATCHED THEN UPDATE SET amt = s.amt;
+----
+2
+
+query III
+SELECT id, tenant, amt FROM memory.main.target ORDER BY id;
+----
+1	1	100
+2	1	20
+3	2	300
+
+statement ok
+DETACH m;

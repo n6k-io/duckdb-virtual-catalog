@@ -1,0 +1,54 @@
+# name: test/sql/bridge/virtual_catalog_update_default.test
+# description: UPDATE ... SET col = DEFAULT on a bridged and on a provider table
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR DEFAULT 'dflt');
+
+statement ok
+INSERT INTO memory.main.users VALUES (1, 'a'), (2, 'b');
+
+statement ok
+SELECT bridge_register_source('d_b', 'memory', 'tok_d_b');
+
+statement ok
+SELECT bridge_policy('d_b', 'main.users', v, 'true', c) FROM (VALUES ('select', NULL), ('insert', 'true'), ('update', NULL), ('delete', NULL)) _(v, c);
+
+statement ok
+ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'd_b', TOKEN 'tok_d_b');
+
+# A DEFAULT target binds to a BoundDefaultExpression; BridgeUpdate::Sink evaluates it through the
+# column's bound default instead of casting it to a BoundReferenceExpression.
+statement ok
+UPDATE ws.main.users SET name = DEFAULT WHERE id = 1;
+
+# The bridged entry carries the source's types and constraints but not its column DEFAULT clauses --
+# it is built from the source query result, and nothing copies defaults the way CopySourceConstraints
+# copies constraints. So DEFAULT resolves to NULL here rather than to the source's 'dflt', and
+# bridge_table_describe reports a null default for every bridged column.
+query II
+SELECT id, name FROM ws.main.users ORDER BY id;
+----
+1	NULL
+2	b
+
+query T
+SELECT column_default FROM duckdb_columns() WHERE database_name = 'ws' AND column_name = 'name';
+----
+NULL
+
+# EXPECTED FAILURE -- unskip once bridged entries carry source column defaults.
+mode skip
+
+query II
+SELECT id, name FROM ws.main.users ORDER BY id;
+----
+1	dflt
+2	b
+
+mode unskip
+
+statement ok
+DETACH ws;

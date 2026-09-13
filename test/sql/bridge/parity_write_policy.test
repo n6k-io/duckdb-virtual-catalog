@@ -1,0 +1,102 @@
+# name: test/sql/bridge/parity_write_policy.test
+# description: write policies and the WITH CHECK half.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, tenant_id INTEGER, amt INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1, 1, 50), (2, 1, 250), (3, 2, 50), (4, 2, 250);
+
+statement ok
+SELECT bridge_register_source('v2_pol_rw', 'memory', 'tok_rw');
+
+statement ok
+SELECT bridge_policy('v2_pol_rw', 'main.orders', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('v2_pol_rw', 'main.orders', 'update', 'tenant_id = 1');
+
+statement ok
+SELECT bridge_policy('v2_pol_rw', 'main.orders', 'delete', 'amt = 50');
+
+statement ok
+ATTACH '' AS rw (TYPE virtual_catalog_bridge, ID 'v2_pol_rw', TOKEN 'tok_rw');
+
+# The statement selects every row; the policy decides which are written, and the count reported is
+# the number the source actually changed.
+query I
+UPDATE rw.main.orders SET amt = 0;
+----
+2
+
+query III
+SELECT * FROM memory.main.orders ORDER BY id;
+----
+1	1	0
+2	1	0
+3	2	50
+4	2	250
+
+# id 1 and 2 are now amt = 0, so only id 3 satisfies the delete policy.
+query I
+DELETE FROM rw.main.orders;
+----
+1
+
+query II
+SELECT id, tenant_id FROM memory.main.orders ORDER BY id;
+----
+1	1
+2	1
+4	2
+
+# Granted verbs are independent: no insert grant, no insert.
+statement error
+INSERT INTO rw.main.orders VALUES (9, 1, 1);
+----
+does not have 'insert' permission
+
+# An omitted WITH CHECK is the USING predicate, so an update cannot move a row out of the policy
+# that let it reach the row. The check reads the row as it will be AFTER the update.
+statement error
+UPDATE rw.main.orders SET tenant_id = 9 WHERE id = 1;
+----
+violates the check predicate
+
+# Refused, so nothing was written.
+query I
+SELECT tenant_id FROM memory.main.orders WHERE id = 1;
+----
+1
+
+statement ok
+DETACH rw;
+
+# An explicit WITH CHECK on an insert guards what may be written.
+statement ok
+SELECT bridge_register_source('v2_pol_wc', 'memory', 'tok_wc');
+
+statement ok
+SELECT bridge_policy('v2_pol_wc', 'main.orders', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('v2_pol_wc', 'main.orders', 'insert', 'true', 'amt >= 0');
+
+statement ok
+ATTACH '' AS wc (TYPE virtual_catalog_bridge, ID 'v2_pol_wc', TOKEN 'tok_wc');
+
+statement ok
+INSERT INTO wc.main.orders VALUES (10, 1, 5);
+
+statement error
+INSERT INTO wc.main.orders VALUES (11, 1, -5);
+----
+violates the check predicate
+
+query I
+SELECT count(*) FROM memory.main.orders WHERE id IN (10, 11);
+----
+1

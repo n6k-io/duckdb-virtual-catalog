@@ -1,0 +1,103 @@
+# name: test/sql/bridge/insert_crossing.test
+# description: an insert whose rows the source can produce itself runs there, and no row crosses
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.src(id INTEGER, amt INTEGER);
+
+statement ok
+INSERT INTO memory.main.src VALUES (1,10),(2,20);
+
+statement ok
+CREATE TABLE memory.main.dst(id INTEGER, amt INTEGER);
+
+statement ok
+SELECT bridge_register_source('ic', 'memory', 'tok_ic');
+
+statement ok
+SELECT bridge_policy('ic', 'main.src', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('ic', 'main.dst', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('ic', 'main.dst', 'insert', 'true', 'true');
+
+statement ok
+ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ic', TOKEN 'tok_ic');
+
+# ---------------------------------------------------------------------------
+# Both tables are the source's, so the whole statement goes there: one region, the select inside the
+# insert, and nothing sent. The streaming path renders "insert rows" instead.
+# ---------------------------------------------------------------------------
+
+query II
+EXPLAIN INSERT INTO w.main.dst SELECT id, amt FROM w.main.src;
+----
+physical_plan	<REGEX>:.*Crossing:.*insert on source.*
+
+query I
+INSERT INTO w.main.dst SELECT id, amt FROM w.main.src;
+----
+2
+
+query II
+SELECT id, amt FROM memory.main.dst ORDER BY id;
+----
+1	10
+2	20
+
+# A literal VALUES list is rows the target holds, so they travel -- but they travel into the seam,
+# which is still one statement on the source rather than one per chunk.
+
+query I
+INSERT INTO w.main.dst VALUES (3, 30);
+----
+1
+
+query II
+SELECT id, amt FROM memory.main.dst ORDER BY id;
+----
+1	10
+2	20
+3	30
+
+# ---------------------------------------------------------------------------
+# The WITH CHECK still guards what the source writes, whichever path the rows took.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE memory.main.guarded(id INTEGER, amt INTEGER);
+
+statement ok
+SELECT bridge_register_source('ig', 'memory', 'tok_ig');
+
+statement ok
+SELECT bridge_policy('ig', 'main.src', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('ig', 'main.guarded', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('ig', 'main.guarded', 'insert', 'true', 'amt < 15');
+
+statement ok
+ATTACH '' AS g (TYPE virtual_catalog_bridge, ID 'ig', TOKEN 'tok_ig');
+
+statement error
+INSERT INTO g.main.guarded SELECT id, amt FROM g.main.src;
+----
+violates the check predicate
+
+query I
+SELECT count(*) FROM memory.main.guarded;
+----
+0
+
+statement ok
+DETACH w;
+
+statement ok
+DETACH g;

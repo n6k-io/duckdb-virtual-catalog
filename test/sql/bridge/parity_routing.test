@@ -1,0 +1,97 @@
+# name: test/sql/bridge/parity_routing.test
+# description: native and bridged entries share one schema.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
+
+statement ok
+INSERT INTO memory.main.users VALUES (1, 'a'), (2, 'b');
+
+statement ok
+CREATE TABLE memory.main.logs(id INTEGER PRIMARY KEY, msg VARCHAR);
+
+statement ok
+INSERT INTO memory.main.logs VALUES (1, 'boot');
+
+statement ok
+SELECT bridge_register_source('v2_ws_b', 'memory', 'tok_ws');
+
+statement ok
+SELECT bridge_policy('v2_ws_b', 'main.users', v, 'true') FROM (VALUES ('select'), ('update'), ('delete')) _(v);
+
+statement ok
+SELECT bridge_policy('v2_ws_b', 'main.users', 'insert', 'true', 'true');
+
+statement ok
+SELECT bridge_policy('v2_ws_b', 'main.logs', 'select', 'true');
+
+statement ok
+ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_ws_b', TOKEN 'tok_ws');
+
+# Native entries are created into the schema the bridge already serves.
+statement ok
+CREATE TABLE ws.main.local(x INTEGER PRIMARY KEY, tag VARCHAR);
+
+statement ok
+CREATE TABLE ws.main.local2(y INTEGER);
+
+statement ok
+CREATE VIEW ws.main.localv AS SELECT 1 AS z;
+
+statement ok
+INSERT INTO ws.main.local VALUES (1, 'first'), (2, 'second');
+
+query IT
+SELECT * FROM ws.main.users ORDER BY id;
+----
+1	a
+2	b
+
+# A native entry and a bridged one join inside the same schema.
+query ITT
+SELECT u.id, u.name, l.tag FROM ws.main.users u JOIN ws.main.local l ON u.id = l.x ORDER BY u.id;
+----
+1	a	first
+2	b	second
+
+# Both kinds show up in the same catalog listing.
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'ws' ORDER BY 1;
+----
+local
+local2
+logs
+users
+
+# A write to a native entry stays native; the source is untouched.
+statement ok
+INSERT INTO ws.main.local2 VALUES (42);
+
+query I
+SELECT y FROM ws.main.local2;
+----
+42
+
+# A write to a bridged entry lands on the source.
+statement ok
+INSERT INTO ws.main.users VALUES (3, 'c');
+
+query I
+SELECT count(*) FROM memory.main.users;
+----
+3
+
+# Dropping a native entry is allowed; dropping a bridged one is not.
+statement ok
+DROP TABLE ws.main.local2;
+
+statement error
+DROP TABLE ws.main.users;
+----
+is bridge-managed; DROP is not supported
+
+statement ok
+DETACH ws;

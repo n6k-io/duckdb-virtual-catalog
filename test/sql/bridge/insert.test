@@ -1,0 +1,72 @@
+# name: test/sql/bridge/insert.test
+# description: S5 -- INSERT crosses a chunk at a time and lands on the source.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1,'ada',50,7);
+
+statement ok
+CREATE TABLE memory.main.readonly(id INTEGER, note VARCHAR);
+
+statement ok
+SELECT bridge_register_source('v2_insert', 'memory', 'tok_insert');
+
+statement ok
+SELECT bridge_policy('v2_insert', 'main.orders', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('v2_insert', 'main.orders', 'insert', 'true', 'true');
+
+statement ok
+SELECT bridge_policy('v2_insert', 'main.readonly', 'select', 'true');
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_insert', TOKEN 'tok_insert');
+
+statement ok
+INSERT INTO b.main.orders VALUES (2,'grace',150,7);
+
+# The row landed on the source, not on the target's own storage.
+query IIII
+SELECT * FROM memory.main.orders ORDER BY id;
+----
+1	ada	50	7
+2	grace	150	7
+
+# And reading it back through the bridge sees it.
+query II
+SELECT id, name FROM b.main.orders ORDER BY id;
+----
+1	ada
+2	grace
+
+# More rows than one chunk carries, to exercise the queue rather than a single handoff.
+statement ok
+INSERT INTO b.main.orders SELECT i + 100, 'bulk', i, 7 FROM range(5000) t(i);
+
+query I
+SELECT count(*) FROM memory.main.orders;
+----
+5002
+
+query I
+SELECT count(*) FROM b.main.orders WHERE name = 'bulk';
+----
+5000
+
+# A verb that was never granted has no query at all; the statement is refused when it binds.
+statement error
+INSERT INTO b.main.readonly VALUES (1, 'no');
+----
+does not have 'insert' permission
+
+# The source's own constraints still apply.
+statement error
+INSERT INTO b.main.orders VALUES (1,'duplicate',1,7);
+----
+<REGEX>:.*(Constraint|violates|Duplicate).*
