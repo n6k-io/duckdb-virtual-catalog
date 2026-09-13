@@ -64,8 +64,8 @@ TEST_CASE("a window crosses when the source knows the function and every part of
 	MemorySource does_not;
 
 	auto row_number = [](unique_ptr<Expression> order_key) {
-		auto window = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr,
-		                                               nullptr);
+		auto window =
+		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
 		window->orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_LAST, std::move(order_key));
 		return window;
 	};
