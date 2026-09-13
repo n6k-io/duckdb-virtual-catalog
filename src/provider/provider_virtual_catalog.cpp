@@ -200,7 +200,7 @@ void VirtualCatalogProvider::RefreshProviderNames() {
 	}
 }
 
-void VirtualCatalogProvider::EnsureProviderSchemas() {
+void VirtualCatalogProvider::EnsureProviderSchemas(CatalogTransaction caller) {
 	RefreshProviderNames();
 
 	vector<string> schemas;
@@ -222,11 +222,19 @@ void VirtualCatalogProvider::EnsureProviderSchemas() {
 	// The system transaction, not the caller's: a SELECT reaching a schema for the first time must
 	// not roll the schema's creation back with it, or join a read-only transaction that cannot write.
 	auto transaction = CatalogTransaction::GetSystemTransaction(GetAttached().GetDatabase());
+	auto &schema_set = GetSchemaCatalogSet();
 	for (auto &schema : schemas) {
+		if (schema_set.GetEntry(caller, schema)) {
+			continue;
+		}
 		CreateSchemaInfo info;
 		info.schema = schema;
 		info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
-		CreateSchema(transaction, info);
+		try {
+			CreateSchema(transaction, info);
+		} catch (TransactionException &) {
+			// Created meanwhile by a transaction the caller cannot see yet; the next lookup finds it.
+		}
 	}
 }
 
@@ -245,12 +253,12 @@ VirtualCatalogProvider::ProviderTables VirtualCatalogProvider::TablesForSchema(c
 optional_ptr<SchemaCatalogEntry> VirtualCatalogProvider::LookupSchema(CatalogTransaction transaction,
                                                                       const EntryLookupInfo &schema_lookup,
                                                                       OnEntryNotFound if_not_found) {
-	EnsureProviderSchemas();
+	EnsureProviderSchemas(transaction);
 	return VirtualCatalogBase::LookupSchema(transaction, schema_lookup, if_not_found);
 }
 
 void VirtualCatalogProvider::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {
-	EnsureProviderSchemas();
+	EnsureProviderSchemas(GetCatalogTransaction(context));
 	VirtualCatalogBase::ScanSchemas(context, std::move(callback));
 }
 

@@ -280,6 +280,19 @@ def test_native_tables_coexist_with_provider_tables(con, provider):
     ).fetchall() == [("local", "native_table"), ("users", "provider")]
 
 
+def test_provider_lists_a_schema_sql_already_created(con):
+    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("CREATE SCHEMA app.public")
+    con.execute("CREATE TABLE app.public.local(id INTEGER)")
+    p = FakeProvider(con, schema="public")
+    p.add_table("users", USERS, primary_key=["id"])
+    p.register()
+    assert con.execute("SELECT count(*) FROM app.public.users").fetchone() == (3,)
+    assert con.execute(
+        "SELECT name, kind FROM provider_table_permissions('app', schema := 'public') ORDER BY name"
+    ).fetchall() == [("local", "native_table"), ("users", "provider")]
+
+
 def test_a_raising_scan_udf_surfaces_as_a_query_error(con):
     con.execute("ATTACH ':memory:' AS bad (TYPE virtual_catalog_provider)")
 

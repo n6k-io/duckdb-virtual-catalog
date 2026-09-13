@@ -59,7 +59,10 @@ private:
 
 	//! Materialise a DuckSchemaEntry for every schema the provider names: DuckCatalog only knows the
 	//! schemas SQL created, and the base class needs a target schema to hand out a wrapper for.
-	void EnsureProviderSchemas();
+	//! `caller` is the lookup's own transaction: a schema SQL created and committed is visible to it
+	//! but not to the system transaction that creates the missing ones, which would otherwise
+	//! report a write-write conflict on it instead of the IGNORE_ON_CONFLICT it asked for.
+	void EnsureProviderSchemas(CatalogTransaction caller);
 
 	mutex provider_lock;
 	shared_ptr<ProviderInfo> provider;
