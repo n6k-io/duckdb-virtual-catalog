@@ -1,0 +1,40 @@
+# name: test/sql/n6k_table_describe.test
+# description: n6k_table_describe single-table descriptor
+# group: [sql]
+
+require n6k_client
+
+statement ok
+CREATE TABLE memory.main.dt(id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, n INTEGER DEFAULT 5);
+
+# One row: column count, native table is writeable + editable, PK is [id].
+query ITTT
+SELECT len(columns), writeable, editable, primary_key
+FROM n6k_table_describe('memory', schema := 'main', "table" := 'dt');
+----
+3	true	true	[id]
+
+# Per-column detail via the struct list (explicit NOT NULL and DEFAULT).
+query TTT
+SELECT c.name, c.nullable, c."default"
+FROM n6k_table_describe('memory', schema := 'main', "table" := 'dt') t, UNNEST(t.columns) AS u(c)
+WHERE c.name IN ('name', 'n')
+ORDER BY c.name;
+----
+n	true	5
+name	false	NULL
+
+statement ok
+CREATE VIEW memory.main.dv AS SELECT id FROM memory.main.dt;
+
+# A view is neither writeable nor editable.
+query TT
+SELECT writeable, editable FROM n6k_table_describe('memory', schema := 'main', "table" := 'dv');
+----
+false	false
+
+# Missing table errors.
+statement error
+SELECT * FROM n6k_table_describe('memory', schema := 'main', "table" := 'nope');
+----
+not found

@@ -5,8 +5,16 @@ duckdb_unittest_tempdir/
 .DS_Store
 testext
 .Rhistory
+packages/npm/wasm/
 scratch/
+node_modules
+.venv/
+*.tgz
+__pycache__
 .cache/
+**/dist/
+**/*.egg-info/
+.mypy_cache/
+.pytest_cache/
 .env
 .idit/
-*.pyc

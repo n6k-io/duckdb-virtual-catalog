@@ -14,26 +14,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Windows (windows_amd64 and windows_amd64_mingw) is not built or shipped.
+  # One build per arch compiles EVERY extension declared in
+  # extension_config.cmake (n6k_client and — on non-Windows — n6k_server;
+  # plus n6k_testing on native, which the deploy step below skips) — the
+  # build command is a blanket `make`, the extension set is driven entirely by
+  # that config, not by extension_name. upload_all_extensions:true packages every
+  # built *.duckdb_extension from build/<type>/repository/** into a single
+  # artifact (named n6k-<ver>-extension-<arch>), so the deploy step ships all of
+  # them from one compile instead of rebuilding the whole tree once per extension.
   duckdb-stable-build:
-    name: Build virtual_catalog extension binaries
+    name: Build n6k extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.4
     with:
       duckdb_version: v1.5.4
       ci_tools_version: v1.5.4
-      extension_name: virtual_catalog
+      extension_name: n6k_client
       # coi-only: build wasm_threads, never eh/mvp (they can't load a shared-memory
       # extension). On PRs also drop the non-amd64 native arches for speed.
-      exclude_archs: ${{ github.ref != 'refs/heads/main' && 'linux_arm64;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh' || 'wasm_mvp;wasm_eh' }}
+      exclude_archs: ${{ github.ref != 'refs/heads/main' && 'linux_arm64;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh' || 'windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh' }}
       opt_in_archs: 'linux_amd64_musl'
-
-  no-sql-strings:
-    name: No SQL assembled from strings
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # The script, not `make check-no-sql`: the root Makefile includes extension-ci-tools, and this
-      # job deliberately does not check out the submodules.
-      - run: python3 scripts/check_no_sql.py src
+      upload_all_extensions: true
 
   code-quality-check:
     name: Code Quality Check
@@ -41,11 +42,11 @@ jobs:
     with:
       duckdb_version: v1.5.4
       ci_tools_version: v1.5.4
-      extension_name: virtual_catalog
+      extension_name: n6k_client
       format_checks: 'format;tidy'
 
   duckdb-stable-deploy:
-    name: Deploy virtual_catalog (${{ matrix.duckdb_arch }})
+    name: Deploy n6k extensions (${{ matrix.duckdb_arch }})
     needs: duckdb-stable-build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -60,8 +61,6 @@ jobs:
           - linux_amd64_musl
           - osx_amd64
           - osx_arm64
-          - windows_amd64
-          - windows_amd64_mingw
           # coi-only: only the shared-memory (wasm_threads) extension is built/shipped.
           - wasm_threads
     steps:
@@ -78,9 +77,12 @@ jobs:
           cd duckdb
           git checkout v1.5.4
 
+      # One artifact per arch holds every extension built for it (n6k_client,
+      # and n6k_server on non-Windows), nested under the repository/
+      # tree — staged here, then flattened + uploaded one extension at a time.
       - uses: actions/download-artifact@v4
         with:
-          name: virtual_catalog-v1.5.4-extension-${{ matrix.duckdb_arch }}
+          name: n6k_client-v1.5.4-extension-${{ matrix.duckdb_arch }}
           path: /tmp/artifact
 
       - uses: ./.github/actions/setup-gcloud
@@ -103,14 +105,29 @@ jobs:
             suffix=".duckdb_extension"
           fi
 
-          # The artifact nests the extension under a repository/ tree; extension-upload.sh
-          # reads /tmp/extension/<name><suffix>, so flatten it to that path first.
-          built="$(find /tmp/artifact -name "virtual_catalog$suffix" | head -1)"
-          if [ -z "$built" ]; then
-            echo "::error::virtual_catalog$suffix not found in artifact for $DUCKDB_ARCH"
+          # extension-upload.sh reads /tmp/extension/<name><suffix>, so flatten
+          # each built extension to that path and upload it. The artifact contains
+          # whatever was built for this arch, so this ships what was compiled
+          # rather than a hardcoded list — with one deliberate exclusion below.
+          mkdir -p /tmp/extension
+          found=0
+          while IFS= read -r f; do
+            name="$(basename "$f" "$suffix")"
+            # n6k_testing registers the SQL functions that exist only for tests. CI
+            # builds it so the sqllogic suite can `require` it; it must never reach
+            # the public bucket, or hosts would install a test surface alongside n6k.
+            if [[ "$name" == "n6k_testing" ]]; then
+              echo "Skipping $name ($DUCKDB_ARCH) — test-only, not published"
+              continue
+            fi
+            cp "$f" "/tmp/extension/$name$suffix"
+            echo "Uploading $name ($DUCKDB_ARCH)"
+            ./scripts/extension-upload.sh "$name" "$EXT_VERSION" "$DUCKDB_VERSION" "$DUCKDB_ARCH" "$BUCKET_NAME" true true
+            found=$((found+1))
+          done < <(find /tmp/artifact -name "*$suffix")
+
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no *$suffix files found in artifact for $DUCKDB_ARCH"
             exit 1
           fi
-
-          mkdir -p /tmp/extension
-          cp "$built" "/tmp/extension/virtual_catalog$suffix"
-          ./scripts/extension-upload.sh virtual_catalog "$EXT_VERSION" "$DUCKDB_VERSION" "$DUCKDB_ARCH" "$BUCKET_NAME" true true
+          echo "Deployed $found extension(s) for $DUCKDB_ARCH"

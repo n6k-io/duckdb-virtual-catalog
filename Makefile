@@ -1,75 +1,63 @@
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Configuration of extension
-EXT_NAME=virtual_catalog
+EXT_NAME=n6k_client
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
-# Statements in src/ are built as parser nodes, not assembled from strings. See
-# scripts/check_no_sql.py for what this looks for and what it deliberately does not.
-check-no-sql:
-	python3 scripts/check_no_sql.py src
+# Stage the coi (wasm_threads) extension into the npm package. coi is the only
+# wasm variant we build/ship — eh/mvp can't load a shared-memory extension, and
+# n6k mandates cross-origin isolation, so the coi bundle is always the runtime.
+npm_db_wasm:
+	rm -rf packages/npm/wasm
+	mkdir -p packages/npm/wasm
+	cp -r build/wasm_threads/repository/* packages/npm/wasm/
 
-# C++ unit tests (Catch). Builds only the unittest targets and their deps;
-# does not need a prior `make release`.
-CPP_TEST_BUILD_DIR=${PROJ_DIR}build/release
-CPP_TEST_LOG=$(CPP_TEST_BUILD_DIR)/vcat_unittest_build.log
-test-cpp:
-	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
-	@cmake "$(CPP_TEST_BUILD_DIR)" > "$(CPP_TEST_LOG)" 2>&1 || { cat "$(CPP_TEST_LOG)"; exit 1; }
-	@echo "building vcat_provider_unittest..."
-	@cmake --build "$(CPP_TEST_BUILD_DIR)" --target vcat_provider_unittest -j \
-		>> "$(CPP_TEST_LOG)" 2>&1 || { cat "$(CPP_TEST_LOG)"; exit 1; }
-	@"$(CPP_TEST_BUILD_DIR)/vcat_provider_unittest" $(CPP_TEST_ARGS)
+# The coi (wasm_threads) extension must be built with the emsdk that matches
+# duckdb-wasm's coi runtime. A different emcc silently produces an incompatible
+# side-module, so gate the build on the pinned version.
+EXPECTED_EMCC_VERSION := 3.1.71
 
-PYTEST=uv run pytest test/python
+# Preflight: fail fast unless the emcc on PATH is the pinned toolchain.
+.PHONY: wasm-preflight
+wasm-preflight:
+	@command -v emcc >/dev/null 2>&1 || { echo "ERROR: emcc not on PATH (activate emsdk $(EXPECTED_EMCC_VERSION))"; exit 1; }
+	@emcc --version | grep -q " $(EXPECTED_EMCC_VERSION) " || { echo "ERROR: emcc must be $(EXPECTED_EMCC_VERSION), got: $$(emcc --version | head -1)"; exit 1; }
+	@echo "emcc $(EXPECTED_EMCC_VERSION) OK"
 
-BRIDGE_LOG=$(CPP_TEST_BUILD_DIR)/vcat_bridge_build.log
-BRIDGE_TEST_ARGS?=test/sql/bridge/*
-bridge:
-	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
-	@echo "building virtual_catalog_bridge..."
-	@cmake --build "$(CPP_TEST_BUILD_DIR)" -j --target \
-		virtual_catalog_bridge_loadable_extension unittest \
-		> "$(BRIDGE_LOG)" 2>&1 || { cat "$(BRIDGE_LOG)"; exit 1; }
+# The vendored wasm_threads target compiles objects with -pthread but never
+# passes -DUSE_WASM_THREADS=1, so duckdb leaves WASM_THREAD_FLAGS empty and the
+# -sSIDE_MODULE=2 link omits -sSHARED_MEMORY=1 — producing extensions that
+# import a NON-shared memory and fail to load against the shared-memory coi
+# runtime (LinkError: mismatch in shared state of memory). Inject the flag via
+# EXT_FLAGS (the submodule's documented cmake passthrough) so we don't have to
+# patch the submodule. Set on wasm_threads itself so a direct build is covered.
+wasm_threads: EXT_FLAGS += -DUSE_WASM_THREADS=1
 
-# One path end to end: its sqllogictests, then the python tests marked for it.
-# The marker follows test/python/<path>/, plus the matching half of the parity probes.
-test-bridge: bridge
-	@"$(CPP_TEST_BUILD_DIR)/test/unittest" "$(BRIDGE_TEST_ARGS)"
-	@$(PYTEST) -m bridge
+# Build + stage the coi (wasm_threads) variant. `wasm-all` is kept as an alias
+# (coi is the only variant now).
+.PHONY: wasm wasm-all
+wasm wasm-all: wasm-preflight wasm_threads npm_db_wasm
 
-PROVIDER_LOG=$(CPP_TEST_BUILD_DIR)/vcat_provider_build.log
-PROVIDER_TEST_ARGS?=test/sql/provider/*
-provider:
-	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
-	@echo "building virtual_catalog_provider..."
-	@cmake --build "$(CPP_TEST_BUILD_DIR)" -j --target \
-		virtual_catalog_provider_loadable_extension vcat_provider_unittest unittest \
-		> "$(PROVIDER_LOG)" 2>&1 || { cat "$(PROVIDER_LOG)"; exit 1; }
+# Regenerate TS + C++ mirrors of packages/python/src/n6k_protocol/protocol.py.
+# Source of truth lives in Python; outputs are committed to git.
+.PHONY: protocol-gen protocol-check
+PROTOCOL_GENERATED := packages/npm/src/protocol-generated.ts src/common/include/n6k_protocol_generated.hpp packages/python/src/n6k_protocol/schema.json
 
-test-provider: provider
-	@"$(CPP_TEST_BUILD_DIR)/vcat_provider_unittest" $(CPP_TEST_ARGS)
-	@"$(CPP_TEST_BUILD_DIR)/test/unittest" "$(PROVIDER_TEST_ARGS)"
-	@$(PYTEST) -m provider
+protocol-gen:
+	python -m n6k_protocol.codegen
 
-test-parity:
-	@$(PYTEST) -m parity
+# Verify the committed generated files match the source. Run this by hand after
+# editing protocol.py -- no CI job or pre-commit hook invokes it.
+protocol-check:
+	python -m n6k_protocol.codegen
+	@if ! git diff --quiet -- $(PROTOCOL_GENERATED); then \
+		echo "ERROR: generated protocol files are out of sync with packages/python/src/n6k_protocol/protocol.py"; \
+		echo "       run 'make protocol-gen' and commit the changes."; \
+		git --no-pager diff -- $(PROTOCOL_GENERATED); \
+		exit 1; \
+	fi
+	@echo "protocol mirrors are up to date"
 
-CROSSING_SRC_DIR=${PROJ_DIR}src/crossing
-CROSSING_BUILD_DIR=${PROJ_DIR}build/crossing
-CROSSING_TEST_LOG=$(CROSSING_BUILD_DIR)/build.log
-test-crossing:
-	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/src/libduckdb_static.a" ]; then $(MAKE) release; fi
-	@mkdir -p "$(CROSSING_BUILD_DIR)"
-	@cmake -S "$(CROSSING_SRC_DIR)" -B "$(CROSSING_BUILD_DIR)" \
-		-DDUCKDB_BUILD_DIR="$(CPP_TEST_BUILD_DIR)" > "$(CROSSING_TEST_LOG)" 2>&1 \
-		|| { cat "$(CROSSING_TEST_LOG)"; exit 1; }
-	@echo "building crossing_unittest..."
-	@cmake --build "$(CROSSING_BUILD_DIR)" -j >> "$(CROSSING_TEST_LOG)" 2>&1 \
-		|| { cat "$(CROSSING_TEST_LOG)"; exit 1; }
-	@"$(CROSSING_BUILD_DIR)/crossing_unittest" $(CROSSING_TEST_ARGS)
-
-.PHONY: test-cpp test-crossing bridge test-bridge provider test-provider test-parity

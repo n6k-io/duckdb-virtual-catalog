@@ -1,0 +1,31 @@
+# name: test/sql/filter_json.test
+# description: TableFilter -> n6k JSON wire format, including the fidelity rules
+# group: [sql]
+
+require n6k_testing
+
+# `exact` is what callers gate on: false means the filter set could not be rendered faithfully and
+# must not be sent, because DuckDB does not re-apply pushed filters after an Arrow scan.
+query TTT
+SELECT case_name, json, exact FROM n6k_testing_filter_json_fidelity() ORDER BY case_name;
+----
+and_in_or	[["or",[["and",[["a",">",5],["a","<",10]]],["a","=",0]]]]	true
+and_with_unrenderable	(empty)	false
+gt	[["a",">",5]]	true
+in	[["a","in",[1,2]]]	true
+is_null	[["a","is_null",null]]	true
+optional_supported	[["a",">",5]]	true
+optional_unrenderable	(empty)	true
+or	[["or",[["a",">",5],["a","<",2]]]]	true
+or_flat_dialect	(empty)	false
+or_with_optional_branch	(empty)	false
+or_with_unrenderable	(empty)	false
+tag_absent_for_int	[["a","=",5]]	true
+tag_absent_for_varchar	[["a","=","abc"]]	true
+tag_date	[["a",">=","2025-05-06","date"]]	true
+tag_decimal	[["a",">","1.50","decimal"]]	true
+tag_hugeint	[["a",">","12345","int"]]	true
+tag_in_list	[["a","in",["2025-05-06","2025-05-26"],"date"]]	true
+tag_off_by_default	[["a","=","2025-05-06"]]	true
+tag_opaque	[["a","=","ab","opaque"]]	true
+unrenderable	(empty)	false

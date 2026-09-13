@@ -1,0 +1,27 @@
+# name: test/sql/n6k_hello_ns.test
+# description: A native attach's FT_HELLO must carry a nonzero `ns`, distinct per attach
+# group: [sql]
+
+require n6k_client
+
+# PackHello omits the `ns` key when ns == 0, and a multiplexed serve refuses a HELLO that names no
+# session — so an unassigned ns looks on the wire exactly like a pre-mux
+# client build. This drives the real CatalogSession::Create against an in-process ix::WebSocketServer
+# that answers HELLO_ACK, then decodes the captured HELLO frames.
+query I
+SELECT ns_present FROM n6k_selftest_hello_ns_distinct();
+----
+true
+
+# Two successive attaches must not collide: a shared wsFd puts both HELLOs on one socket, where a
+# repeated ns makes the router discard the second as a duplicate.
+query I
+SELECT ns_distinct FROM n6k_selftest_hello_ns_distinct();
+----
+true
+
+# ok folds in that the server bound and both HELLOs arrived, so a harness failure can't read as a pass.
+query I
+SELECT ok FROM n6k_selftest_hello_ns_distinct();
+----
+true
