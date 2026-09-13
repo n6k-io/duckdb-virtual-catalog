@@ -16,22 +16,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # paths, which clang-tidy's `src/.*/` header filter then lints.
 get_filename_component(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../.. ABSOLUTE)
 
+include(${REPO_ROOT}/src/crossing/crossing.cmake)
+crossing_includes(CROSSING_INCLUDES)
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-include_directories(${REPO_ROOT}/src/common/include)
+include_directories(${CROSSING_INCLUDES})
 # nanoarrow is provider-only: the bridge moves DataChunks and never touches
 # Arrow.
 include_directories(${REPO_ROOT}/third_party/nanoarrow)
 
-# src/common is compiled in, not linked against: the two extensions are separate
-# binaries and neither depends on the other being loaded.
 set(EXTENSION_SOURCES
     ${REPO_ROOT}/third_party/nanoarrow/nanoarrow.c
     ${REPO_ROOT}/third_party/nanoarrow/nanoarrow_ipc.c
     ${REPO_ROOT}/third_party/nanoarrow/flatcc.c
-    ${REPO_ROOT}/src/common/vcat_catalog_base.cpp
-    ${REPO_ROOT}/src/common/vcat_schema_entry_base.cpp
-    ${REPO_ROOT}/src/common/vcat_permissions.cpp
-    ${REPO_ROOT}/src/common/vcat_describe.cpp
+    ${CROSSING_ROOT}/vcat_catalog_base.cpp
+    ${CROSSING_ROOT}/vcat_schema_entry_base.cpp
+    ${CROSSING_ROOT}/vcat_permissions.cpp
+    ${CROSSING_ROOT}/vcat_describe.cpp
     provider_extension.cpp
     provider_virtual_catalog.cpp
     provider_arrow.cpp

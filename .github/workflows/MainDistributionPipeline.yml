@@ -45,7 +45,7 @@ jobs:
       format_checks: 'format;tidy'
 
   duckdb-stable-deploy:
-    name: Deploy virtual_catalog (${{ matrix.duckdb_arch }})
+    name: Deploy virtual_catalog_bridge + virtual_catalog_provider (${{ matrix.duckdb_arch }})
     needs: duckdb-stable-build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -103,14 +103,13 @@ jobs:
             suffix=".duckdb_extension"
           fi
 
-          # The artifact nests the extension under a repository/ tree; extension-upload.sh
-          # reads /tmp/extension/<name><suffix>, so flatten it to that path first.
-          built="$(find /tmp/artifact -name "virtual_catalog$suffix" | head -1)"
-          if [ -z "$built" ]; then
-            echo "::error::virtual_catalog$suffix not found in artifact for $DUCKDB_ARCH"
-            exit 1
-          fi
-
           mkdir -p /tmp/extension
-          cp "$built" "/tmp/extension/virtual_catalog$suffix"
-          ./scripts/extension-upload.sh virtual_catalog "$EXT_VERSION" "$DUCKDB_VERSION" "$DUCKDB_ARCH" "$BUCKET_NAME" true true
+          for name in virtual_catalog_bridge virtual_catalog_provider; do
+            built="$(find /tmp/artifact -name "$name$suffix" | head -1)"
+            if [ -z "$built" ]; then
+              echo "::error::$name$suffix not found in artifact for $DUCKDB_ARCH"
+              exit 1
+            fi
+            cp "$built" "/tmp/extension/$name$suffix"
+            ./scripts/extension-upload.sh "$name" "$EXT_VERSION" "$DUCKDB_VERSION" "$DUCKDB_ARCH" "$BUCKET_NAME" true true
+          done

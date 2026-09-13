@@ -12,19 +12,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 get_filename_component(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../.. ABSOLUTE)
 
+include(${REPO_ROOT}/src/crossing/crossing.cmake)
+crossing_sources(CROSSING_SOURCES)
+crossing_includes(CROSSING_INCLUDES)
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-include_directories(${REPO_ROOT}/src/common/include)
-include_directories(${REPO_ROOT}/src/crossing/include)
-
-include(${REPO_ROOT}/src/crossing/sources.cmake)
-
-set(CROSSING_SOURCES "")
-foreach(crossing_source ${CROSSING_LIBRARY_SOURCE_NAMES})
-  list(APPEND CROSSING_SOURCES ${REPO_ROOT}/src/crossing/${crossing_source})
-endforeach()
-foreach(common_source ${CROSSING_COMMON_SOURCE_NAMES})
-  list(APPEND CROSSING_SOURCES ${REPO_ROOT}/src/common/${common_source})
-endforeach()
+include_directories(${CROSSING_INCLUDES})
 
 set(EXTENSION_SOURCES ${CROSSING_SOURCES} bridge_extension.cpp
                       duckdb_source.cpp)
