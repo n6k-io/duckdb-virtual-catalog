@@ -61,7 +61,7 @@ install(
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
 
 option(VCAT_BUILD_CPP_TESTS "Build the virtual_catalog C++ unit tests" ON)
-if(VCAT_BUILD_CPP_TESTS)
+if(VCAT_BUILD_CPP_TESTS AND BUILD_MAIN_DUCKDB_LIBRARY)
   file(GLOB_RECURSE VCAT_PROVIDER_TEST_SOURCES CONFIGURE_DEPENDS
        ${REPO_ROOT}/test/cpp/provider/test_*.cpp)
   add_executable(

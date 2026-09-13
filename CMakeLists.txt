@@ -69,7 +69,7 @@ install(
 # C++ unit tests. Out-of-tree extensions get no hook into duckdb's own `unittest`
 # binary, so this is a standalone Catch runner over the same static extension lib.
 option(VCAT_BUILD_CPP_TESTS "Build the virtual_catalog C++ unit tests" ON)
-if(VCAT_BUILD_CPP_TESTS)
+if(VCAT_BUILD_CPP_TESTS AND BUILD_MAIN_DUCKDB_LIBRARY)
   # CONFIGURE_DEPENDS: a newly added test_*.cpp is picked up by the next build
   # without a manual reconfigure.
   file(GLOB_RECURSE VCAT_TEST_SOURCES CONFIGURE_DEPENDS
