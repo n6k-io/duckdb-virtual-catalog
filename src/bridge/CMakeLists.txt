@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 get_filename_component(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../.. ABSOLUTE)
 
-include(${REPO_ROOT}/src/crossing/crossing.cmake)
+include(${REPO_ROOT}/third_party/crossing/crossing.cmake)
 include(${REPO_ROOT}/src/vcat/vcat.cmake)
 crossing_sources(CROSSING_SOURCES)
 crossing_includes(CROSSING_INCLUDES)
