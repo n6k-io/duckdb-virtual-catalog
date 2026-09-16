@@ -32,8 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init third_party/crossing
       # The script, not `make check-no-sql`: the root Makefile includes extension-ci-tools, and this
-      # job deliberately does not check out the submodules.
+      # job deliberately does not check out the duckdb submodules.
       - run: python3 scripts/check_no_sql.py src
 
   code-quality-check:

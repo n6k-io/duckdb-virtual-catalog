@@ -11,8 +11,6 @@
 #include "duckdb/catalog/duck_catalog.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/main/attached_database.hpp"
-#include "duckdb/storage/storage_extension.hpp"
-#include "duckdb/transaction/duck_transaction_manager.hpp"
 
 namespace duckdb {
 
@@ -47,21 +45,5 @@ private:
 	// rest of the statement, the same reason the subclasses retire their cached entries.
 	vector<unique_ptr<VirtualCatalogSchemaEntryBase>> retired_wrappers;
 };
-
-//! Storage extension for `ATTACH ':memory:' (TYPE <CatalogT's type>)`. Native storage and ACID
-//! transactions come from DuckDB's own DuckTransactionManager; only the catalog is substituted.
-template <class CatalogT>
-shared_ptr<StorageExtension> CreateVirtualCatalogStorageExtension() {
-	auto ext = make_shared_ptr<StorageExtension>();
-	ext->attach = [](optional_ptr<StorageExtensionInfo>, ClientContext &, AttachedDatabase &db, const string &,
-	                 AttachInfo &, AttachOptions &) -> unique_ptr<Catalog> {
-		return make_uniq<CatalogT>(db);
-	};
-	ext->create_transaction_manager = [](optional_ptr<StorageExtensionInfo>, AttachedDatabase &db,
-	                                     Catalog &) -> unique_ptr<TransactionManager> {
-		return make_uniq<DuckTransactionManager>(db);
-	};
-	return ext;
-}
 
 } // namespace duckdb

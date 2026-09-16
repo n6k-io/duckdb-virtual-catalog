@@ -108,7 +108,7 @@ does not exist
 statement error
 DROP TABLE b.main.orders;
 ----
-is bridge-managed; DROP is not supported
+is served by a source; DROP is not supported
 
 query IIII
 SELECT * FROM b.main.orders ORDER BY id;

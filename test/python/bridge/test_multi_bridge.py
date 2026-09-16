@@ -111,7 +111,7 @@ def test_dropping_a_bridged_schema_is_refused(two_sources, target):
     a.execute("CREATE SCHEMA one; CREATE TABLE one.alpha(id INTEGER PRIMARY KEY)")
     bridge(a, target, {"one.alpha": READ})
 
-    with pytest.raises(Exception, match="serving a bridge"):
+    with pytest.raises(Exception, match="served by a source"):
         target.execute("DROP SCHEMA app.one")
 
     unbridge(target)
