@@ -43,20 +43,22 @@ struct SourceGrant {
 	}
 };
 
-class DuckDBTransaction : public CrossingTransaction {
+class DuckDBSession : public CrossingSession {
 public:
-	DuckDBTransaction(shared_ptr<DatabaseInstance> source_db, bool autocommit);
+	DuckDBSession(shared_ptr<DatabaseInstance> source_db, string source_catalog, bool autocommit);
 
-	bool autocommit;
-
-	shared_ptr<Connection> Shared();
+	CrossingScan Read(ClientContext &context, const CrossingQuery &query) override;
+	CrossingWriter Write(ClientContext &context, const CrossingQuery &query) override;
 	void Commit() override;
 	void Rollback() override;
 
-	mutex lock;
-
 private:
+	shared_ptr<Connection> Shared();
+
 	shared_ptr<DatabaseInstance> source_db;
+	string source_catalog;
+	bool autocommit;
+	mutex lock;
 	shared_ptr<Connection> conn;
 };
 
@@ -69,12 +71,10 @@ public:
 	vector<string> Schemas() override;
 	vector<string> Tables(const string &schema) override;
 	CrossingTable Describe(const string &schema, const string &name) override;
-	unique_ptr<LogicalOperator> Plan(CrossingPlanRequest &request) override;
+	CrossingPlan Plan(const CrossingPlanRequest &request) override;
 	CrossingVerdict AcceptsCall(const Expression &expr) override;
 	CrossingVerdict AcceptsType(const LogicalType &type) override;
-	unique_ptr<CrossingTransaction> Begin(ClientContext &context) override;
-	unique_ptr<CrossingReader> Read(CrossingTransaction &transaction, const CrossingReadQuery &query) override;
-	idx_t Write(CrossingTransaction &transaction, const CrossingWriteQuery &query) override;
+	unique_ptr<CrossingSession> Begin(ClientContext &context) override;
 
 private:
 	shared_ptr<Connection> PlanningConnection();
@@ -87,9 +87,13 @@ private:
 	unique_ptr<SQLStatement> UpdateStatement(const CrossingPlanRequest &request, const vector<string> &row_aliases,
 	                                         unique_ptr<TableRef> rows_ref);
 
+	bool SourceHasFunction(const string &function_name);
+
 	shared_ptr<DatabaseInstance> source_db;
 	string source_catalog;
 	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> granted;
+	mutex functions_lock;
+	case_insensitive_map_t<bool> functions_known;
 };
 
 bool TryParseCrossingVerb(const string &text, CrossingVerb &out);

@@ -1,7 +1,5 @@
 #include "duckdb_source.hpp"
 
-#include "crossing_catalog.hpp"
-
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/entry_lookup_info.hpp"
@@ -115,7 +113,7 @@ PendingV2Source &LookupPendingForGrant(const string &bridge_id, ClientContext &c
 		                          bridge_id);
 	}
 	auto source_entry = Catalog::GetCatalogEntry(context, it->second.source_catalog);
-	if (source_entry && dynamic_cast<CrossingCatalog *>(source_entry.get())) {
+	if (source_entry && source_entry->GetCatalogType() == VIRTUAL_CATALOG_BRIDGE_TYPE) {
 		throw CatalogException("virtual_catalog_bridge: source catalog '%s' is itself a bridge; name the "
 		                       "catalog holding the real tables",
 		                       it->second.source_catalog);
@@ -145,7 +143,7 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		if (!entry) {
 			throw CatalogException("virtual_catalog_bridge: source catalog '%s' does not exist", source_catalog);
 		}
-		if (dynamic_cast<CrossingCatalog *>(entry.get())) {
+		if (entry->GetCatalogType() == VIRTUAL_CATALOG_BRIDGE_TYPE) {
 			throw CatalogException("virtual_catalog_bridge: source catalog '%s' is itself a bridge; name the "
 			                       "catalog holding the real tables",
 			                       source_catalog);
@@ -475,10 +473,6 @@ void PrimaryKeyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	}
 }
 
-SourceGrant &GrantToKey(PendingV2Source &pending, const string &schema, const string &table, const string &qualified) {
-	return pending.schemas[schema][table];
-}
-
 void PrimaryKeyQueryFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &context = state.GetContext();
 	auto count = args.size();
@@ -531,7 +525,7 @@ void PrimaryKeyQueryFunc(DataChunk &args, ExpressionState &state, Vector &result
 
 		lock_guard<mutex> lock(PendingMutex());
 		auto &pending = LookupPendingForGrant(bridge_id, context);
-		auto &grant = GrantToKey(pending, schema, table, qualified);
+		auto &grant = pending.schemas[schema][table];
 		grant.key = std::move(key);
 		grant.key_verified = false;
 		result_data[i] = StringVector::AddString(result, "ok");
@@ -558,7 +552,7 @@ void PrimaryKeyCheckFunc(DataChunk &args, ExpressionState &state, Vector &result
 		{
 			lock_guard<mutex> lock(PendingMutex());
 			auto &pending = LookupPendingForGrant(bridge_id, context);
-			if (GrantToKey(pending, schema, table, qualified).key.empty()) {
+			if (pending.schemas[schema][table].key.empty()) {
 				throw IOException("virtual_catalog_bridge: no primary key is set for '%s' in bridge '%s'; call "
 				                  "bridge_primary_key or bridge_primary_key_query first",
 				                  qualified, bridge_id);
@@ -580,7 +574,7 @@ void PrimaryKeyCheckFunc(DataChunk &args, ExpressionState &state, Vector &result
 
 		lock_guard<mutex> lock(PendingMutex());
 		auto &pending = LookupPendingForGrant(bridge_id, context);
-		GrantToKey(pending, schema, table, qualified).key_verified = true;
+		pending.schemas[schema][table].key_verified = true;
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
 }
@@ -695,7 +689,8 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 
 	Connection conn(*source_db);
 	conn.BeginTransaction();
-	CrossingTable table(name);
+	CrossingTable table;
+	table.name = name;
 	try {
 		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, name);
 		auto entry = Catalog::GetEntry(*conn.context, source_catalog, schema, lookup, OnEntryNotFound::RETURN_NULL);
@@ -710,7 +705,7 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 			if (constraint->type == ConstraintType::FOREIGN_KEY) {
 				continue;
 			}
-			table.Constraint(constraint->Copy());
+			table.constraints.push_back(constraint->Copy());
 		}
 	} catch (...) {
 		conn.Rollback();
@@ -721,24 +716,19 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 	for (idx_t v = 0; v < CROSSING_VERB_COUNT; v++) {
 		auto verb = static_cast<CrossingVerb>(v);
 		if (table_it->second.Has(verb)) {
-			table.Allow(verb);
+			table.verbs.push_back(verb);
 		}
 	}
-	if (!table_it->second.key.empty()) {
-		if (table_it->second.key_verified) {
-			table.UniqueKey(table_it->second.key);
-		} else {
-			table.Key(table_it->second.key);
-		}
-	}
+	table.key = table_it->second.key;
+	table.key_unique = !table.key.empty() && table_it->second.key_verified;
 	return table;
 }
 
-DuckDBTransaction::DuckDBTransaction(shared_ptr<DatabaseInstance> source_db_p, bool autocommit_p)
-    : autocommit(autocommit_p), source_db(std::move(source_db_p)) {
+DuckDBSession::DuckDBSession(shared_ptr<DatabaseInstance> source_db_p, string source_catalog_p, bool autocommit_p)
+    : source_db(std::move(source_db_p)), source_catalog(std::move(source_catalog_p)), autocommit(autocommit_p) {
 }
 
-shared_ptr<Connection> DuckDBTransaction::Shared() {
+shared_ptr<Connection> DuckDBSession::Shared() {
 	lock_guard<mutex> guard(lock);
 	if (!conn) {
 		conn = make_shared_ptr<Connection>(*source_db);
@@ -747,7 +737,7 @@ shared_ptr<Connection> DuckDBTransaction::Shared() {
 	return conn;
 }
 
-void DuckDBTransaction::Commit() {
+void DuckDBSession::Commit() {
 	lock_guard<mutex> guard(lock);
 	if (!conn) {
 		return;
@@ -756,7 +746,7 @@ void DuckDBTransaction::Commit() {
 	conn.reset();
 }
 
-void DuckDBTransaction::Rollback() {
+void DuckDBSession::Rollback() {
 	lock_guard<mutex> guard(lock);
 	if (!conn) {
 		return;
@@ -768,8 +758,8 @@ void DuckDBTransaction::Rollback() {
 	conn.reset();
 }
 
-unique_ptr<CrossingTransaction> DuckDBSource::Begin(ClientContext &context) {
-	return make_uniq<DuckDBTransaction>(source_db, context.transaction.IsAutoCommit());
+unique_ptr<CrossingSession> DuckDBSource::Begin(ClientContext &context) {
+	return make_uniq<DuckDBSession>(source_db, source_catalog, context.transaction.IsAutoCommit());
 }
 
 shared_ptr<Connection> DuckDBSource::PlanningConnection() {
@@ -924,9 +914,9 @@ unique_ptr<LogicalOperator> DuckDBSource::ScanPlan(const CrossingPlanRequest &re
 	return plan;
 }
 
-unique_ptr<LogicalOperator> DuckDBSource::Plan(CrossingPlanRequest &request) {
+CrossingPlan DuckDBSource::Plan(const CrossingPlanRequest &request) {
 	if (request.verb == CrossingVerb::SELECT) {
-		return ScanPlan(request);
+		return CrossingPlan::Of(ScanPlan(request));
 	}
 	if (request.verb != CrossingVerb::INSERT && request.seam.key_columns.empty()) {
 		throw InternalException("virtual_catalog_bridge: '%s.%s' has no key to write by", request.schema,
@@ -940,8 +930,7 @@ unique_ptr<LogicalOperator> DuckDBSource::Plan(CrossingPlanRequest &request) {
 		row_aliases.push_back("v" + to_string(c));
 	}
 	if (row_aliases.size() != request.seam.types.size()) {
-		request.declined = "the seam does not carry one value per column";
-		return nullptr;
+		return CrossingPlan::Declined("the seam does not carry one value per column");
 	}
 	auto rows_ref = SeamShapedRows(row_aliases, request.seam.types);
 
@@ -970,12 +959,30 @@ unique_ptr<LogicalOperator> DuckDBSource::Plan(CrossingPlanRequest &request) {
 	auto table_index = (*slot)->Cast<LogicalExpressionGet>().table_index;
 	*slot = MakeSeamNode(table_index, request.seam.types);
 	plan->ResolveOperatorTypes();
-	return plan;
+	return CrossingPlan::Of(std::move(plan));
+}
+
+bool DuckDBSource::SourceHasFunction(const string &function_name) {
+	{
+		lock_guard<mutex> guard(functions_lock);
+		auto it = functions_known.find(function_name);
+		if (it != functions_known.end()) {
+			return it->second;
+		}
+	}
+	auto planning_conn = PlanningConnection();
+	auto &context = *planning_conn->context;
+	EntryLookupInfo lookup(CatalogType::SCALAR_FUNCTION_ENTRY, function_name);
+	EntryLookupInfo aggregate_lookup(CatalogType::AGGREGATE_FUNCTION_ENTRY, function_name);
+	bool known =
+	    Catalog::GetEntry(context, INVALID_CATALOG, DEFAULT_SCHEMA, lookup, OnEntryNotFound::RETURN_NULL) ||
+	    Catalog::GetEntry(context, INVALID_CATALOG, DEFAULT_SCHEMA, aggregate_lookup, OnEntryNotFound::RETURN_NULL);
+	lock_guard<mutex> guard(functions_lock);
+	functions_known[function_name] = known;
+	return known;
 }
 
 CrossingVerdict DuckDBSource::AcceptsCall(const Expression &expr) {
-	auto planning_conn = PlanningConnection();
-	auto &source_conn = *planning_conn;
 	string function_name;
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_FUNCTION:
@@ -987,15 +994,7 @@ CrossingVerdict DuckDBSource::AcceptsCall(const Expression &expr) {
 	default:
 		return CrossingVerdict::Yes();
 	}
-	EntryLookupInfo lookup(CatalogType::SCALAR_FUNCTION_ENTRY, function_name);
-	auto entry =
-	    Catalog::GetEntry(*source_conn.context, INVALID_CATALOG, DEFAULT_SCHEMA, lookup, OnEntryNotFound::RETURN_NULL);
-	if (entry) {
-		return CrossingVerdict::Yes();
-	}
-	EntryLookupInfo aggregate_lookup(CatalogType::AGGREGATE_FUNCTION_ENTRY, function_name);
-	if (Catalog::GetEntry(*source_conn.context, INVALID_CATALOG, DEFAULT_SCHEMA, aggregate_lookup,
-	                      OnEntryNotFound::RETURN_NULL)) {
+	if (SourceHasFunction(function_name)) {
 		return CrossingVerdict::Yes();
 	}
 	return CrossingVerdict::No("the source has no function " + function_name);
@@ -1005,35 +1004,37 @@ CrossingVerdict DuckDBSource::AcceptsType(const LogicalType &type) {
 	return CrossingVerdict::Yes();
 }
 
-idx_t DuckDBSource::Write(CrossingTransaction &transaction, const CrossingWriteQuery &query) {
-	auto write_conn = static_cast<DuckDBTransaction &>(transaction).Shared();
-	auto &source_conn = *write_conn;
-	auto plan = query.Plan().Copy(*source_conn.context);
-	plan->ResolveOperatorTypes();
+CrossingWriter DuckDBSession::Write(ClientContext &, const CrossingQuery &query) {
+	return [this, &query](ClientContext &, const CrossingWaker &) {
+		auto write_conn = Shared();
+		auto &source_conn = *write_conn;
+		auto plan = query.plan.Copy(*source_conn.context);
+		plan->ResolveOperatorTypes();
 
-	auto &attached = Catalog::GetCatalog(*source_conn.context, source_catalog).GetAttached();
-	MetaTransaction::Get(*source_conn.context).ModifyDatabase(attached, DatabaseModificationType::UPDATE_DATA);
+		auto &attached = Catalog::GetCatalog(*source_conn.context, source_catalog).GetAttached();
+		MetaTransaction::Get(*source_conn.context).ModifyDatabase(attached, DatabaseModificationType::UPDATE_DATA);
 
-	auto statement = make_uniq<LogicalPlanStatement>(std::move(plan));
-	auto pending = source_conn.context->PendingQuery(std::move(statement), QueryParameters(false));
-	if (pending->HasError()) {
-		pending->GetErrorObject().Throw("virtual_catalog_bridge: write on source failed: ");
-	}
-	auto result = pending->Execute();
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("virtual_catalog_bridge: write on source failed: ");
-	}
-	auto count_chunk = result->Fetch();
-	if (count_chunk && count_chunk->size() > 0) {
-		return NumericCast<idx_t>(count_chunk->GetValue(0, 0).GetValue<int64_t>());
-	}
-	return 0;
+		auto statement = make_uniq<LogicalPlanStatement>(std::move(plan));
+		auto pending = source_conn.context->PendingQuery(std::move(statement), QueryParameters(false));
+		if (pending->HasError()) {
+			pending->GetErrorObject().Throw("virtual_catalog_bridge: write on source failed: ");
+		}
+		auto result = pending->Execute();
+		if (result->HasError()) {
+			result->GetErrorObject().Throw("virtual_catalog_bridge: write on source failed: ");
+		}
+		auto count_chunk = result->Fetch();
+		if (count_chunk && count_chunk->size() > 0) {
+			return CrossingWriteResult::Done(NumericCast<idx_t>(count_chunk->GetValue(0, 0).GetValue<int64_t>()));
+		}
+		return CrossingWriteResult::Done(0);
+	};
 }
 
 namespace {
 
-unique_ptr<QueryResult> RunRead(Connection &source_conn, const CrossingReadQuery &query, bool stream) {
-	auto plan = query.Plan().Copy(*source_conn.context);
+unique_ptr<QueryResult> RunRead(Connection &source_conn, const CrossingQuery &query, bool stream) {
+	auto plan = query.plan.Copy(*source_conn.context);
 	plan->ResolveOperatorTypes();
 
 	auto statement = make_uniq<LogicalPlanStatement>(std::move(plan));
@@ -1048,38 +1049,33 @@ unique_ptr<QueryResult> RunRead(Connection &source_conn, const CrossingReadQuery
 	return result;
 }
 
-class DuckDBReader : public CrossingReader {
-public:
-	DuckDBReader(shared_ptr<Connection> conn_p, unique_ptr<QueryResult> result_p)
-	    : conn(std::move(conn_p)), result(std::move(result_p)) {
-	}
-
-	bool Next(DataChunk &chunk) override {
-		auto raw = result->FetchRaw();
-		if (!raw || raw->size() == 0) {
-			return false;
-		}
-		chunk.Reference(*raw);
-		return true;
-	}
-
-private:
-	shared_ptr<Connection> conn;
-	unique_ptr<QueryResult> result;
-};
+CrossingScan ScanOf(const shared_ptr<Connection> &conn, unique_ptr<QueryResult> owned) {
+	shared_ptr<QueryResult> result(std::move(owned));
+	CrossingScan scan;
+	scan.open = [conn, result](ClientContext &, idx_t) -> CrossingReader {
+		return [conn, result](ClientContext &, DataChunk &chunk, const CrossingWaker &) {
+			auto raw = result->FetchRaw();
+			if (!raw || raw->size() == 0) {
+				return CrossingPull::Done();
+			}
+			chunk.Reference(*raw);
+			return CrossingPull::Rows();
+		};
+	};
+	return scan;
+}
 
 } // namespace
 
-unique_ptr<CrossingReader> DuckDBSource::Read(CrossingTransaction &transaction, const CrossingReadQuery &query) {
-	auto &txn = static_cast<DuckDBTransaction &>(transaction);
-	if (txn.autocommit) {
-		auto read_conn = PlanningConnection();
-		auto result = RunRead(*read_conn, query, true);
-		return make_uniq<DuckDBReader>(std::move(read_conn), std::move(result));
+CrossingScan DuckDBSession::Read(ClientContext &, const CrossingQuery &query) {
+	if (autocommit) {
+		auto read_conn = make_shared_ptr<Connection>(*source_db);
+		read_conn->BeginTransaction();
+		return ScanOf(read_conn, RunRead(*read_conn, query, true));
 	}
-	auto shared = txn.Shared();
-	lock_guard<mutex> guard(txn.lock);
-	return make_uniq<DuckDBReader>(shared, RunRead(*shared, query, false));
+	auto shared = Shared();
+	lock_guard<mutex> guard(lock);
+	return ScanOf(shared, RunRead(*shared, query, false));
 }
 
 void RegisterBridgeFunctions(ExtensionLoader &loader) {

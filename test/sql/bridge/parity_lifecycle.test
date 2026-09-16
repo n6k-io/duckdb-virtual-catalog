@@ -80,7 +80,7 @@ new
 statement error
 DROP SCHEMA ws.main CASCADE;
 ----
-is serving a bridge
+is served by a source
 
 # ---------------------------------------------------------------------------
 # DETACH releases the source, and a fresh one can take the catalog name.

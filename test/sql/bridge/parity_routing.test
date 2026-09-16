@@ -91,7 +91,7 @@ DROP TABLE ws.main.local2;
 statement error
 DROP TABLE ws.main.users;
 ----
-is bridge-managed; DROP is not supported
+is served by a source; DROP is not supported
 
 statement ok
 DETACH ws;

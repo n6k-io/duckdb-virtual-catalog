@@ -127,12 +127,12 @@ SELECT * FROM ws.main.local ORDER BY x;
 statement error
 ALTER TABLE ws.main.users ADD COLUMN q INTEGER;
 ----
-bridge-managed; ALTER TABLE is not supported
+is served by a source; ALTER TABLE is not supported
 
 statement error
 DROP TABLE ws.main.users;
 ----
-bridge-managed; DROP is not supported
+is served by a source; DROP is not supported
 
 statement ok
 ALTER TABLE ws.main.local ADD COLUMN extra INTEGER;

@@ -16,11 +16,12 @@ check-no-sql:
 # does not need a prior `make release`.
 CPP_TEST_BUILD_DIR=${PROJ_DIR}build/release
 CPP_TEST_LOG=$(CPP_TEST_BUILD_DIR)/vcat_unittest_build.log
+JOBS ?= $(shell sysctl -n hw.ncpu)
 test-cpp:
 	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
 	@cmake "$(CPP_TEST_BUILD_DIR)" > "$(CPP_TEST_LOG)" 2>&1 || { cat "$(CPP_TEST_LOG)"; exit 1; }
 	@echo "building vcat_provider_unittest..."
-	@cmake --build "$(CPP_TEST_BUILD_DIR)" --target vcat_provider_unittest -j \
+	@cmake --build "$(CPP_TEST_BUILD_DIR)" --target vcat_provider_unittest -j$(JOBS) \
 		>> "$(CPP_TEST_LOG)" 2>&1 || { cat "$(CPP_TEST_LOG)"; exit 1; }
 	@"$(CPP_TEST_BUILD_DIR)/vcat_provider_unittest" $(CPP_TEST_ARGS)
 
@@ -31,7 +32,7 @@ BRIDGE_TEST_ARGS?=test/sql/bridge/*
 bridge:
 	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
 	@echo "building virtual_catalog_bridge..."
-	@cmake --build "$(CPP_TEST_BUILD_DIR)" -j --target \
+	@cmake --build "$(CPP_TEST_BUILD_DIR)" -j$(JOBS) --target \
 		virtual_catalog_bridge_loadable_extension unittest \
 		> "$(BRIDGE_LOG)" 2>&1 || { cat "$(BRIDGE_LOG)"; exit 1; }
 
@@ -46,7 +47,7 @@ PROVIDER_TEST_ARGS?=test/sql/provider/*
 provider:
 	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
 	@echo "building virtual_catalog_provider..."
-	@cmake --build "$(CPP_TEST_BUILD_DIR)" -j --target \
+	@cmake --build "$(CPP_TEST_BUILD_DIR)" -j$(JOBS) --target \
 		virtual_catalog_provider_loadable_extension vcat_provider_unittest unittest \
 		> "$(PROVIDER_LOG)" 2>&1 || { cat "$(PROVIDER_LOG)"; exit 1; }
 
@@ -58,18 +59,4 @@ test-provider: provider
 test-parity:
 	@$(PYTEST) -m parity
 
-CROSSING_SRC_DIR=${PROJ_DIR}src/crossing
-CROSSING_BUILD_DIR=${PROJ_DIR}build/crossing
-CROSSING_TEST_LOG=$(CROSSING_BUILD_DIR)/build.log
-test-crossing:
-	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/src/libduckdb_static.a" ]; then $(MAKE) release; fi
-	@mkdir -p "$(CROSSING_BUILD_DIR)"
-	@cmake -S "$(CROSSING_SRC_DIR)" -B "$(CROSSING_BUILD_DIR)" \
-		-DDUCKDB_BUILD_DIR="$(CPP_TEST_BUILD_DIR)" > "$(CROSSING_TEST_LOG)" 2>&1 \
-		|| { cat "$(CROSSING_TEST_LOG)"; exit 1; }
-	@echo "building crossing_unittest..."
-	@cmake --build "$(CROSSING_BUILD_DIR)" -j >> "$(CROSSING_TEST_LOG)" 2>&1 \
-		|| { cat "$(CROSSING_TEST_LOG)"; exit 1; }
-	@"$(CROSSING_BUILD_DIR)/crossing_unittest" $(CROSSING_TEST_ARGS)
-
-.PHONY: test-cpp test-crossing bridge test-bridge provider test-provider test-parity
+.PHONY: test-cpp bridge test-bridge provider test-provider test-parity

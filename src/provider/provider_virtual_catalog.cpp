@@ -18,6 +18,8 @@
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
+#include "duckdb/storage/storage_extension.hpp"
+#include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "yyjson.hpp"
