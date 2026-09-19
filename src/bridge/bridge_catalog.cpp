@@ -65,17 +65,21 @@ BridgeSchemaEntry::BridgeSchemaEntry(BridgeCatalog &catalog, SchemaCatalogEntry 
     : VirtualCatalogSchemaEntryBase(catalog, target_schema), attach(catalog.Attach()) {
 }
 
-CatalogEntry *BridgeSchemaEntry::LookupExtensionEntry(CatalogTransaction, const string &entry_name) {
-	return attach.LookupTable(name, *this, entry_name).get();
+optional_ptr<Transaction> BridgeSchemaEntry::TransactionOf(optional_ptr<ClientContext> context) {
+	return context ? Transaction::TryGet(*context, catalog.GetAttached()) : nullptr;
 }
 
-void BridgeSchemaEntry::ScanExtensionEntries(optional_ptr<ClientContext>, CatalogType type,
+CatalogEntry *BridgeSchemaEntry::LookupExtensionEntry(CatalogTransaction transaction, const string &entry_name) {
+	return attach.LookupTable(name, *this, entry_name, transaction.transaction).get();
+}
+
+void BridgeSchemaEntry::ScanExtensionEntries(optional_ptr<ClientContext> context, CatalogType type,
                                              case_insensitive_set_t &seen,
                                              const std::function<void(CatalogEntry &)> &callback) {
 	if (type != CatalogType::TABLE_ENTRY) {
 		return;
 	}
-	attach.ScanTables(name, *this, seen, callback);
+	attach.ScanTables(name, *this, seen, callback, TransactionOf(context));
 }
 
 optional_ptr<CatalogEntry> BridgeSchemaEntry::TryCreateExtensionTable(CatalogTransaction transaction,
@@ -90,11 +94,12 @@ optional_ptr<CatalogEntry> BridgeSchemaEntry::TryCreateExtensionTable(CatalogTra
 	ddl.table = info.Base().table;
 	ddl.create = info.base.get();
 	attach.Ddl(transaction.GetContext(), *transaction.transaction, *this, ddl);
-	return attach.LookupTable(name, *this, ddl.table);
+	return attach.LookupTable(name, *this, ddl.table, transaction.transaction);
 }
 
 bool BridgeSchemaEntry::TryDropExtensionEntry(ClientContext &context, DropInfo &info) {
-	if (info.type != CatalogType::TABLE_ENTRY || !attach.ServesTable(name, info.name)) {
+	auto &transaction = Transaction::Get(context, catalog);
+	if (info.type != CatalogType::TABLE_ENTRY || !attach.ServesTable(name, info.name, &transaction)) {
 		return false;
 	}
 	CrossingDdl ddl;
@@ -102,7 +107,7 @@ bool BridgeSchemaEntry::TryDropExtensionEntry(ClientContext &context, DropInfo &
 	ddl.schema = name;
 	ddl.table = info.name;
 	ddl.drop = &info;
-	attach.Ddl(context, Transaction::Get(context, catalog), *this, ddl);
+	attach.Ddl(context, transaction, *this, ddl);
 	return true;
 }
 
@@ -111,7 +116,7 @@ void BridgeSchemaEntry::ThrowIfExtensionOwnedOnDrop(const string &entry_name) {
 }
 
 bool BridgeSchemaEntry::TryAlterExtensionEntry(CatalogTransaction transaction, AlterTableInfo &alter) {
-	if (!attach.ServesTable(name, alter.name)) {
+	if (!attach.ServesTable(name, alter.name, transaction.transaction)) {
 		return false;
 	}
 	CrossingDdl ddl;
@@ -123,16 +128,17 @@ bool BridgeSchemaEntry::TryAlterExtensionEntry(CatalogTransaction transaction, A
 	return true;
 }
 
-void BridgeSchemaEntry::CollectExtensionPermissions(ClientContext &, optional_ptr<const string> table_filter,
+void BridgeSchemaEntry::CollectExtensionPermissions(ClientContext &context, optional_ptr<const string> table_filter,
                                                     case_insensitive_set_t &seen, vector<TablePermissionRow> &out) {
-	for (auto &n : attach.Tables(name)) {
+	auto transaction = TransactionOf(&context);
+	for (auto &n : attach.Tables(name, transaction)) {
 		if (seen.count(n)) {
 			continue;
 		}
 		if (table_filter && !StringUtil::CIEquals(*table_filter, n)) {
 			continue;
 		}
-		auto described = attach.Described(name, *this, n);
+		auto described = attach.Described(name, *this, n, transaction);
 		if (!described) {
 			continue;
 		}

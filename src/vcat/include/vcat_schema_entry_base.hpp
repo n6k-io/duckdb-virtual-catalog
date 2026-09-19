@@ -65,6 +65,7 @@ public:
 protected:
 	// Rebind the transaction to the target (wrapped) catalog for DuckSchemaEntry operations.
 	CatalogTransaction TargetTransaction(CatalogTransaction alias_txn);
+	bool HasNativeEntry(CatalogTransaction transaction, CatalogType type, const string &entry_name);
 
 	//! The extension's entry for `name` in this schema, or null when it serves no such name. Called
 	//! only after the native lookup missed.

@@ -56,6 +56,8 @@ protected:
 	                                 case_insensitive_set_t &seen, vector<TablePermissionRow> &out) override;
 
 private:
+	optional_ptr<Transaction> TransactionOf(optional_ptr<ClientContext> context);
+
 	CrossingAttach &attach;
 };
 

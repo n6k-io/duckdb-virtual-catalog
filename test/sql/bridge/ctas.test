@@ -43,7 +43,7 @@ SELECT id, name FROM b.main.big ORDER BY id;
 query I
 SELECT verbs FROM bridge_table_permissions('b') WHERE name = 'big';
 ----
-[select, insert, update, delete, create, alter, drop]
+[select, insert, create, alter, drop]
 
 # From the target's own rows.
 statement ok

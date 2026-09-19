@@ -830,21 +830,30 @@ void DuckDBSession::ForgetShaping() {
 	}
 }
 
+void DuckDBSession::UndoGrants() {
+	for (auto it = grant_undo.rbegin(); it != grant_undo.rend(); ++it) {
+		(*it)();
+	}
+	grant_undo.clear();
+}
+
 void DuckDBSession::Commit() {
 	lock_guard<mutex> guard(lock);
-	grant_undo.clear();
 	if (!conn) {
+		grant_undo.clear();
 		return;
 	}
 	try {
 		conn->Commit();
 	} catch (...) {
 		lock_guard<mutex> grants_guard(grants->lock);
+		UndoGrants();
 		ForgetShaping();
 		conn.reset();
 		throw;
 	}
 	lock_guard<mutex> grants_guard(grants->lock);
+	grant_undo.clear();
 	ForgetShaping();
 	conn.reset();
 }
@@ -853,10 +862,7 @@ void DuckDBSession::Rollback() {
 	lock_guard<mutex> guard(lock);
 	{
 		lock_guard<mutex> grants_guard(grants->lock);
-		for (auto it = grant_undo.rbegin(); it != grant_undo.rend(); ++it) {
-			(*it)();
-		}
-		grant_undo.clear();
+		UndoGrants();
 		ForgetShaping();
 	}
 	if (!conn) {
@@ -1188,6 +1194,10 @@ void DuckDBSession::Ddl(ClientContext &, const CrossingDdl &ddl) {
 
 	auto ddl_conn = Shared();
 	auto &source_conn = *ddl_conn;
+	auto creates = ddl.verb != CrossingVerb::CREATE || CreateWouldCreate(source_conn, ddl);
+	if (ddl.verb == CrossingVerb::ALTER) {
+		ThrowIfAlterOrphansPolicy(ddl);
+	}
 	auto &attached = Catalog::GetCatalog(*source_conn.context, source_catalog).GetAttached();
 	MetaTransaction::Get(*source_conn.context).ModifyDatabase(attached, modification);
 
@@ -1199,7 +1209,89 @@ void DuckDBSession::Ddl(ClientContext &, const CrossingDdl &ddl) {
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("virtual_catalog_bridge: ddl on source failed: ");
 	}
-	RecordDdl(ddl_conn, ddl);
+	if (creates) {
+		RecordDdl(ddl_conn, ddl);
+	}
+}
+
+bool DuckDBSession::CreateWouldCreate(Connection &source_conn, const CrossingDdl &ddl) {
+	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, ddl.table);
+	auto existing =
+	    Catalog::GetEntry(*source_conn.context, source_catalog, ddl.schema, lookup, OnEntryNotFound::RETURN_NULL);
+	if (!existing) {
+		return true;
+	}
+	switch (ddl.create->on_conflict) {
+	case OnCreateConflict::IGNORE_ON_CONFLICT:
+		return false;
+	case OnCreateConflict::REPLACE_ON_CONFLICT: {
+		lock_guard<mutex> guard(grants->lock);
+		auto schema_it = grants->tables.find(ddl.schema);
+		auto granted = schema_it != grants->tables.end() && schema_it->second.count(ddl.table);
+		if (!granted) {
+			throw PermissionException("virtual_catalog_bridge: '%s' does not have '%s' permission", ddl.table,
+			                          CrossingVerbName(CrossingVerb::DROP));
+		}
+		return true;
+	}
+	default:
+		return true;
+	}
+}
+
+void DuckDBSession::ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl) {
+	if (ddl.alter->type != AlterType::ALTER_TABLE) {
+		return;
+	}
+	auto &alter = ddl.alter->Cast<AlterTableInfo>();
+	string column;
+	switch (alter.alter_table_type) {
+	case AlterTableType::RENAME_COLUMN:
+		column = alter.Cast<RenameColumnInfo>().old_name;
+		break;
+	case AlterTableType::REMOVE_COLUMN:
+		column = alter.Cast<RemoveColumnInfo>().removed_column;
+		break;
+	case AlterTableType::ALTER_COLUMN_TYPE:
+		column = alter.Cast<ChangeColumnTypeInfo>().column_name;
+		break;
+	default:
+		return;
+	}
+	lock_guard<mutex> guard(grants->lock);
+	auto schema_it = grants->tables.find(ddl.schema);
+	if (schema_it == grants->tables.end()) {
+		return;
+	}
+	auto table_it = schema_it->second.find(ddl.table);
+	if (table_it == schema_it->second.end()) {
+		return;
+	}
+	auto &grant = table_it->second;
+	bool orphaned = false;
+	for (auto &key_column : grant.key) {
+		orphaned = orphaned || StringUtil::CIEquals(key_column, column);
+	}
+	const auto mentions = [&](const ParsedExpression &expr) {
+		bool found = false;
+		std::function<void(const ParsedExpression &)> visit = [&](const ParsedExpression &node) {
+			if (node.GetExpressionClass() == ExpressionClass::COLUMN_REF &&
+			    StringUtil::CIEquals(node.Cast<ColumnRefExpression>().GetColumnName(), column)) {
+				found = true;
+			}
+			ParsedExpressionIterator::EnumerateChildren(node, visit);
+		};
+		visit(expr);
+		return found;
+	};
+	for (idx_t v = 0; v < CrossingVerbs().size() && !orphaned; v++) {
+		orphaned = (grant.using_predicates[v] && mentions(*grant.using_predicates[v])) ||
+		           (grant.check_predicates[v] && mentions(*grant.check_predicates[v]));
+	}
+	if (orphaned) {
+		throw IOException("virtual_catalog_bridge: '%s' is the key or a policy column of '%s.%s'", column, ddl.schema,
+		                  ddl.table);
+	}
 }
 
 void DuckDBSession::RecordDdl(const shared_ptr<Connection> &source_conn, const CrossingDdl &ddl) {
@@ -1211,18 +1303,32 @@ void DuckDBSession::RecordDdl(const shared_ptr<Connection> &source_conn, const C
 	switch (ddl.verb) {
 	case CrossingVerb::CREATE: {
 		SourceGrant grant;
-		for (auto verb : CrossingVerbs()) {
-			grant.Allow(verb);
-		}
 		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table_name);
 		auto entry =
 		    Catalog::GetEntry(*source_conn->context, source_catalog, schema_name, lookup, OnEntryNotFound::RETURN_NULL);
 		if (entry && entry->type == CatalogType::TABLE_ENTRY) {
 			grant.key = DiscoverKeyColumns(entry->Cast<TableCatalogEntry>());
 		}
+		for (auto verb : CrossingVerbs()) {
+			if ((verb == CrossingVerb::UPDATE || verb == CrossingVerb::DELETE_) && grant.key.empty()) {
+				continue;
+			}
+			grant.Allow(verb);
+		}
+		shared_ptr<SourceGrant> replaced;
+		auto it = schema.find(table_name);
+		if (it != schema.end()) {
+			replaced = make_shared_ptr<SourceGrant>(std::move(it->second));
+		}
 		schema[table_name] = std::move(grant);
 		book->shaping[schema_name + "." + table_name] = source_conn;
-		grant_undo.emplace_back([book, schema_name, table_name]() { book->tables[schema_name].erase(table_name); });
+		grant_undo.emplace_back([book, schema_name, table_name, replaced]() {
+			if (replaced) {
+				book->tables[schema_name][table_name] = std::move(*replaced);
+			} else {
+				book->tables[schema_name].erase(table_name);
+			}
+		});
 		return;
 	}
 	case CrossingVerb::DROP: {

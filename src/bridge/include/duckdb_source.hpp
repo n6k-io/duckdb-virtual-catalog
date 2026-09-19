@@ -63,7 +63,10 @@ public:
 
 private:
 	shared_ptr<Connection> Shared();
+	bool CreateWouldCreate(Connection &source_conn, const CrossingDdl &ddl);
+	void ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl);
 	void RecordDdl(const shared_ptr<Connection> &source_conn, const CrossingDdl &ddl);
+	void UndoGrants();
 	void ForgetShaping();
 
 	shared_ptr<DatabaseInstance> source_db;
