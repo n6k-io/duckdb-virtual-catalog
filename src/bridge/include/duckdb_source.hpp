@@ -43,36 +43,49 @@ struct SourceGrant {
 	}
 };
 
+struct GrantBook {
+	mutex lock;
+	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> tables;
+	case_insensitive_set_t create_schemas;
+	case_insensitive_map_t<shared_ptr<Connection>> shaping;
+};
+
 class DuckDBSession {
 public:
-	DuckDBSession(shared_ptr<DatabaseInstance> source_db, string source_catalog, bool autocommit);
+	DuckDBSession(shared_ptr<DatabaseInstance> source_db, string source_catalog, shared_ptr<GrantBook> grants,
+	              bool autocommit);
 
 	CrossingScan Read(ClientContext &context, const CrossingQuery &query);
 	CrossingWriter Write(ClientContext &context, const CrossingQuery &query);
+	void Ddl(ClientContext &context, const CrossingDdl &ddl);
 	void Commit();
 	void Rollback();
 
 private:
 	shared_ptr<Connection> Shared();
+	void RecordDdl(const shared_ptr<Connection> &source_conn, const CrossingDdl &ddl);
+	void ForgetShaping();
 
 	shared_ptr<DatabaseInstance> source_db;
 	string source_catalog;
+	shared_ptr<GrantBook> grants;
 	bool autocommit;
 	mutex lock;
 	shared_ptr<Connection> conn;
+	vector<std::function<void()>> grant_undo;
 };
 
 class DuckDBSource {
 public:
 	using Session = DuckDBSession;
 
-	DuckDBSource(shared_ptr<DatabaseInstance> source_db, string source_catalog,
-	             case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> granted);
+	DuckDBSource(shared_ptr<DatabaseInstance> source_db, string source_catalog, shared_ptr<GrantBook> grants);
 	~DuckDBSource();
 
 	vector<string> Schemas();
 	vector<string> Tables(const string &schema);
 	CrossingTable Describe(const string &schema, const string &name);
+	CrossingSchema DescribeSchema(const string &schema);
 	CrossingPlan Plan(const CrossingPlanRequest &request);
 	CrossingVerdict AcceptsCall(const Expression &expr);
 	CrossingVerdict AcceptsType(const LogicalType &type);
@@ -80,7 +93,9 @@ public:
 
 private:
 	shared_ptr<Connection> PlanningConnection();
-	optional_ptr<const SourceGrant> GrantFor(const string &schema, const string &table) const;
+	shared_ptr<Connection> PlanningConnection(const string &schema, const string &table);
+	unique_ptr<ParsedExpression> UsingFor(const string &schema, const string &table, CrossingVerb verb);
+	unique_ptr<ParsedExpression> CheckFor(const string &schema, const string &table, CrossingVerb verb);
 	unique_ptr<LogicalOperator> ScanPlan(const CrossingPlanRequest &request);
 	unique_ptr<SQLStatement> InsertStatement(const CrossingPlanRequest &request, const vector<string> &row_aliases,
 	                                         unique_ptr<TableRef> rows_ref);
@@ -93,7 +108,7 @@ private:
 
 	shared_ptr<DatabaseInstance> source_db;
 	string source_catalog;
-	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> granted;
+	shared_ptr<GrantBook> grants;
 	mutex functions_lock;
 	case_insensitive_map_t<bool> functions_known;
 };

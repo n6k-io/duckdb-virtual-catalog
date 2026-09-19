@@ -116,9 +116,9 @@ SELECT bridge_policy('v1', 'main.users', 'insert', 'id > 0');
 must be literally 'true'
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'alter', 'true');
+SELECT bridge_policy('v1', 'main.users', 'grant', 'true');
 ----
-invalid verb 'alter'
+invalid verb 'grant'
 
 # --- the WITH CHECK half ----------------------------------------------------
 # An insert's USING predicate cannot restrict rows, so its WITH CHECK is the only limit on what it

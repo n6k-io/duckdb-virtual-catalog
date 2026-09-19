@@ -91,7 +91,7 @@ DROP TABLE ws.main.local2;
 statement error
 DROP TABLE ws.main.users;
 ----
-is served by a source; DROP is not supported
+'users' does not have 'drop' permission
 
 statement ok
 DETACH ws;

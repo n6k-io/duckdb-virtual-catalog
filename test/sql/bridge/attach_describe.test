@@ -108,7 +108,7 @@ does not exist
 statement error
 DROP TABLE b.main.orders;
 ----
-is served by a source; DROP is not supported
+'orders' does not have 'drop' permission
 
 query IIII
 SELECT * FROM b.main.orders ORDER BY id;

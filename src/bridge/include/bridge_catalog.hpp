@@ -24,6 +24,8 @@ public:
 	using DuckCatalog::Initialize;
 	void Initialize(optional_ptr<ClientContext> context, bool load_builtin) override;
 	void OnDetach(ClientContext &context) override;
+	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
+	                                    PhysicalOperator &plan) override;
 
 	CrossingAttach &Attach() override {
 		return attach;
@@ -45,6 +47,9 @@ protected:
 	CatalogEntry *LookupExtensionEntry(CatalogTransaction transaction, const string &name) override;
 	void ScanExtensionEntries(optional_ptr<ClientContext> context, CatalogType type, case_insensitive_set_t &seen,
 	                          const std::function<void(CatalogEntry &)> &callback) override;
+	optional_ptr<CatalogEntry> TryCreateExtensionTable(CatalogTransaction transaction, BoundCreateTableInfo &info,
+	                                                   bool &handled) override;
+	bool TryDropExtensionEntry(ClientContext &context, DropInfo &info) override;
 	void ThrowIfExtensionOwnedOnDrop(const string &name) override;
 	bool TryAlterExtensionEntry(CatalogTransaction transaction, AlterTableInfo &alter) override;
 	void CollectExtensionPermissions(ClientContext &context, optional_ptr<const string> table_filter,

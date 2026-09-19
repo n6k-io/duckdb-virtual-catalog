@@ -26,6 +26,11 @@ CatalogTransaction VirtualCatalogSchemaEntryBase::TargetTransaction(CatalogTrans
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateTable(CatalogTransaction transaction,
                                                                       BoundCreateTableInfo &info) {
+	bool handled;
+	auto created = TryCreateExtensionTable(transaction, info, handled);
+	if (handled) {
+		return created;
+	}
 	auto txn = TargetTransaction(transaction);
 	return target_schema.CreateTable(txn, info);
 }
@@ -117,6 +122,9 @@ static case_insensitive_set_t CollectNativeNames(SchemaCatalogEntry &target, opt
 
 void VirtualCatalogSchemaEntryBase::DropEntry(ClientContext &context, DropInfo &info) {
 	if (info.type == CatalogType::TABLE_ENTRY || info.type == CatalogType::VIEW_ENTRY) {
+		if (TryDropExtensionEntry(context, info)) {
+			return;
+		}
 		ThrowIfExtensionOwnedOnDrop(info.name);
 	}
 	target_schema.DropEntry(context, info);

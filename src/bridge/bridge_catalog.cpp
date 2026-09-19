@@ -8,7 +8,12 @@
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
+#include "duckdb/parser/parsed_data/create_table_info.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/planner/operator/logical_create_table.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
+#include "duckdb/transaction/transaction.hpp"
 
 namespace duckdb {
 
@@ -40,6 +45,14 @@ void BridgeCatalog::OnDetach(ClientContext &context) {
 	DuckCatalog::OnDetach(context);
 }
 
+PhysicalOperator &BridgeCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                   LogicalCreateTable &op, PhysicalOperator &plan) {
+	if (attach.DescribedSchema(op.schema.name).Allows(CrossingVerb::CREATE)) {
+		return attach.PlanCreateTableAs(context, planner, op, plan);
+	}
+	return DuckCatalog::PlanCreateTableAs(context, planner, op, plan);
+}
+
 unique_ptr<VirtualCatalogSchemaEntryBase> BridgeCatalog::CreateSchemaWrapper(SchemaCatalogEntry &target_schema) {
 	return make_uniq<BridgeSchemaEntry>(*this, target_schema);
 }
@@ -65,15 +78,48 @@ void BridgeSchemaEntry::ScanExtensionEntries(optional_ptr<ClientContext>, Catalo
 	attach.ScanTables(name, *this, seen, callback);
 }
 
+optional_ptr<CatalogEntry> BridgeSchemaEntry::TryCreateExtensionTable(CatalogTransaction transaction,
+                                                                      BoundCreateTableInfo &info, bool &handled) {
+	handled = attach.DescribedSchema(name).Allows(CrossingVerb::CREATE);
+	if (!handled) {
+		return nullptr;
+	}
+	CrossingDdl ddl;
+	ddl.verb = CrossingVerb::CREATE;
+	ddl.schema = name;
+	ddl.table = info.Base().table;
+	ddl.create = info.base.get();
+	attach.Ddl(transaction.GetContext(), *transaction.transaction, *this, ddl);
+	return attach.LookupTable(name, *this, ddl.table);
+}
+
+bool BridgeSchemaEntry::TryDropExtensionEntry(ClientContext &context, DropInfo &info) {
+	if (info.type != CatalogType::TABLE_ENTRY || !attach.ServesTable(name, info.name)) {
+		return false;
+	}
+	CrossingDdl ddl;
+	ddl.verb = CrossingVerb::DROP;
+	ddl.schema = name;
+	ddl.table = info.name;
+	ddl.drop = &info;
+	attach.Ddl(context, Transaction::Get(context, catalog), *this, ddl);
+	return true;
+}
+
 void BridgeSchemaEntry::ThrowIfExtensionOwnedOnDrop(const string &entry_name) {
 	attach.ThrowIfServed(name, entry_name, "DROP");
 }
 
-bool BridgeSchemaEntry::TryAlterExtensionEntry(CatalogTransaction, AlterTableInfo &alter) {
+bool BridgeSchemaEntry::TryAlterExtensionEntry(CatalogTransaction transaction, AlterTableInfo &alter) {
 	if (!attach.ServesTable(name, alter.name)) {
 		return false;
 	}
-	attach.ThrowIfServed(name, alter.name, "ALTER TABLE");
+	CrossingDdl ddl;
+	ddl.verb = CrossingVerb::ALTER;
+	ddl.schema = name;
+	ddl.table = alter.name;
+	ddl.alter = &alter;
+	attach.Ddl(transaction.GetContext(), *transaction.transaction, *this, ddl);
 	return true;
 }
 
@@ -113,14 +159,14 @@ ErrorData BridgeTransactionManager::CommitTransaction(ClientContext &context, Tr
 	auto released = attach.Release(transaction);
 	auto error = DuckTransactionManager::CommitTransaction(context, transaction);
 	if (error.HasError()) {
-		CrossingAttach::Rollback(std::move(released));
+		attach.Rollback(std::move(released));
 		return error;
 	}
-	return CrossingAttach::Commit(std::move(released));
+	return attach.Commit(std::move(released));
 }
 
 void BridgeTransactionManager::RollbackTransaction(Transaction &transaction) {
-	CrossingAttach::Rollback(attach.Release(transaction));
+	attach.Rollback(attach.Release(transaction));
 	DuckTransactionManager::RollbackTransaction(transaction);
 }
 

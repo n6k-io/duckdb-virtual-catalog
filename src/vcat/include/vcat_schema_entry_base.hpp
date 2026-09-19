@@ -16,6 +16,8 @@
 namespace duckdb {
 
 class AlterTableInfo;
+struct DropInfo;
+struct BoundCreateTableInfo;
 
 // Private base: holds `info` so it is constructed before the SchemaCatalogEntry(catalog, info) base.
 struct VirtualCatalogSchemaInfoHolder {
@@ -74,6 +76,16 @@ protected:
 	virtual void ScanExtensionEntries(optional_ptr<ClientContext> context, CatalogType type,
 	                                  case_insensitive_set_t &seen,
 	                                  const std::function<void(CatalogEntry &)> &callback) = 0;
+
+	virtual optional_ptr<CatalogEntry> TryCreateExtensionTable(CatalogTransaction transaction,
+	                                                           BoundCreateTableInfo &info, bool &handled) {
+		handled = false;
+		return nullptr;
+	}
+
+	virtual bool TryDropExtensionEntry(ClientContext &context, DropInfo &info) {
+		return false;
+	}
 
 	//! Throw when DROP TABLE/VIEW on `name` would hit an extension entry. Nothing here owns a native
 	//! entry, so returning normally forwards the drop to the wrapped schema.

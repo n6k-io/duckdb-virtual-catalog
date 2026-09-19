@@ -1,0 +1,116 @@
+# name: test/sql/bridge/ctas.test
+# description: CREATE TABLE AS in a schema with a create policy creates on the source and inserts the rows.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1, 'ada', 50), (2, 'grace', 150), (3, 'alan', 250);
+
+statement ok
+SELECT bridge_register_source('ctas', 'memory', 'tok_ctas');
+
+statement ok
+SELECT bridge_policy('ctas', 'main', 'create', 'true');
+
+statement ok
+SELECT bridge_policy('ctas', 'main.orders', 'select', 'amt > 100');
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ctas', TOKEN 'tok_ctas');
+
+# From a bridged table: the select policy applies to what is copied.
+query I
+CREATE TABLE b.main.big AS SELECT id, name FROM b.main.orders;
+----
+2
+
+query II
+SELECT id, name FROM memory.main.big ORDER BY id;
+----
+2	grace
+3	alan
+
+query II
+SELECT id, name FROM b.main.big ORDER BY id;
+----
+2	grace
+3	alan
+
+query I
+SELECT verbs FROM bridge_table_permissions('b') WHERE name = 'big';
+----
+[select, insert, update, delete, create, alter, drop]
+
+# From the target's own rows.
+statement ok
+CREATE TABLE local(x INTEGER);
+
+statement ok
+INSERT INTO local VALUES (7), (8);
+
+query I
+CREATE TABLE b.main.fromlocal AS SELECT x FROM local;
+----
+2
+
+query I
+SELECT sum(x) FROM memory.main.fromlocal;
+----
+15
+
+# Of nothing.
+query I
+CREATE TABLE b.main.empty AS SELECT id FROM b.main.orders WHERE false;
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_name = 'empty';
+----
+1
+
+# A schema without a create policy keeps CTAS local.
+statement ok
+CREATE SCHEMA b.aux;
+
+statement ok
+CREATE TABLE b.aux.local_copy AS SELECT x FROM local;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_name = 'local_copy';
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'b' AND table_name = 'local_copy';
+----
+1
+
+# Rolled back with the transaction.
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE b.main.gone AS SELECT x FROM local;
+
+query I
+SELECT count(*) FROM b.main.gone;
+----
+2
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_name = 'gone';
+----
+0
+
+query I
+SELECT count(*) FROM bridge_table_permissions('b') WHERE name = 'gone';
+----
+0
