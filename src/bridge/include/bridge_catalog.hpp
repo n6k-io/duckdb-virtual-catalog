@@ -8,14 +8,15 @@
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 
 #include "crossing_attach.hpp"
+#include "duckdb_source.hpp"
 #include "vcat_catalog_base.hpp"
 #include "vcat_schema_entry_base.hpp"
 
 namespace duckdb {
 
-class BridgeCatalog : public VirtualCatalogBase {
+class BridgeCatalog : public VirtualCatalogBase, public CrossingAttachOwner {
 public:
-	BridgeCatalog(AttachedDatabase &db, unique_ptr<CrossingSource> source);
+	BridgeCatalog(AttachedDatabase &db, unique_ptr<DuckDBSource> source);
 	~BridgeCatalog() override;
 
 	string GetCatalogType() override;
@@ -24,7 +25,7 @@ public:
 	void Initialize(optional_ptr<ClientContext> context, bool load_builtin) override;
 	void OnDetach(ClientContext &context) override;
 
-	CrossingAttach &Attach() {
+	CrossingAttach &Attach() override {
 		return attach;
 	}
 

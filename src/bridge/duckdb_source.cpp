@@ -581,7 +581,7 @@ void PrimaryKeyCheckFunc(DataChunk &args, ExpressionState &state, Vector &result
 
 } // namespace
 
-unique_ptr<CrossingSource> RedeemBridgeAttach(ClientContext &, AttachInfo &info) {
+unique_ptr<DuckDBSource> RedeemBridgeAttach(ClientContext &, AttachInfo &info) {
 	auto bridge_id = RequiredAttachOption(info, "id");
 	auto token = RequiredAttachOption(info, "token");
 
@@ -638,8 +638,7 @@ unique_ptr<CrossingSource> RedeemBridgeAttach(ClientContext &, AttachInfo &info)
 }
 
 bool TryParseCrossingVerb(const string &text, CrossingVerb &out) {
-	for (idx_t v = 0; v < CROSSING_VERB_COUNT; v++) {
-		auto verb = static_cast<CrossingVerb>(v);
+	for (auto verb : CrossingVerbs()) {
 		if (StringUtil::CIEquals(text, CrossingVerbName(verb))) {
 			out = verb;
 			return true;
@@ -713,8 +712,7 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 	}
 	conn.Rollback();
 
-	for (idx_t v = 0; v < CROSSING_VERB_COUNT; v++) {
-		auto verb = static_cast<CrossingVerb>(v);
+	for (auto verb : CrossingVerbs()) {
 		if (table_it->second.Has(verb)) {
 			table.verbs.push_back(verb);
 		}
@@ -758,7 +756,7 @@ void DuckDBSession::Rollback() {
 	conn.reset();
 }
 
-unique_ptr<CrossingSession> DuckDBSource::Begin(ClientContext &context) {
+unique_ptr<DuckDBSession> DuckDBSource::Begin(ClientContext &context) {
 	return make_uniq<DuckDBSession>(source_db, source_catalog, context.transaction.IsAutoCommit());
 }
 
@@ -1056,10 +1054,10 @@ CrossingScan ScanOf(const shared_ptr<Connection> &conn, unique_ptr<QueryResult> 
 		return [conn, result](ClientContext &, DataChunk &chunk, const CrossingWaker &) {
 			auto raw = result->FetchRaw();
 			if (!raw || raw->size() == 0) {
-				return CrossingPull::Done();
+				return CrossingReadResult::Done();
 			}
 			chunk.Reference(*raw);
-			return CrossingPull::Rows();
+			return CrossingReadResult::Rows();
 		};
 	};
 	return scan;

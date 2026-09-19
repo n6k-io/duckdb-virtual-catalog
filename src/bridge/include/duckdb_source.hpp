@@ -24,7 +24,7 @@ struct SourceGrant {
 	vector<string> key;
 	bool key_verified = true;
 
-	SourceGrant() : using_predicates(CROSSING_VERB_COUNT), check_predicates(CROSSING_VERB_COUNT) {
+	SourceGrant() : using_predicates(CrossingVerbs().size()), check_predicates(CrossingVerbs().size()) {
 	}
 
 	void Allow(CrossingVerb verb) {
@@ -43,14 +43,14 @@ struct SourceGrant {
 	}
 };
 
-class DuckDBSession : public CrossingSession {
+class DuckDBSession {
 public:
 	DuckDBSession(shared_ptr<DatabaseInstance> source_db, string source_catalog, bool autocommit);
 
-	CrossingScan Read(ClientContext &context, const CrossingQuery &query) override;
-	CrossingWriter Write(ClientContext &context, const CrossingQuery &query) override;
-	void Commit() override;
-	void Rollback() override;
+	CrossingScan Read(ClientContext &context, const CrossingQuery &query);
+	CrossingWriter Write(ClientContext &context, const CrossingQuery &query);
+	void Commit();
+	void Rollback();
 
 private:
 	shared_ptr<Connection> Shared();
@@ -62,19 +62,21 @@ private:
 	shared_ptr<Connection> conn;
 };
 
-class DuckDBSource : public CrossingSource {
+class DuckDBSource {
 public:
+	using Session = DuckDBSession;
+
 	DuckDBSource(shared_ptr<DatabaseInstance> source_db, string source_catalog,
 	             case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> granted);
-	~DuckDBSource() override;
+	~DuckDBSource();
 
-	vector<string> Schemas() override;
-	vector<string> Tables(const string &schema) override;
-	CrossingTable Describe(const string &schema, const string &name) override;
-	CrossingPlan Plan(const CrossingPlanRequest &request) override;
-	CrossingVerdict AcceptsCall(const Expression &expr) override;
-	CrossingVerdict AcceptsType(const LogicalType &type) override;
-	unique_ptr<CrossingSession> Begin(ClientContext &context) override;
+	vector<string> Schemas();
+	vector<string> Tables(const string &schema);
+	CrossingTable Describe(const string &schema, const string &name);
+	CrossingPlan Plan(const CrossingPlanRequest &request);
+	CrossingVerdict AcceptsCall(const Expression &expr);
+	CrossingVerdict AcceptsType(const LogicalType &type);
+	unique_ptr<DuckDBSession> Begin(ClientContext &context);
 
 private:
 	shared_ptr<Connection> PlanningConnection();
@@ -98,7 +100,7 @@ private:
 
 bool TryParseCrossingVerb(const string &text, CrossingVerb &out);
 
-unique_ptr<CrossingSource> RedeemBridgeAttach(ClientContext &context, AttachInfo &info);
+unique_ptr<DuckDBSource> RedeemBridgeAttach(ClientContext &context, AttachInfo &info);
 
 void RegisterBridgeFunctions(ExtensionLoader &loader);
 

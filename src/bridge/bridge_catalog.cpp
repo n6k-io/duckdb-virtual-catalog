@@ -12,8 +12,8 @@
 
 namespace duckdb {
 
-BridgeCatalog::BridgeCatalog(AttachedDatabase &db, unique_ptr<CrossingSource> source)
-    : VirtualCatalogBase(db), attach(db, std::move(source)) {
+BridgeCatalog::BridgeCatalog(AttachedDatabase &db, unique_ptr<DuckDBSource> source)
+    : VirtualCatalogBase(db), attach(db, Crossing<DuckDBSource>::Adapt(std::move(source))) {
 }
 
 BridgeCatalog::~BridgeCatalog() = default;
@@ -95,8 +95,7 @@ void BridgeSchemaEntry::CollectExtensionPermissions(ClientContext &, optional_pt
 		row.name = n;
 		row.kind = "crossing";
 		row.primary_key = described->key;
-		for (idx_t v = 0; v < CROSSING_VERB_COUNT; v++) {
-			auto verb = static_cast<CrossingVerb>(v);
+		for (auto verb : CrossingVerbs()) {
 			if (described->Allows(verb)) {
 				row.verbs.emplace_back(CrossingVerbName(verb));
 			}
@@ -136,7 +135,7 @@ unique_ptr<Catalog> AttachBridge(optional_ptr<StorageExtensionInfo>, ClientConte
 
 unique_ptr<TransactionManager> CreateBridgeTransactionManager(optional_ptr<StorageExtensionInfo>, AttachedDatabase &db,
                                                               Catalog &catalog) {
-	return make_uniq<BridgeTransactionManager>(db, catalog.Cast<BridgeCatalog>().Attach());
+	return make_uniq<BridgeTransactionManager>(db, CrossingAttach::Of(catalog));
 }
 
 } // namespace
@@ -147,7 +146,7 @@ void RegisterBridgeCatalog(ExtensionLoader &loader) {
 	ext->create_transaction_manager = CreateBridgeTransactionManager;
 	auto &db = loader.GetDatabaseInstance();
 	StorageExtension::Register(DBConfig::GetConfig(db), VIRTUAL_CATALOG_BRIDGE_TYPE, std::move(ext));
-	RegisterCrossingPass(db);
+	Crossing<DuckDBSource>::RegisterPass(db);
 }
 
 } // namespace duckdb
