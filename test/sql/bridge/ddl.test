@@ -1,0 +1,242 @@
+# name: test/sql/bridge/ddl.test
+# description: create/alter/drop policies send DDL to the source; a created table is granted every verb, undone on rollback.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1, 'ada', 50), (2, 'grace', 150);
+
+statement ok
+CREATE TABLE memory.main.locked(id INTEGER PRIMARY KEY);
+
+statement ok
+SELECT bridge_register_source('ddl', 'memory', 'tok_ddl');
+
+# A create policy names a schema, not a table.
+statement error
+SELECT bridge_policy('ddl', 'main.orders', 'create', 'true');
+----
+names a schema, not a table
+
+statement error
+SELECT bridge_policy('ddl', 'nope', 'create', 'true');
+----
+schema 'nope' not found
+
+# DDL verbs take no row predicate and no WITH CHECK.
+statement error
+SELECT bridge_policy('ddl', 'main', 'create', 'id > 1');
+----
+must be literally 'true'
+
+statement error
+SELECT bridge_policy('ddl', 'main.orders', 'drop', 'id > 1');
+----
+must be literally 'true'
+
+statement error
+SELECT bridge_policy('ddl', 'main.orders', 'alter', 'true', 'true');
+----
+WITH CHECK predicate is only supported
+
+statement ok
+SELECT bridge_policy('ddl', 'main', 'create', 'true');
+
+statement error
+SELECT bridge_policy('ddl', 'main', 'create', 'true');
+----
+already defined for schema 'main'
+
+statement ok
+SELECT bridge_policy('ddl', 'main.orders', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
+
+statement ok
+SELECT bridge_policy('ddl', 'main.locked', 'select', 'true');
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ddl', TOKEN 'tok_ddl');
+
+# ---------------------------------------------------------------------------
+# CREATE
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE b.main.t(id INTEGER PRIMARY KEY, v VARCHAR);
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_name = 't';
+----
+1
+
+query II
+SELECT kind, verbs FROM bridge_table_permissions('b') WHERE name = 't';
+----
+crossing	[select, insert, update, delete, create, alter, drop]
+
+statement ok
+INSERT INTO b.main.t VALUES (1, 'a'), (2, 'b');
+
+statement ok
+UPDATE b.main.t SET v = 'z' WHERE id = 2;
+
+statement ok
+DELETE FROM b.main.t WHERE id = 1;
+
+query II
+SELECT id, v FROM b.main.t;
+----
+2	z
+
+query II
+SELECT id, v FROM memory.main.t;
+----
+2	z
+
+# The created table takes ALTER and DROP too.
+statement ok
+ALTER TABLE b.main.t ADD COLUMN w INTEGER DEFAULT 7;
+
+query III
+SELECT id, v, w FROM b.main.t;
+----
+2	z	7
+
+statement ok
+DROP TABLE b.main.t;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_name = 't';
+----
+0
+
+# A schema without a create policy keeps creating local tables.
+statement ok
+CREATE SCHEMA b.aux;
+
+statement ok
+CREATE TABLE b.aux.local_only(x INTEGER);
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_name = 'local_only';
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'b' AND table_name = 'local_only';
+----
+1
+
+# ---------------------------------------------------------------------------
+# ALTER
+# ---------------------------------------------------------------------------
+
+statement ok
+ALTER TABLE b.main.orders ADD COLUMN extra INTEGER DEFAULT 1;
+
+query III
+SELECT id, name, extra FROM b.main.orders ORDER BY id;
+----
+1	ada	1
+2	grace	1
+
+query I
+SELECT extra FROM memory.main.orders WHERE id = 1;
+----
+1
+
+statement ok
+ALTER TABLE b.main.orders RENAME TO o;
+
+query I
+SELECT count(*) FROM b.main.o;
+----
+2
+
+statement error
+SELECT count(*) FROM b.main.orders;
+----
+does not exist
+
+query I
+SELECT count(*) FROM memory.main.o;
+----
+2
+
+statement error
+ALTER TABLE b.main.locked ADD COLUMN q INTEGER;
+----
+'locked' does not have 'alter' permission
+
+# ---------------------------------------------------------------------------
+# DROP
+# ---------------------------------------------------------------------------
+
+statement error
+DROP TABLE b.main.locked;
+----
+'locked' does not have 'drop' permission
+
+query I
+SELECT count(*) FROM memory.main.locked;
+----
+0
+
+statement ok
+DROP TABLE b.main.o;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_name = 'o';
+----
+0
+
+statement error
+SELECT count(*) FROM b.main.o;
+----
+does not exist
+
+statement ok
+DROP TABLE IF EXISTS b.main.o;
+
+# ---------------------------------------------------------------------------
+# Transactions
+# ---------------------------------------------------------------------------
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE b.main.gone(x INTEGER);
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_name = 'gone';
+----
+0
+
+query I
+SELECT count(*) FROM bridge_table_permissions('b') WHERE name = 'gone';
+----
+0
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE b.main.kept(x INTEGER);
+
+statement ok
+INSERT INTO b.main.kept VALUES (1);
+
+statement ok
+COMMIT;
+
+query I
+SELECT x FROM memory.main.kept;
+----
+1

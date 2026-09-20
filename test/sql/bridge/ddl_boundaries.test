@@ -1,0 +1,131 @@
+# name: test/sql/bridge/ddl_boundaries.test
+# description: DDL never reaches a source object the caller cannot see or was not granted.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.served(id INTEGER PRIMARY KEY, tenant INTEGER);
+
+statement ok
+INSERT INTO memory.main.served VALUES (1, 7);
+
+statement ok
+CREATE TABLE memory.main.ungranted(id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE SCHEMA memory.aux;
+
+statement ok
+CREATE TABLE memory.aux.shadowed(id INTEGER PRIMARY KEY);
+
+statement ok
+INSERT INTO memory.aux.shadowed VALUES (1);
+
+statement ok
+SELECT bridge_register_source('bnd', 'memory', 'tok_bnd');
+
+statement ok
+SELECT bridge_policy('bnd', 'main', 'create', 'true');
+
+statement ok
+SELECT bridge_policy('bnd', 'main.served', 'select', 'tenant = 7');
+
+statement ok
+SELECT bridge_policy('bnd', 'main.served', v, 'true') FROM (VALUES ('alter'), ('drop')) _(v);
+
+statement ok
+SELECT bridge_policy('bnd', 'aux.shadowed', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'bnd', TOKEN 'tok_bnd');
+
+# ---------------------------------------------------------------------------
+# A local table shadowing a served name is the one DDL touches.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE b.aux.shadowed(x INTEGER);
+
+statement ok
+ALTER TABLE b.aux.shadowed ADD COLUMN y INTEGER;
+
+statement ok
+DROP TABLE b.aux.shadowed;
+
+query I
+SELECT count(*) FROM memory.aux.shadowed;
+----
+1
+
+query I
+SELECT count(*) FROM b.aux.shadowed;
+----
+1
+
+# ---------------------------------------------------------------------------
+# A create that creates nothing grants nothing.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE IF NOT EXISTS b.main.ungranted(id INTEGER);
+
+query I
+SELECT count(*) FROM bridge_table_permissions('b') WHERE name = 'ungranted';
+----
+0
+
+statement ok
+CREATE TABLE IF NOT EXISTS b.main.served(id INTEGER);
+
+query I
+SELECT verbs FROM bridge_table_permissions('b') WHERE name = 'served';
+----
+[select, alter, drop]
+
+statement error
+CREATE OR REPLACE TABLE b.main.ungranted(id INTEGER);
+----
+does not have 'drop' permission
+
+query I
+SELECT count(*) FROM bridge_table_permissions('b') WHERE name = 'ungranted';
+----
+0
+
+# ---------------------------------------------------------------------------
+# A table without a key is not granted verbs that need one.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE b.main.keyless(x INTEGER);
+
+query I
+SELECT verbs FROM bridge_table_permissions('b') WHERE name = 'keyless';
+----
+[select, insert, create, alter, drop]
+
+# ---------------------------------------------------------------------------
+# An alter that would orphan the key or a policy column is refused; others pass.
+# ---------------------------------------------------------------------------
+
+statement error
+ALTER TABLE b.main.served RENAME COLUMN id TO ident;
+----
+'id' is the key or a policy column of 'main.served'
+
+statement error
+ALTER TABLE b.main.served DROP COLUMN tenant;
+----
+'tenant' is the key or a policy column of 'main.served'
+
+statement ok
+ALTER TABLE b.main.served ADD COLUMN note VARCHAR;
+
+statement ok
+ALTER TABLE b.main.served RENAME COLUMN note TO memo;
+
+query II
+SELECT id, memo FROM b.main.served;
+----
+1	NULL

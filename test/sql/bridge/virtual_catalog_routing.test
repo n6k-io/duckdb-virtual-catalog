@@ -121,18 +121,18 @@ SELECT * FROM ws.main.local ORDER BY x;
 2	second
 
 # ---------------------------------------------------------------------------
-# DDL: rejected on bridge entries, native on native ones.
+# DDL: refused on bridge entries without the verb, native on native ones.
 # ---------------------------------------------------------------------------
 
 statement error
 ALTER TABLE ws.main.users ADD COLUMN q INTEGER;
 ----
-is served by a source; ALTER TABLE is not supported
+'users' does not have 'alter' permission
 
 statement error
 DROP TABLE ws.main.users;
 ----
-is served by a source; DROP is not supported
+'users' does not have 'drop' permission
 
 statement ok
 ALTER TABLE ws.main.local ADD COLUMN extra INTEGER;

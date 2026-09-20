@@ -8,14 +8,15 @@
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 
 #include "crossing_attach.hpp"
+#include "duckdb_source.hpp"
 #include "vcat_catalog_base.hpp"
 #include "vcat_schema_entry_base.hpp"
 
 namespace duckdb {
 
-class BridgeCatalog : public VirtualCatalogBase {
+class BridgeCatalog : public VirtualCatalogBase, public CrossingAttachOwner {
 public:
-	BridgeCatalog(AttachedDatabase &db, unique_ptr<CrossingSource> source);
+	BridgeCatalog(AttachedDatabase &db, unique_ptr<DuckDBSource> source);
 	~BridgeCatalog() override;
 
 	string GetCatalogType() override;
@@ -23,8 +24,10 @@ public:
 	using DuckCatalog::Initialize;
 	void Initialize(optional_ptr<ClientContext> context, bool load_builtin) override;
 	void OnDetach(ClientContext &context) override;
+	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
+	                                    PhysicalOperator &plan) override;
 
-	CrossingAttach &Attach() {
+	CrossingAttach &Attach() override {
 		return attach;
 	}
 
@@ -44,12 +47,17 @@ protected:
 	CatalogEntry *LookupExtensionEntry(CatalogTransaction transaction, const string &name) override;
 	void ScanExtensionEntries(optional_ptr<ClientContext> context, CatalogType type, case_insensitive_set_t &seen,
 	                          const std::function<void(CatalogEntry &)> &callback) override;
+	optional_ptr<CatalogEntry> TryCreateExtensionTable(CatalogTransaction transaction, BoundCreateTableInfo &info,
+	                                                   bool &handled) override;
+	bool TryDropExtensionEntry(ClientContext &context, DropInfo &info) override;
 	void ThrowIfExtensionOwnedOnDrop(const string &name) override;
 	bool TryAlterExtensionEntry(CatalogTransaction transaction, AlterTableInfo &alter) override;
 	void CollectExtensionPermissions(ClientContext &context, optional_ptr<const string> table_filter,
 	                                 case_insensitive_set_t &seen, vector<TablePermissionRow> &out) override;
 
 private:
+	optional_ptr<Transaction> TransactionOf(optional_ptr<ClientContext> context);
+
 	CrossingAttach &attach;
 };
 

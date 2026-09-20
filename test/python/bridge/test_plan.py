@@ -48,7 +48,7 @@ def test_a_self_join_crosses_as_one_scan(bridged):
     plan = explain(target, "SELECT count(*) FROM app.main.wide a JOIN app.main.wide b USING (id)")
     flat = plan.replace(" ", "")
     assert len(re.findall(r"TableIndex:(\d+)", flat)) == 1
-    assert flat.count("CROSSING_TABLE_SCAN") == 1
+    assert flat.count("CROSSING_READ") == 1
     assert "COMPARISON_JOIN" in flat
     assert flat.count("memory.main.wide") == 2
 

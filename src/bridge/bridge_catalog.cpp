@@ -8,12 +8,17 @@
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
+#include "duckdb/parser/parsed_data/create_table_info.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/planner/operator/logical_create_table.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
+#include "duckdb/transaction/transaction.hpp"
 
 namespace duckdb {
 
-BridgeCatalog::BridgeCatalog(AttachedDatabase &db, unique_ptr<CrossingSource> source)
-    : VirtualCatalogBase(db), attach(db, std::move(source)) {
+BridgeCatalog::BridgeCatalog(AttachedDatabase &db, unique_ptr<DuckDBSource> source)
+    : VirtualCatalogBase(db), attach(db, Crossing<DuckDBSource>::Adapt(std::move(source))) {
 }
 
 BridgeCatalog::~BridgeCatalog() = default;
@@ -40,6 +45,14 @@ void BridgeCatalog::OnDetach(ClientContext &context) {
 	DuckCatalog::OnDetach(context);
 }
 
+PhysicalOperator &BridgeCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                   LogicalCreateTable &op, PhysicalOperator &plan) {
+	if (attach.DescribedSchema(op.schema.name).Allows(CrossingVerb::CREATE)) {
+		return attach.PlanCreateTableAs(context, planner, op, plan);
+	}
+	return DuckCatalog::PlanCreateTableAs(context, planner, op, plan);
+}
+
 unique_ptr<VirtualCatalogSchemaEntryBase> BridgeCatalog::CreateSchemaWrapper(SchemaCatalogEntry &target_schema) {
 	return make_uniq<BridgeSchemaEntry>(*this, target_schema);
 }
@@ -52,41 +65,80 @@ BridgeSchemaEntry::BridgeSchemaEntry(BridgeCatalog &catalog, SchemaCatalogEntry 
     : VirtualCatalogSchemaEntryBase(catalog, target_schema), attach(catalog.Attach()) {
 }
 
-CatalogEntry *BridgeSchemaEntry::LookupExtensionEntry(CatalogTransaction, const string &entry_name) {
-	return attach.LookupTable(name, *this, entry_name).get();
+optional_ptr<Transaction> BridgeSchemaEntry::TransactionOf(optional_ptr<ClientContext> context) {
+	return context ? Transaction::TryGet(*context, catalog.GetAttached()) : nullptr;
 }
 
-void BridgeSchemaEntry::ScanExtensionEntries(optional_ptr<ClientContext>, CatalogType type,
+CatalogEntry *BridgeSchemaEntry::LookupExtensionEntry(CatalogTransaction transaction, const string &entry_name) {
+	return attach.LookupTable(name, *this, entry_name, transaction.transaction).get();
+}
+
+void BridgeSchemaEntry::ScanExtensionEntries(optional_ptr<ClientContext> context, CatalogType type,
                                              case_insensitive_set_t &seen,
                                              const std::function<void(CatalogEntry &)> &callback) {
 	if (type != CatalogType::TABLE_ENTRY) {
 		return;
 	}
-	attach.ScanTables(name, *this, seen, callback);
+	attach.ScanTables(name, *this, seen, callback, TransactionOf(context));
+}
+
+optional_ptr<CatalogEntry> BridgeSchemaEntry::TryCreateExtensionTable(CatalogTransaction transaction,
+                                                                      BoundCreateTableInfo &info, bool &handled) {
+	handled = attach.DescribedSchema(name).Allows(CrossingVerb::CREATE);
+	if (!handled) {
+		return nullptr;
+	}
+	CrossingDdl ddl;
+	ddl.verb = CrossingVerb::CREATE;
+	ddl.schema = name;
+	ddl.table = info.Base().table;
+	ddl.create = info.base.get();
+	attach.Ddl(transaction.GetContext(), *transaction.transaction, *this, ddl);
+	return attach.LookupTable(name, *this, ddl.table, transaction.transaction);
+}
+
+bool BridgeSchemaEntry::TryDropExtensionEntry(ClientContext &context, DropInfo &info) {
+	auto &transaction = Transaction::Get(context, catalog);
+	if (info.type != CatalogType::TABLE_ENTRY || !attach.ServesTable(name, info.name, &transaction)) {
+		return false;
+	}
+	CrossingDdl ddl;
+	ddl.verb = CrossingVerb::DROP;
+	ddl.schema = name;
+	ddl.table = info.name;
+	ddl.drop = &info;
+	attach.Ddl(context, transaction, *this, ddl);
+	return true;
 }
 
 void BridgeSchemaEntry::ThrowIfExtensionOwnedOnDrop(const string &entry_name) {
 	attach.ThrowIfServed(name, entry_name, "DROP");
 }
 
-bool BridgeSchemaEntry::TryAlterExtensionEntry(CatalogTransaction, AlterTableInfo &alter) {
-	if (!attach.ServesTable(name, alter.name)) {
+bool BridgeSchemaEntry::TryAlterExtensionEntry(CatalogTransaction transaction, AlterTableInfo &alter) {
+	if (!attach.ServesTable(name, alter.name, transaction.transaction)) {
 		return false;
 	}
-	attach.ThrowIfServed(name, alter.name, "ALTER TABLE");
+	CrossingDdl ddl;
+	ddl.verb = CrossingVerb::ALTER;
+	ddl.schema = name;
+	ddl.table = alter.name;
+	ddl.alter = &alter;
+	attach.Ddl(transaction.GetContext(), *transaction.transaction, *this, ddl);
 	return true;
 }
 
-void BridgeSchemaEntry::CollectExtensionPermissions(ClientContext &, optional_ptr<const string> table_filter,
+void BridgeSchemaEntry::CollectExtensionPermissions(ClientContext &context, optional_ptr<const string> table_filter,
                                                     case_insensitive_set_t &seen, vector<TablePermissionRow> &out) {
-	for (auto &n : attach.Tables(name)) {
+	auto transaction = TransactionOf(&context);
+	for (auto &n : attach.Tables(name, transaction)) {
 		if (seen.count(n)) {
 			continue;
 		}
 		if (table_filter && !StringUtil::CIEquals(*table_filter, n)) {
 			continue;
 		}
-		auto described = attach.Described(name, *this, n);
+		auto described = attach.Described(name, *this, n, transaction);
 		if (!described) {
 			continue;
 		}
@@ -95,8 +147,7 @@ void BridgeSchemaEntry::CollectExtensionPermissions(ClientContext &, optional_pt
 		row.name = n;
 		row.kind = "crossing";
 		row.primary_key = described->key;
-		for (idx_t v = 0; v < CROSSING_VERB_COUNT; v++) {
-			auto verb = static_cast<CrossingVerb>(v);
+		for (auto verb : CrossingVerbs()) {
 			if (described->Allows(verb)) {
 				row.verbs.emplace_back(CrossingVerbName(verb));
 			}
@@ -114,14 +165,14 @@ ErrorData BridgeTransactionManager::CommitTransaction(ClientContext &context, Tr
 	auto released = attach.Release(transaction);
 	auto error = DuckTransactionManager::CommitTransaction(context, transaction);
 	if (error.HasError()) {
-		CrossingAttach::Rollback(std::move(released));
+		attach.Rollback(std::move(released));
 		return error;
 	}
-	return CrossingAttach::Commit(std::move(released));
+	return attach.Commit(std::move(released));
 }
 
 void BridgeTransactionManager::RollbackTransaction(Transaction &transaction) {
-	CrossingAttach::Rollback(attach.Release(transaction));
+	attach.Rollback(attach.Release(transaction));
 	DuckTransactionManager::RollbackTransaction(transaction);
 }
 
@@ -136,7 +187,7 @@ unique_ptr<Catalog> AttachBridge(optional_ptr<StorageExtensionInfo>, ClientConte
 
 unique_ptr<TransactionManager> CreateBridgeTransactionManager(optional_ptr<StorageExtensionInfo>, AttachedDatabase &db,
                                                               Catalog &catalog) {
-	return make_uniq<BridgeTransactionManager>(db, catalog.Cast<BridgeCatalog>().Attach());
+	return make_uniq<BridgeTransactionManager>(db, CrossingAttach::Of(catalog));
 }
 
 } // namespace
@@ -147,7 +198,7 @@ void RegisterBridgeCatalog(ExtensionLoader &loader) {
 	ext->create_transaction_manager = CreateBridgeTransactionManager;
 	auto &db = loader.GetDatabaseInstance();
 	StorageExtension::Register(DBConfig::GetConfig(db), VIRTUAL_CATALOG_BRIDGE_TYPE, std::move(ext));
-	RegisterCrossingPass(db);
+	Crossing<DuckDBSource>::RegisterPass(db);
 }
 
 } // namespace duckdb

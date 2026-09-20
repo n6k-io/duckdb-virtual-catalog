@@ -4,7 +4,9 @@
 #include "duckdb/catalog/catalog_transaction.hpp"
 #include "duckdb/catalog/entry_lookup_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 
 namespace duckdb {
 
@@ -24,8 +26,22 @@ CatalogTransaction VirtualCatalogSchemaEntryBase::TargetTransaction(CatalogTrans
 	return CatalogTransaction(target_catalog, alias_txn.GetContext());
 }
 
+bool VirtualCatalogSchemaEntryBase::HasNativeEntry(CatalogTransaction transaction, CatalogType type,
+                                                   const string &entry_name) {
+	auto txn = TargetTransaction(transaction);
+	EntryLookupInfo lookup(type, entry_name);
+	return target_schema.LookupEntry(txn, lookup) != nullptr;
+}
+
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateTable(CatalogTransaction transaction,
                                                                       BoundCreateTableInfo &info) {
+	if (!HasNativeEntry(transaction, CatalogType::TABLE_ENTRY, info.Base().table)) {
+		bool handled;
+		auto created = TryCreateExtensionTable(transaction, info, handled);
+		if (handled) {
+			return created;
+		}
+	}
 	auto txn = TargetTransaction(transaction);
 	return target_schema.CreateTable(txn, info);
 }
@@ -117,13 +133,19 @@ static case_insensitive_set_t CollectNativeNames(SchemaCatalogEntry &target, opt
 
 void VirtualCatalogSchemaEntryBase::DropEntry(ClientContext &context, DropInfo &info) {
 	if (info.type == CatalogType::TABLE_ENTRY || info.type == CatalogType::VIEW_ENTRY) {
-		ThrowIfExtensionOwnedOnDrop(info.name);
+		auto transaction = CatalogTransaction(catalog, context);
+		if (!HasNativeEntry(transaction, info.type, info.name)) {
+			if (TryDropExtensionEntry(context, info)) {
+				return;
+			}
+			ThrowIfExtensionOwnedOnDrop(info.name);
+		}
 	}
 	target_schema.DropEntry(context, info);
 }
 
 void VirtualCatalogSchemaEntryBase::Alter(CatalogTransaction transaction, AlterInfo &info) {
-	if (info.type == AlterType::ALTER_TABLE) {
+	if (info.type == AlterType::ALTER_TABLE && !HasNativeEntry(transaction, CatalogType::TABLE_ENTRY, info.name)) {
 		if (TryAlterExtensionEntry(transaction, info.Cast<AlterTableInfo>())) {
 			return;
 		}
