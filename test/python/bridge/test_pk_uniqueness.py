@@ -103,8 +103,8 @@ def test_an_asserted_but_unique_key_behaves_exactly_as_before(source, target):
     ]
 
 
-def test_a_nullable_key_column_still_silently_matches_nothing(source, target):
-    """Known gap: 0 affected rows passes the guard, so a NULL key is a no-op rather than an error."""
+def test_a_nullable_key_column_addresses_its_row(source, target):
+    """Keys match with IS NOT DISTINCT FROM, so a NULL key still reaches its row."""
     source.execute("CREATE TABLE n(k INTEGER, tenant INTEGER, v VARCHAR)")
     source.executemany("INSERT INTO n VALUES (?, ?, ?)", [(None, 1, "x"), (2, 1, "y")])
     bridge(
@@ -114,8 +114,8 @@ def test_a_nullable_key_column_still_silently_matches_nothing(source, target):
         pk_overrides={"n": ["k"]},
     )
 
-    assert target.execute("DELETE FROM app.main.n WHERE v = 'x'").fetchall() == [(0,)]
-    assert source.execute("SELECT count(*) FROM n").fetchone() == (2,)
+    assert target.execute("DELETE FROM app.main.n WHERE v = 'x'").fetchall() == [(1,)]
+    assert source.execute("SELECT * FROM n").fetchall() == [(2, 1, "y")]
 
 
 def test_primary_key_query_supplies_a_key_discovery_cannot_find(source, target):

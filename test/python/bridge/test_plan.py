@@ -50,15 +50,17 @@ def test_a_self_join_crosses_as_one_scan(bridged):
     assert len(re.findall(r"TableIndex:(\d+)", flat)) == 1
     assert flat.count("CROSSING_READ") == 1
     assert "COMPARISON_JOIN" in flat
-    assert flat.count("memory.main.wide") == 2
+    assert flat.count("CROSSING_FLOOR") == 2
 
 
 def test_scan_node_carries_the_source_plan(bridged):
-    """The node holds the plan the source will run, and EXPLAIN prints it without executing."""
+    """The node holds the plan the source will run, and EXPLAIN prints it without executing. The
+    plan names the table with a floor; the source binds the real scan when it runs."""
     _, target = bridged
     plan = explain(target, "SELECT sum(score) FROM app.main.wide")
     assert "Plan" in plan
-    assert "SEQ_SCAN" in plan
+    assert "CROSSING_FLOOR" in plan
+    assert "SEQ_SCAN" not in plan
 
 
 def test_select_star_matches_source(bridged):

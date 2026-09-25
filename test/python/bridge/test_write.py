@@ -161,3 +161,11 @@ def test_update_spanning_several_chunks_writes_every_row(source, target):
 
     assert target.execute("UPDATE app.main.big SET name = 'P'").fetchall() == [(6000,)]
     assert source.execute("SELECT count(*) FROM big WHERE name = 'P'").fetchone() == (6000,)
+
+
+def test_update_matches_a_null_key(source, target):
+    """A declared key may hold NULL; the row is still addressed, by IS NOT DISTINCT FROM."""
+    source.execute("CREATE TABLE nk(k INTEGER, v INTEGER); INSERT INTO nk VALUES (NULL, 1), (2, 1), (3, 9)")
+    bridge(source, target, {"nk": ["select", "update"]}, pk_overrides={"nk": "k"})
+    target.execute("UPDATE app.main.nk SET v = 5 WHERE v = 1")
+    assert source.execute("SELECT k, v FROM nk ORDER BY k NULLS FIRST").fetchall() == [(None, 5), (2, 5), (3, 9)]

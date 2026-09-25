@@ -19,13 +19,11 @@
 #include "duckdb/parser/expression/case_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/statement/delete_statement.hpp"
 #include "duckdb/parser/statement/insert_statement.hpp"
 #include "duckdb/parser/statement/update_statement.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
-#include "duckdb/parser/tableref/expressionlistref.hpp"
 #include "duckdb/parser/tableref/subqueryref.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
@@ -36,12 +34,9 @@
 #include "duckdb/parser/statement/alter_statement.hpp"
 #include "duckdb/parser/statement/create_statement.hpp"
 #include "duckdb/parser/statement/drop_statement.hpp"
-#include "duckdb/parser/statement/logical_plan_statement.hpp"
-#include "duckdb/parser/statement/relation_statement.hpp"
+#include "duckdb/parser/statement/select_statement.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/operator/logical_expression_get.hpp"
-#include "duckdb/planner/planner.hpp"
 #include "duckdb/common/enums/database_modification_type.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 
@@ -51,8 +46,6 @@
 namespace duckdb {
 
 namespace {
-
-constexpr const char *CROSSING_SEAM_ALIAS = "vcat_seam";
 
 struct PendingV2Source {
 	shared_ptr<DatabaseInstance> source_db;
@@ -269,7 +262,7 @@ vector<string> DiscoverKeyColumns(TableCatalogEntry &table) {
 }
 
 void PointCheckAtUpdatedRow(ParsedExpression &expr, const string &table, const vector<string> &set_columns,
-                            const vector<string> &row_aliases, idx_t key_count) {
+                            const CrossingWriteStatement &built, idx_t key_count) {
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](unique_ptr<ParsedExpression> &child) {
 		if (child->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 			auto &column_ref = child->Cast<ColumnRefExpression>();
@@ -277,7 +270,7 @@ void PointCheckAtUpdatedRow(ParsedExpression &expr, const string &table, const v
 				auto &name = column_ref.GetColumnName();
 				for (idx_t c = 0; c < set_columns.size(); c++) {
 					if (StringUtil::CIEquals(set_columns[c], name)) {
-						child = make_uniq<ColumnRefExpression>(row_aliases[key_count + c], CROSSING_SEAM_ALIAS);
+						child = make_uniq<ColumnRefExpression>(built.seam_columns[key_count + c], built.seam_alias);
 						return;
 					}
 				}
@@ -285,38 +278,8 @@ void PointCheckAtUpdatedRow(ParsedExpression &expr, const string &table, const v
 				return;
 			}
 		}
-		PointCheckAtUpdatedRow(*child, table, set_columns, row_aliases, key_count);
+		PointCheckAtUpdatedRow(*child, table, set_columns, built, key_count);
 	});
-}
-
-unique_ptr<TableRef> SeamShapedRows(const vector<string> &row_aliases, const vector<LogicalType> &types) {
-	vector<unique_ptr<ParsedExpression>> row_values;
-	for (auto &type : types) {
-		row_values.push_back(make_uniq<ConstantExpression>(Value(type)));
-	}
-	vector<vector<unique_ptr<ParsedExpression>>> values;
-	values.push_back(std::move(row_values));
-	auto rows_ref = make_uniq<ExpressionListRef>();
-	rows_ref->values = std::move(values);
-	rows_ref->alias = CROSSING_SEAM_ALIAS;
-	rows_ref->expected_names = row_aliases;
-	rows_ref->expected_types = types;
-	return std::move(rows_ref);
-}
-
-unique_ptr<LogicalOperator> *SlotOfExpressionGet(unique_ptr<LogicalOperator> &node) {
-	if (!node) {
-		return nullptr;
-	}
-	if (node->type == LogicalOperatorType::LOGICAL_EXPRESSION_GET) {
-		return &node;
-	}
-	for (auto &child : node->children) {
-		if (auto found = SlotOfExpressionGet(child)) {
-			return found;
-		}
-	}
-	return nullptr;
 }
 
 unique_ptr<ParsedExpression> GuardWithCheck(unique_ptr<ParsedExpression> check, unique_ptr<ParsedExpression> value) {
@@ -330,6 +293,99 @@ unique_ptr<ParsedExpression> GuardWithCheck(unique_ptr<ParsedExpression> check, 
 	guard->case_checks.push_back(std::move(branch));
 	guard->else_expr = make_uniq<FunctionExpression>("error", std::move(error_args));
 	return std::move(guard);
+}
+
+unique_ptr<ParsedExpression> UsingFor(GrantBook &grants, const string &schema, const string &table, CrossingVerb verb) {
+	lock_guard<mutex> guard(grants.lock);
+	auto schema_it = grants.tables.find(schema);
+	if (schema_it == grants.tables.end()) {
+		return nullptr;
+	}
+	auto table_it = schema_it->second.find(table);
+	return table_it == schema_it->second.end() ? nullptr : table_it->second.CopyUsing(verb);
+}
+
+unique_ptr<ParsedExpression> CheckFor(GrantBook &grants, const string &schema, const string &table, CrossingVerb verb) {
+	lock_guard<mutex> guard(grants.lock);
+	auto schema_it = grants.tables.find(schema);
+	if (schema_it == grants.tables.end()) {
+		return nullptr;
+	}
+	auto table_it = schema_it->second.find(table);
+	return table_it == schema_it->second.end() ? nullptr : table_it->second.CopyCheck(verb);
+}
+
+unique_ptr<ParsedExpression> And(unique_ptr<ParsedExpression> left, unique_ptr<ParsedExpression> right) {
+	if (!left) {
+		return right;
+	}
+	return make_uniq_base<ParsedExpression, ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(left),
+	                                                               std::move(right));
+}
+
+//! Stands the table behind its select policy: a floor with a policy binds to
+//! `SELECT <columns> FROM catalog.schema.table WHERE <using>`, one without binds to the table.
+CrossingFloorResolver PolicyResolver(const shared_ptr<GrantBook> &grants, const string &source_catalog) {
+	return [grants, source_catalog](const CrossingFloor &floor) -> unique_ptr<TableRef> {
+		auto using_predicate = UsingFor(*grants, floor.schema, floor.table, CrossingVerb::SELECT);
+		if (!using_predicate) {
+			return nullptr;
+		}
+		auto table_ref = make_uniq<BaseTableRef>();
+		table_ref->catalog_name = source_catalog;
+		table_ref->schema_name = floor.schema;
+		table_ref->table_name = floor.table;
+		auto node = make_uniq<SelectNode>();
+		for (auto &column : floor.column_names) {
+			node->select_list.push_back(make_uniq<ColumnRefExpression>(column, floor.table));
+		}
+		node->from_table = std::move(table_ref);
+		node->where_clause = std::move(using_predicate);
+		auto select = make_uniq<SelectStatement>();
+		select->node = std::move(node);
+		return make_uniq<SubqueryRef>(std::move(select), floor.table);
+	};
+}
+
+//! Grafts the write policies onto the statement crossing built: the using predicate narrows which
+//! rows an update or delete touches, the check guards the first written value with error() so a
+//! violating row fails the statement.
+CrossingWriteShaper PolicyShaper(const shared_ptr<GrantBook> &grants, const CrossingWriteTarget &target) {
+	return [grants, target](CrossingWriteStatement &built) {
+		auto using_predicate = UsingFor(*grants, target.schema, target.table, target.verb);
+		auto check = CheckFor(*grants, target.schema, target.table, target.verb);
+		switch (target.verb) {
+		case CrossingVerb::INSERT: {
+			if (!check) {
+				return;
+			}
+			auto &select = built.statement->Cast<InsertStatement>().select_statement->node->Cast<SelectNode>();
+			PointCheckAtUpdatedRow(*check, target.table, target.set_columns, built, 0);
+			select.select_list[0] = GuardWithCheck(std::move(check), std::move(select.select_list[0]));
+			return;
+		}
+		case CrossingVerb::UPDATE: {
+			auto &set_info = *built.statement->Cast<UpdateStatement>().set_info;
+			if (using_predicate) {
+				set_info.condition = And(std::move(set_info.condition), std::move(using_predicate));
+			}
+			if (check) {
+				PointCheckAtUpdatedRow(*check, target.table, target.set_columns, built, target.key_columns.size());
+				set_info.expressions[0] = GuardWithCheck(std::move(check), std::move(set_info.expressions[0]));
+			}
+			return;
+		}
+		case CrossingVerb::DELETE_: {
+			auto &statement = built.statement->Cast<DeleteStatement>();
+			if (using_predicate) {
+				statement.condition = And(std::move(statement.condition), std::move(using_predicate));
+			}
+			return;
+		}
+		default:
+			return;
+		}
+	};
 }
 
 void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -885,210 +941,20 @@ shared_ptr<Connection> DuckDBSource::PlanningConnection() {
 	return planning;
 }
 
-shared_ptr<Connection> DuckDBSource::PlanningConnection(const string &schema, const string &table) {
-	{
-		lock_guard<mutex> guard(grants->lock);
-		auto it = grants->shaping.find(schema + "." + table);
-		if (it != grants->shaping.end()) {
-			return it->second;
-		}
-	}
-	return PlanningConnection();
-}
-
-unique_ptr<ParsedExpression> DuckDBSource::UsingFor(const string &schema, const string &table, CrossingVerb verb) {
-	lock_guard<mutex> guard(grants->lock);
-	auto schema_it = grants->tables.find(schema);
-	if (schema_it == grants->tables.end()) {
-		return nullptr;
-	}
-	auto table_it = schema_it->second.find(table);
-	return table_it == schema_it->second.end() ? nullptr : table_it->second.CopyUsing(verb);
-}
-
-unique_ptr<ParsedExpression> DuckDBSource::CheckFor(const string &schema, const string &table, CrossingVerb verb) {
-	lock_guard<mutex> guard(grants->lock);
-	auto schema_it = grants->tables.find(schema);
-	if (schema_it == grants->tables.end()) {
-		return nullptr;
-	}
-	auto table_it = schema_it->second.find(table);
-	return table_it == schema_it->second.end() ? nullptr : table_it->second.CopyCheck(verb);
-}
-
-unique_ptr<SQLStatement> DuckDBSource::InsertStatement(const CrossingPlanRequest &request,
-                                                       const vector<string> &row_aliases,
-                                                       unique_ptr<TableRef> rows_ref) {
-	auto check = CheckFor(request.schema, request.table, CrossingVerb::INSERT);
-
-	auto named = make_uniq<SelectNode>();
-	named->from_table = std::move(rows_ref);
-	for (idx_t c = 0; c < row_aliases.size(); c++) {
-		auto column = make_uniq<ColumnRefExpression>(row_aliases[c], CROSSING_SEAM_ALIAS);
-		column->alias = request.seam.set_columns[c];
-		named->select_list.push_back(std::move(column));
-	}
-	auto named_select = make_uniq<SelectStatement>();
-	named_select->node = std::move(named);
-
-	auto guarded = make_uniq<SelectNode>();
-	auto named_ref = make_uniq<SubqueryRef>(std::move(named_select));
-	named_ref->alias = "vcat_rows";
-	guarded->from_table = std::move(named_ref);
-	for (idx_t c = 0; c < request.seam.set_columns.size(); c++) {
-		guarded->select_list.push_back(make_uniq<ColumnRefExpression>(request.seam.set_columns[c], "vcat_rows"));
-	}
-	if (check && !guarded->select_list.empty()) {
-		guarded->select_list[0] = GuardWithCheck(std::move(check), std::move(guarded->select_list[0]));
-	}
-	auto select = make_uniq<SelectStatement>();
-	select->node = std::move(guarded);
-
-	auto statement = make_uniq<duckdb::InsertStatement>();
-	statement->catalog = source_catalog;
-	statement->schema = request.schema;
-	statement->table = request.table;
-	statement->select_statement = std::move(select);
-	return std::move(statement);
-}
-
-unique_ptr<SQLStatement> DuckDBSource::DeleteStatement(const CrossingPlanRequest &request,
-                                                       const vector<string> &row_aliases,
-                                                       unique_ptr<TableRef> rows_ref) {
-	auto &key = request.seam.key_columns;
-	unique_ptr<ParsedExpression> condition;
-	for (idx_t c = 0; c < key.size(); c++) {
-		auto target_column = make_uniq<ColumnRefExpression>(key[c], request.table);
-		auto seam_column = make_uniq<ColumnRefExpression>(row_aliases[c], CROSSING_SEAM_ALIAS);
-		auto equal = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(target_column),
-		                                             std::move(seam_column));
-		condition = condition ? make_uniq_base<ParsedExpression, ConjunctionExpression>(
-		                            ExpressionType::CONJUNCTION_AND, std::move(condition), std::move(equal))
-		                      : unique_ptr<ParsedExpression>(std::move(equal));
-	}
-	if (auto using_predicate = UsingFor(request.schema, request.table, CrossingVerb::DELETE_)) {
-		condition = make_uniq_base<ParsedExpression, ConjunctionExpression>(
-		    ExpressionType::CONJUNCTION_AND, std::move(condition), std::move(using_predicate));
-	}
-
-	auto statement = make_uniq<duckdb::DeleteStatement>();
-	auto table_ref = make_uniq<BaseTableRef>();
-	table_ref->catalog_name = source_catalog;
-	table_ref->schema_name = request.schema;
-	table_ref->table_name = request.table;
-	statement->table = std::move(table_ref);
-	statement->using_clauses.push_back(std::move(rows_ref));
-	statement->condition = std::move(condition);
-	return std::move(statement);
-}
-
-unique_ptr<SQLStatement> DuckDBSource::UpdateStatement(const CrossingPlanRequest &request,
-                                                       const vector<string> &row_aliases,
-                                                       unique_ptr<TableRef> rows_ref) {
-	auto &key = request.seam.key_columns;
-	auto &set_columns = request.seam.set_columns;
-	unique_ptr<ParsedExpression> condition;
-	for (idx_t c = 0; c < key.size(); c++) {
-		auto target_column = make_uniq<ColumnRefExpression>(key[c], request.table);
-		auto seam_column = make_uniq<ColumnRefExpression>(row_aliases[c], CROSSING_SEAM_ALIAS);
-		auto equal = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(target_column),
-		                                             std::move(seam_column));
-		condition = condition ? make_uniq_base<ParsedExpression, ConjunctionExpression>(
-		                            ExpressionType::CONJUNCTION_AND, std::move(condition), std::move(equal))
-		                      : unique_ptr<ParsedExpression>(std::move(equal));
-	}
-
-	if (auto using_predicate = UsingFor(request.schema, request.table, CrossingVerb::UPDATE)) {
-		condition = make_uniq_base<ParsedExpression, ConjunctionExpression>(
-		    ExpressionType::CONJUNCTION_AND, std::move(condition), std::move(using_predicate));
-	}
-	auto check = CheckFor(request.schema, request.table, CrossingVerb::UPDATE);
-	if (check) {
-		PointCheckAtUpdatedRow(*check, request.table, set_columns, row_aliases, key.size());
-	}
-
-	auto set_info = make_uniq<UpdateSetInfo>();
-	set_info->condition = std::move(condition);
-	for (idx_t c = 0; c < set_columns.size(); c++) {
-		set_info->columns.push_back(set_columns[c]);
-		set_info->expressions.push_back(
-		    make_uniq<ColumnRefExpression>(row_aliases[key.size() + c], CROSSING_SEAM_ALIAS));
-	}
-	if (check && !set_info->expressions.empty()) {
-		set_info->expressions[0] = GuardWithCheck(std::move(check), std::move(set_info->expressions[0]));
-	}
-
-	auto statement = make_uniq<duckdb::UpdateStatement>();
-	auto table_ref = make_uniq<BaseTableRef>();
-	table_ref->catalog_name = source_catalog;
-	table_ref->schema_name = request.schema;
-	table_ref->table_name = request.table;
-	statement->table = std::move(table_ref);
-	statement->from_table = std::move(rows_ref);
-	statement->set_info = std::move(set_info);
-	return std::move(statement);
-}
-
-unique_ptr<LogicalOperator> DuckDBSource::ScanPlan(const CrossingPlanRequest &request) {
-	auto planning_conn = PlanningConnection(request.schema, request.table);
-	auto &source_conn = *planning_conn;
-	auto relation = source_conn.Table(source_catalog, request.schema, request.table);
-	if (auto using_predicate = UsingFor(request.schema, request.table, CrossingVerb::SELECT)) {
-		relation = relation->Filter(std::move(using_predicate));
-	}
-	Planner planner(*source_conn.context);
-	planner.CreatePlan(make_uniq<RelationStatement>(relation));
-	auto plan = std::move(planner.plan);
-	plan->ResolveOperatorTypes();
-	return plan;
-}
-
 CrossingPlan DuckDBSource::Plan(const CrossingPlanRequest &request) {
 	if (request.verb == CrossingVerb::SELECT) {
-		return CrossingPlan::Of(ScanPlan(request));
+		auto &described = *request.described;
+		return CrossingPlan::Of(
+		    MakeFloorNode(request.schema, request.table, described.column_names, described.column_types));
 	}
 	if (request.verb != CrossingVerb::INSERT && request.seam.key_columns.empty()) {
 		throw InternalException("virtual_catalog_bridge: '%s.%s' has no key to write by", request.schema,
 		                        request.table);
 	}
-	vector<string> row_aliases;
-	for (idx_t c = 0; c < request.seam.key_columns.size(); c++) {
-		row_aliases.push_back("k" + to_string(c));
-	}
-	for (idx_t c = 0; c < request.seam.set_columns.size(); c++) {
-		row_aliases.push_back("v" + to_string(c));
-	}
-	if (row_aliases.size() != request.seam.types.size()) {
+	if (request.seam.key_columns.size() + request.seam.set_columns.size() != request.seam.types.size()) {
 		return CrossingPlan::Declined("the seam does not carry one value per column");
 	}
-	auto rows_ref = SeamShapedRows(row_aliases, request.seam.types);
-
-	unique_ptr<SQLStatement> statement;
-	switch (request.verb) {
-	case CrossingVerb::INSERT:
-		statement = InsertStatement(request, row_aliases, std::move(rows_ref));
-		break;
-	case CrossingVerb::DELETE_:
-		statement = DeleteStatement(request, row_aliases, std::move(rows_ref));
-		break;
-	default:
-		statement = UpdateStatement(request, row_aliases, std::move(rows_ref));
-		break;
-	}
-
-	auto planning_conn = PlanningConnection(request.schema, request.table);
-	Planner planner(*planning_conn->context);
-	planner.CreatePlan(std::move(statement));
-	auto plan = std::move(planner.plan);
-
-	auto slot = SlotOfExpressionGet(plan);
-	if (!slot) {
-		throw InternalException("virtual_catalog_bridge: the planned %s holds no seam", CrossingVerbName(request.verb));
-	}
-	auto table_index = (*slot)->Cast<LogicalExpressionGet>().table_index;
-	*slot = MakeSeamNode(table_index, request.seam.types);
-	plan->ResolveOperatorTypes();
-	return CrossingPlan::Of(std::move(plan));
+	return CrossingPlan::Of(MakeSeamNode(request.seam.types));
 }
 
 bool DuckDBSource::SourceHasFunction(const string &function_name) {
@@ -1136,27 +1002,21 @@ CrossingVerdict DuckDBSource::AcceptsType(const LogicalType &type) {
 CrossingWriter DuckDBSession::Write(ClientContext &, const CrossingQuery &query) {
 	return [this, &query](ClientContext &, const CrossingWaker &) {
 		auto write_conn = Shared();
-		auto &source_conn = *write_conn;
-		auto plan = query.plan.Copy(*source_conn.context);
-		plan->ResolveOperatorTypes();
-
-		auto &attached = Catalog::GetCatalog(*source_conn.context, source_catalog).GetAttached();
-		MetaTransaction::Get(*source_conn.context).ModifyDatabase(attached, DatabaseModificationType::UPDATE_DATA);
-
-		auto statement = make_uniq<LogicalPlanStatement>(std::move(plan));
-		auto pending = source_conn.context->PendingQuery(std::move(statement), QueryParameters(false));
-		if (pending->HasError()) {
-			pending->GetErrorObject().Throw("virtual_catalog_bridge: write on source failed: ");
+		auto &context = *write_conn->context;
+		CrossingWriteTarget target;
+		target.catalog = source_catalog;
+		target.schema = query.written.schema;
+		target.table = query.written.table;
+		target.verb = query.kind;
+		target.key_columns = query.key_columns;
+		target.set_columns = query.set_columns;
+		auto shape = PolicyShaper(grants, target);
+		if (auto rows = SeamRowsOf(query.plan)) {
+			return CrossingWriteResult::Done(ExecuteWrite(context, target, SeamRefOfRows(*rows), shape));
 		}
-		auto result = pending->Execute();
-		if (result->HasError()) {
-			result->GetErrorObject().Throw("virtual_catalog_bridge: write on source failed: ");
-		}
-		auto count_chunk = result->Fetch();
-		if (count_chunk && count_chunk->size() > 0) {
-			return CrossingWriteResult::Done(NumericCast<idx_t>(count_chunk->GetValue(0, 0).GetValue<int64_t>()));
-		}
-		return CrossingWriteResult::Done(0);
+		auto plan = DeserializeCrossingPlan(context, SerializeCrossingPlan(query.plan));
+		BindFloors(context, plan, source_catalog, PolicyResolver(grants, source_catalog));
+		return CrossingWriteResult::Done(ExecuteWrite(context, target, std::move(plan), shape));
 	};
 }
 
@@ -1377,12 +1237,13 @@ void DuckDBSession::RecordDdl(const shared_ptr<Connection> &source_conn, const C
 
 namespace {
 
-unique_ptr<QueryResult> RunRead(Connection &source_conn, const CrossingQuery &query, bool stream) {
-	auto plan = query.plan.Copy(*source_conn.context);
-	plan->ResolveOperatorTypes();
+unique_ptr<QueryResult> RunRead(Connection &source_conn, const CrossingQuery &query, bool stream,
+                                const CrossingFloorResolver &resolver, const string &source_catalog) {
+	auto &context = *source_conn.context;
+	auto plan = DeserializeCrossingPlan(context, SerializeCrossingPlan(query.plan));
+	BindFloors(context, plan, source_catalog, resolver);
 
-	auto statement = make_uniq<LogicalPlanStatement>(std::move(plan));
-	auto pending = source_conn.context->PendingQuery(std::move(statement), QueryParameters(stream));
+	auto pending = PendingCrossingPlan(context, std::move(plan), stream);
 	if (pending->HasError()) {
 		pending->GetErrorObject().Throw("virtual_catalog_bridge: plan on source failed: ");
 	}
@@ -1412,14 +1273,15 @@ CrossingScan ScanOf(const shared_ptr<Connection> &conn, unique_ptr<QueryResult> 
 } // namespace
 
 CrossingScan DuckDBSession::Read(ClientContext &, const CrossingQuery &query) {
+	auto resolver = PolicyResolver(grants, source_catalog);
 	if (autocommit) {
 		auto read_conn = make_shared_ptr<Connection>(*source_db);
 		read_conn->BeginTransaction();
-		return ScanOf(read_conn, RunRead(*read_conn, query, true));
+		return ScanOf(read_conn, RunRead(*read_conn, query, true, resolver, source_catalog));
 	}
 	auto shared = Shared();
 	lock_guard<mutex> guard(lock);
-	return ScanOf(shared, RunRead(*shared, query, false));
+	return ScanOf(shared, RunRead(*shared, query, false, resolver, source_catalog));
 }
 
 void RegisterBridgeFunctions(ExtensionLoader &loader) {
