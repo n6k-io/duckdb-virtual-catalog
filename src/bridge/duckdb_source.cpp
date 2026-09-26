@@ -261,25 +261,31 @@ vector<string> DiscoverKeyColumns(TableCatalogEntry &table) {
 	return key;
 }
 
-void PointCheckAtUpdatedRow(ParsedExpression &expr, const string &table, const vector<string> &set_columns,
+//! Rewrites every unqualified column reference in `expr`, the root included: a set column becomes
+//! its seam column (the value being written), anything else is pinned to the target table.
+void PointCheckAtUpdatedRow(unique_ptr<ParsedExpression> &expr, const string &table, const vector<string> &set_columns,
                             const CrossingWriteStatement &built, idx_t key_count) {
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](unique_ptr<ParsedExpression> &child) {
-		if (child->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-			auto &column_ref = child->Cast<ColumnRefExpression>();
-			if (!column_ref.IsQualified()) {
-				auto &name = column_ref.GetColumnName();
-				for (idx_t c = 0; c < set_columns.size(); c++) {
-					if (StringUtil::CIEquals(set_columns[c], name)) {
-						child = make_uniq<ColumnRefExpression>(built.seam_columns[key_count + c], built.seam_alias);
-						return;
-					}
+	if (expr->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+		auto &column_ref = expr->Cast<ColumnRefExpression>();
+		if (!column_ref.IsQualified()) {
+			auto &name = column_ref.GetColumnName();
+			for (idx_t c = 0; c < set_columns.size(); c++) {
+				if (StringUtil::CIEquals(set_columns[c], name)) {
+					expr = make_uniq<ColumnRefExpression>(built.seam_columns[key_count + c], built.seam_alias);
+					return;
 				}
-				child = make_uniq<ColumnRefExpression>(name, table);
-				return;
 			}
+			expr = make_uniq<ColumnRefExpression>(name, table);
 		}
-		PointCheckAtUpdatedRow(*child, table, set_columns, built, key_count);
+		return;
+	}
+	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
+		PointCheckAtUpdatedRow(child, table, set_columns, built, key_count);
 	});
+}
+
+void QualifyColumns(unique_ptr<ParsedExpression> &expr, const string &table, const CrossingWriteStatement &built) {
+	PointCheckAtUpdatedRow(expr, table, {}, built, 0);
 }
 
 unique_ptr<ParsedExpression> GuardWithCheck(unique_ptr<ParsedExpression> check, unique_ptr<ParsedExpression> value) {
@@ -360,17 +366,18 @@ CrossingWriteShaper PolicyShaper(const shared_ptr<GrantBook> &grants, const Cros
 				return;
 			}
 			auto &select = built.statement->Cast<InsertStatement>().select_statement->node->Cast<SelectNode>();
-			PointCheckAtUpdatedRow(*check, target.table, target.set_columns, built, 0);
+			PointCheckAtUpdatedRow(check, target.table, target.set_columns, built, 0);
 			select.select_list[0] = GuardWithCheck(std::move(check), std::move(select.select_list[0]));
 			return;
 		}
 		case CrossingVerb::UPDATE: {
 			auto &set_info = *built.statement->Cast<UpdateStatement>().set_info;
 			if (using_predicate) {
+				QualifyColumns(using_predicate, target.table, built);
 				set_info.condition = And(std::move(set_info.condition), std::move(using_predicate));
 			}
 			if (check) {
-				PointCheckAtUpdatedRow(*check, target.table, target.set_columns, built, target.key_columns.size());
+				PointCheckAtUpdatedRow(check, target.table, target.set_columns, built, target.key_columns.size());
 				set_info.expressions[0] = GuardWithCheck(std::move(check), std::move(set_info.expressions[0]));
 			}
 			return;
@@ -378,6 +385,7 @@ CrossingWriteShaper PolicyShaper(const shared_ptr<GrantBook> &grants, const Cros
 		case CrossingVerb::DELETE_: {
 			auto &statement = built.statement->Cast<DeleteStatement>();
 			if (using_predicate) {
+				QualifyColumns(using_predicate, target.table, built);
 				statement.condition = And(std::move(statement.condition), std::move(using_predicate));
 			}
 			return;
