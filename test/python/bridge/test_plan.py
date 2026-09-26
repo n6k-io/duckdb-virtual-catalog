@@ -50,15 +50,17 @@ def test_a_self_join_crosses_as_one_scan(bridged):
     assert len(re.findall(r"TableIndex:(\d+)", flat)) == 1
     assert flat.count("CROSSING_READ") == 1
     assert "COMPARISON_JOIN" in flat
-    assert flat.count("memory.main.wide") == 2
+    assert flat.count("CROSSING_FLOOR") == 2
 
 
 def test_scan_node_carries_the_source_plan(bridged):
-    """The node holds the plan the source will run, and EXPLAIN prints it without executing."""
+    """The node holds the plan the source will run, and EXPLAIN prints it without executing. The
+    plan names the table with a floor; the source binds the real scan when it runs."""
     _, target = bridged
     plan = explain(target, "SELECT sum(score) FROM app.main.wide")
     assert "Plan" in plan
-    assert "SEQ_SCAN" in plan
+    assert "CROSSING_FLOOR" in plan
+    assert "SEQ_SCAN" not in plan
 
 
 def test_select_star_matches_source(bridged):
@@ -541,3 +543,37 @@ def test_delete_spanning_several_chunks_removes_every_row(source, target):
     bridge(source, target, {"big": ["select", "delete"]})
     target.execute("DELETE FROM app.main.big")
     assert source.execute("SELECT count(*) FROM big").fetchone() == (0,)
+
+
+def test_insert_check_on_a_bare_column(source, target):
+    source.execute("CREATE TABLE flags(id INTEGER PRIMARY KEY, enabled BOOLEAN)")
+    bridge(source, target, {"flags": {"select": "true", "insert": ("true", "enabled")}})
+    target.execute("INSERT INTO app.main.flags VALUES (1, true)")
+    with pytest.raises(duckdb.Error, match="violates the check predicate"):
+        target.execute("INSERT INTO app.main.flags VALUES (2, false)")
+    assert source.execute("SELECT * FROM flags ORDER BY id").fetchall() == [(1, True)]
+
+
+def test_update_check_on_a_bare_column_reads_the_new_value(source, target):
+    source.execute("CREATE TABLE flags(id INTEGER PRIMARY KEY, enabled BOOLEAN)")
+    source.execute("INSERT INTO flags VALUES (1, true)")
+    bridge(source, target, {"flags": {"select": "true", "update": ("true", "enabled")}})
+    with pytest.raises(duckdb.Error, match="violates the check predicate"):
+        target.execute("UPDATE app.main.flags SET enabled = false WHERE id = 1")
+    assert source.execute("SELECT enabled FROM flags WHERE id = 1").fetchone() == (True,)
+
+
+def test_update_using_on_a_column_named_like_a_seam_column(source, target):
+    source.execute("CREATE TABLE seamish(c0 INTEGER PRIMARY KEY, c1 INTEGER)")
+    source.execute("INSERT INTO seamish VALUES (1, 5), (2, 50)")
+    bridge(source, target, {"seamish": {"select": "true", "update": "c1 < 10"}})
+    target.execute("UPDATE app.main.seamish SET c1 = 7")
+    assert source.execute("SELECT * FROM seamish ORDER BY c0").fetchall() == [(1, 7), (2, 50)]
+
+
+def test_delete_using_on_a_column_named_like_a_seam_column(source, target):
+    source.execute("CREATE TABLE seamish(c0 INTEGER PRIMARY KEY, c1 INTEGER)")
+    source.execute("INSERT INTO seamish VALUES (1, 5), (2, 50)")
+    bridge(source, target, {"seamish": {"select": "true", "delete": "c0 < 2"}})
+    target.execute("DELETE FROM app.main.seamish")
+    assert source.execute("SELECT * FROM seamish ORDER BY c0").fetchall() == [(2, 50)]

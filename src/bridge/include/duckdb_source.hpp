@@ -12,8 +12,6 @@
 namespace duckdb {
 
 class ExtensionLoader;
-class SQLStatement;
-class TableRef;
 
 static constexpr const char *VIRTUAL_CATALOG_BRIDGE_TYPE = "virtual_catalog_bridge";
 
@@ -96,16 +94,6 @@ public:
 
 private:
 	shared_ptr<Connection> PlanningConnection();
-	shared_ptr<Connection> PlanningConnection(const string &schema, const string &table);
-	unique_ptr<ParsedExpression> UsingFor(const string &schema, const string &table, CrossingVerb verb);
-	unique_ptr<ParsedExpression> CheckFor(const string &schema, const string &table, CrossingVerb verb);
-	unique_ptr<LogicalOperator> ScanPlan(const CrossingPlanRequest &request);
-	unique_ptr<SQLStatement> InsertStatement(const CrossingPlanRequest &request, const vector<string> &row_aliases,
-	                                         unique_ptr<TableRef> rows_ref);
-	unique_ptr<SQLStatement> DeleteStatement(const CrossingPlanRequest &request, const vector<string> &row_aliases,
-	                                         unique_ptr<TableRef> rows_ref);
-	unique_ptr<SQLStatement> UpdateStatement(const CrossingPlanRequest &request, const vector<string> &row_aliases,
-	                                         unique_ptr<TableRef> rows_ref);
 
 	bool SourceHasFunction(const string &function_name);
 
