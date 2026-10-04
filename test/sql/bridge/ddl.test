@@ -58,9 +58,6 @@ statement ok
 SELECT bridge_policy('ddl', 'main.locked', 'select', 'true');
 
 statement ok
-SELECT bridge_finalize('ddl');
-
-statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ddl', TOKEN 'tok_ddl');
 
 # ---------------------------------------------------------------------------

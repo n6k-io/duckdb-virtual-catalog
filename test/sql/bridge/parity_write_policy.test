@@ -23,9 +23,6 @@ statement ok
 SELECT bridge_policy('v2_pol_rw', 'main.orders', 'delete', 'amt = 50');
 
 statement ok
-SELECT bridge_finalize('v2_pol_rw');
-
-statement ok
 ATTACH '' AS rw (TYPE virtual_catalog_bridge, ID 'v2_pol_rw', TOKEN 'tok_rw');
 
 # The statement selects every row; the policy decides which are written, and the count reported is
@@ -87,9 +84,6 @@ SELECT bridge_policy('v2_pol_wc', 'main.orders', 'select', 'true');
 
 statement ok
 SELECT bridge_policy('v2_pol_wc', 'main.orders', 'insert', 'true', 'amt >= 0');
-
-statement ok
-SELECT bridge_finalize('v2_pol_wc');
 
 statement ok
 ATTACH '' AS wc (TYPE virtual_catalog_bridge, ID 'v2_pol_wc', TOKEN 'tok_wc');

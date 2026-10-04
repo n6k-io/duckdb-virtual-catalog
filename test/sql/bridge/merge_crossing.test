@@ -29,9 +29,6 @@ statement ok
 SELECT bridge_policy('mg', 'main.feed', 'select', 'true');
 
 statement ok
-SELECT bridge_finalize('mg');
-
-statement ok
 ATTACH '' AS m (TYPE virtual_catalog_bridge, ID 'mg', TOKEN 'tok_mg');
 
 # The feed is a bridged table the merge only reads, so its filter crosses and the source returns the

@@ -38,9 +38,6 @@ statement ok
 SELECT bridge_policy('bnd', 'aux.shadowed', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
 
 statement ok
-SELECT bridge_finalize('bnd');
-
-statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'bnd', TOKEN 'tok_bnd');
 
 # ---------------------------------------------------------------------------

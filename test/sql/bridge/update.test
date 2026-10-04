@@ -20,9 +20,6 @@ statement ok
 SELECT bridge_policy('v2_update', 'main.orders', 'update', 'tenant = 7');
 
 statement ok
-SELECT bridge_finalize('v2_update');
-
-statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_update', TOKEN 'tok_update');
 
 statement ok

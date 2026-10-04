@@ -26,9 +26,6 @@ statement ok
 SELECT bridge_policy('v2_transaction', 'main.orders', 'delete', 'true');
 
 statement ok
-SELECT bridge_finalize('v2_transaction');
-
-statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_transaction', TOKEN 'tok_transaction');
 
 # A statement outside an explicit transaction is a transaction of its own, and commits with it.

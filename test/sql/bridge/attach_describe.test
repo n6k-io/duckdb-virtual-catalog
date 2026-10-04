@@ -75,9 +75,6 @@ ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_attach_describe');
 requires a 'token' option
 
 statement ok
-SELECT bridge_finalize('v2_attach_describe');
-
-statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_attach_describe', TOKEN 'tok_attach_describe');
 
 # Only what was granted is a table. `secrets` was never named.

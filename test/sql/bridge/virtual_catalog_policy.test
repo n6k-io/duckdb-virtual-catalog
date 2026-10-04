@@ -24,9 +24,6 @@ statement ok
 SELECT bridge_policy('pol_ro', 'main.orders', 'select', 'tenant_id = 1');
 
 statement ok
-SELECT bridge_finalize('pol_ro');
-
-statement ok
 ATTACH '' AS ro (TYPE virtual_catalog_bridge, ID 'pol_ro', TOKEN 'tok_ro');
 
 query III
@@ -85,9 +82,6 @@ SELECT bridge_policy('pol_rw', 'main.orders', 'update', 'tenant_id = 1');
 
 statement ok
 SELECT bridge_policy('pol_rw', 'main.orders', 'delete', 'amt = 50');
-
-statement ok
-SELECT bridge_finalize('pol_rw');
 
 statement ok
 ATTACH '' AS rw (TYPE virtual_catalog_bridge, ID 'pol_rw', TOKEN 'tok_rw');
@@ -159,9 +153,6 @@ SELECT bridge_register_source('pol_ins', 'memory', 'tok_ins');
 # Insert without select: legal, unlike update/delete, because an append needs no scan.
 statement ok
 SELECT bridge_policy('pol_ins', 'main.orders', 'insert', 'true', 'true');
-
-statement ok
-SELECT bridge_finalize('pol_ins');
 
 statement ok
 ATTACH '' AS ins (TYPE virtual_catalog_bridge, ID 'pol_ins', TOKEN 'tok_ins');

@@ -1,5 +1,5 @@
 # name: test/sql/bridge/bridge_context.test
-# description: bridge_set_context values bound into policy predicates as $name.
+# description: bridge_set_context values referenced as $name in policy predicates, live until bridge_finalize_context.
 # group: [bridge]
 
 require virtual_catalog_bridge
@@ -9,6 +9,12 @@ CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, tenant INT
 
 statement ok
 INSERT INTO memory.main.orders VALUES (1,'ada',7,'eu','2020-01-01'),(2,'grace',7,'us','2021-01-01'),(3,'alan',9,'eu','2022-01-01');
+
+statement ok
+CREATE TABLE memory.main.gate(id INTEGER PRIMARY KEY);
+
+statement ok
+INSERT INTO memory.main.gate VALUES (1);
 
 statement ok
 SELECT bridge_register_source('ctx', 'memory', 'tok_ctx');
@@ -28,13 +34,16 @@ SELECT bridge_set_context('ctx', '', 7);
 ----
 cannot be empty
 
+statement error
+SELECT bridge_set_context('never_registered', 'tenant', 7);
+----
+no registered source for bridge
+
+statement ok
+SELECT bridge_set_context('ctx', 'tenant', 9);
+
 statement ok
 SELECT bridge_set_context('ctx', 'tenant', 7);
-
-statement error
-SELECT bridge_set_context('ctx', 'tenant', 9);
-----
-already set
 
 statement ok
 SELECT bridge_set_context('ctx', 'region', 'eu');
@@ -65,13 +74,81 @@ statement ok
 SELECT bridge_policy('ctx', 'main.orders', 'insert', 'true', 'tenant = $tenant');
 
 statement ok
-SELECT bridge_finalize('ctx');
+SELECT bridge_set_context('ctx', 'open', true);
+
+statement ok
+SELECT bridge_policy('ctx', 'main.gate', 'select', '$open');
+
+# A value that no longer makes the policies valid is refused, and the old value stays.
+statement error
+SELECT bridge_set_context('ctx', 'open', 5);
+----
+must be BOOLEAN, but it is INTEGER
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ctx', TOKEN 'tok_ctx');
 
 query I
 SELECT id FROM b.main.orders ORDER BY id;
+----
+1
+2
+
+statement ok
+PREPARE all_ids AS SELECT id FROM b.main.orders ORDER BY id;
+
+# Grants are frozen at attach; context is not.
+statement error
+SELECT bridge_policy('ctx', 'main.orders', 'alter', 'true');
+----
+no registered source for bridge
+
+statement ok
+SELECT bridge_set_context('ctx', 'tenant', 9);
+
+query I
+SELECT id FROM b.main.orders ORDER BY id;
+----
+3
+
+query I
+EXECUTE all_ids;
+----
+3
+
+query I
+SELECT id FROM b.main.gate;
+----
+1
+
+statement error
+SELECT bridge_set_context('ctx', 'open', 'abc');
+----
+must be BOOLEAN, but it is VARCHAR
+
+query I
+SELECT id FROM b.main.gate;
+----
+1
+
+statement ok
+SELECT bridge_set_context('ctx', 'open', false);
+
+query I
+SELECT id FROM b.main.gate;
+----
+
+# The write check follows the live value.
+statement error
+INSERT INTO b.main.orders VALUES (4,'edsger',7,'eu','2023-01-01');
+----
+violates the check predicate
+
+statement ok
+SELECT bridge_set_context('ctx', 'tenant', 7);
+
+query I
+EXECUTE all_ids;
 ----
 1
 2
@@ -107,7 +184,6 @@ UPDATE b.main.orders SET tenant = 9 WHERE id = 1;
 ----
 violates the check predicate
 
-# INSERT WITH CHECK.
 statement ok
 INSERT INTO b.main.orders VALUES (4,'edsger',7,'eu','2023-01-01');
 
@@ -126,5 +202,59 @@ SELECT id FROM memory.main.orders ORDER BY id;
 1
 3
 
+# bridge_finalize_context locks a live context.
+statement ok
+SELECT bridge_finalize_context('ctx');
+
+statement error
+SELECT bridge_set_context('ctx', 'tenant', 9);
+----
+is finalized
+
+statement error
+SELECT bridge_finalize_context('ctx');
+----
+already finalized
+
+query I
+SELECT id FROM b.main.orders ORDER BY id;
+----
+1
+
 statement ok
 DETACH b;
+
+# Once detached, the id no longer reaches the context.
+statement error
+SELECT bridge_set_context('ctx', 'tenant', 9);
+----
+no registered source for bridge
+
+# Finalized before attach: the context is locked, the grants are still open until attach.
+statement ok
+SELECT bridge_register_source('ctx2', 'memory', 'tok_ctx2');
+
+statement ok
+SELECT bridge_set_context('ctx2', 'tenant', 9);
+
+statement ok
+SELECT bridge_finalize_context('ctx2');
+
+statement error
+SELECT bridge_set_context('ctx2', 'tenant', 7);
+----
+is finalized
+
+statement ok
+SELECT bridge_policy('ctx2', 'main.orders', 'select', 'tenant = $tenant');
+
+statement ok
+ATTACH '' AS b2 (TYPE virtual_catalog_bridge, ID 'ctx2', TOKEN 'tok_ctx2');
+
+query I
+SELECT id FROM b2.main.orders ORDER BY id;
+----
+3
+
+statement ok
+DETACH b2;

@@ -16,8 +16,8 @@ other, and a single attached catalog is one or the other, never both.
 ## Setup flow
 
 Token-based handshake, all plain SQL statements; the target uses a different
-connection than the source. The source grants and finalizes first, then the
-target's `ATTACH` redeems the token — one ATTACH is one bridge.
+connection than the source. The source grants first, then the target's `ATTACH`
+redeems the token — one ATTACH is one bridge.
 
 The target schemas do not have to exist: the attach creates one per granted
 source schema, named the same.
@@ -38,10 +38,7 @@ SELECT bridge_policy('b1', 'main.users',  'update', 'tenant_id = $tenant');
 SELECT bridge_policy('b1', 'sales.orders', 'select', 'true');
 -- → 'ok'
 
--- 4. On the SOURCE: validate and seal the grant set.
-SELECT bridge_finalize('b1');
-
--- 5. On the TARGET: redeem the token into a new catalog.
+-- 4. On the TARGET: redeem the token into a new catalog.
 ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'NONCE:UUID');
 -- my_bridge.main.users, my_bridge.main.logs, my_bridge.sales.orders
 ```
@@ -55,23 +52,16 @@ extension versions are rejected. Tokens expire after **30 seconds** if not
 consumed — the clock measures inactivity, so it covers the whole grant script
 rather than the first call alone. Grants are declared by the source (trusted
 side) and cannot be modified by the target: `bridge_policy`, `bridge_set_context`
-and `bridge_finalize` refuse any connection whose `DatabaseInstance` is not the
-one that called `bridge_register_source` — so any connection on the source
-instance may add grants, but no connection outside it can.
-
-`bridge_finalize` validates the grant set (at least one grant; `update` and
-`delete` need `select`) and freezes it and the context: every later grant,
-context or finalize call is refused. `ATTACH` refuses a bridge that is not
-finalized. Finalizing counts as activity, so the target has 30 seconds from it
-to attach.
+and `bridge_finalize_context` refuse any connection whose `DatabaseInstance` is
+not the one that called `bridge_register_source` — so any connection on the
+source instance may add grants, but no connection outside it can. Once the token
+is redeemed the grant set is frozen; the [context](#context-values) is not.
 
 A source that already holds a secret can name the token itself, with the 3-arg
 form. This is also what lets a test hardcode one:
 
 ```sql
 SELECT bridge_register_source('b1', 'source_catalog', 'my-secret');
--- ... grants ...
-SELECT bridge_finalize('b1');
 ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'my-secret');
 ```
 
@@ -90,10 +80,11 @@ Not optional in a long-lived process. The catalog holds a reference to the
 Everything the catalog held goes with it, including any native entries created
 alongside the bridged ones.
 
-Every refusal during `ATTACH` — a missing option, a bad token, a bridge not yet
-finalized — is raised before the pending source is taken, so the same token
-still redeems once the cause is fixed. A refused `bridge_finalize` leaves the
-bridge open for more grants.
+Every refusal during `ATTACH` — a missing option, a bad token, a grant set that
+does not hold together — is raised before the pending source is taken, so the
+same token still redeems once the cause is fixed.
+
+After the detach the bridge id no longer reaches the context.
 
 ## Permission model
 
@@ -115,8 +106,8 @@ nothing below it asks again.
 | `delete` | `DELETE` |
 | `alter` | reported in `verbs`; bridge `ALTER TABLE` is not yet implemented |
 
-`update` and `delete` also require `select` on the same table, and
-`bridge_finalize` refuses a grant set that breaks this. Both are driven by a
+`update` and `delete` also require `select` on the same table, and the `ATTACH`
+refuses a grant set that breaks this. Both are driven by a
 scan: the plan reads the table to resolve the `WHERE`, and the row identities the
 write path uses are buffered by that scan.
 
@@ -147,13 +138,22 @@ SELECT bridge_set_context('b1', 'tenant', 42);
 SELECT bridge_policy('b1', 'main.orders', 'select', 'tenant_id = $tenant');
 ```
 
-At grant time each `$name` is replaced by a constant node holding the value, so
-the stored predicate carries the value, not a reference to it. Hence:
+The predicate is stored with `$name` in it. Each target statement takes one
+snapshot of the context and fills every `$name` in as a constant node, so all
+tables in a statement see the same values.
 
 - **Set before use.** A predicate naming an unset `$name` is refused by
   `bridge_policy`.
-- **Set once.** Setting a name twice is an error, and `bridge_finalize` freezes
-  the context; a value never changes under a policy that used it.
+- **Live.** The context stays changeable after `ATTACH`, unlike the grants:
+  `bridge_set_context` overwrites a value and the target's next statement —
+  a prepared one included — uses it.
+- **Checked on change.** A new value is bound into every policy that uses it,
+  as `bridge_policy` binds; one that stops a policy binding or being BOOLEAN is
+  refused and the old value stays. Binding casts nothing, so a value that only
+  fails a cast (`'abc'` against an INTEGER column) passes, and the target's
+  statement fails instead.
+- **Lockable.** `bridge_finalize_context(bridge_id)` freezes the context, before
+  or after `ATTACH`; every later `bridge_set_context` is refused. It is optional.
 - **Any type, never NULL.** The value keeps its type (`42` is an INTEGER,
   `DATE '2024-01-01'` a DATE).
 - **Named only.** Positional `$1` and `?` are refused.
@@ -331,7 +331,7 @@ Tables granted any write verb support the ones they were granted.
 The grant is checked once, when the write fence is built at bind time. The fence
 carries the proof, along with the key its seam is named from, so physical
 planning and execution read it rather than consulting the grant map again —
-grants are frozen at `bridge_finalize`, so a second lookup could only ever
+grants are frozen at attach time, so a second lookup could only ever
 disagree with the first.
 
 **Not yet supported:** `CREATE TABLE` in a *bridge* schema (it works in a plain
@@ -440,7 +440,6 @@ for _, g := range grants {
     // inherit g.Using; an insert grant must set it, to "true" if unrestricted.
     sourceDB.Exec(`SELECT bridge_policy(?, ?, ?, ?, ?)`, bridgeID, g.Table, g.Verb, g.Using, g.Check)
 }
-sourceDB.Exec(`SELECT bridge_finalize(?)`, bridgeID)
 
 // target connection. ATTACH options are folded to constants at bind time, so the id and the
 // token go into the statement text rather than into placeholders.

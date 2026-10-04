@@ -233,15 +233,15 @@ SELECT bridge_primary_key_check('v1', 'main.users', 'SELECT id FROM memory.main.
 ----
 ok
 
-# --- finalize-time validation ----------------------------------------------
-# A rejected finalize leaves the bridge open, so it can be fixed with another bridge_policy call and
-# finalized again; the token is unchanged.
+# --- freeze-time validation -------------------------------------------------
+# Both checks run before the pending source is consumed, so a rejected attach can be fixed with
+# another bridge_policy call and retried with the SAME token.
 
 statement ok
 SELECT bridge_register_source('v_empty', 'memory', 'tok_empty');
 
 statement error
-SELECT bridge_finalize('v_empty');
+ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
 ----
 has no policies
 
@@ -250,21 +250,14 @@ SELECT bridge_policy('v_empty', 'main.users', 'delete', 'true');
 
 # UPDATE and DELETE are driven by a scan of the table, so they cannot be granted without select.
 statement error
-SELECT bridge_finalize('v_empty');
-----
-without 'select'
-
-statement error
 ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
 ----
-is not finalized
+without 'select'
 
 statement ok
 SELECT bridge_policy('v_empty', 'main.users', 'select', 'true');
 
-statement ok
-SELECT bridge_finalize('v_empty');
-
+# Same token, still live: neither rejection consumed the pending source.
 statement ok
 ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
 
@@ -310,9 +303,6 @@ ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'never_registered', TOKEN 'tok_
 ----
 no registered source for bridge
 
-statement ok
-SELECT bridge_finalize('hs_b');
-
 # None of the refusals consumed hs_b's pending source: its original token still works.
 statement ok
 ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_b', TOKEN 'tok_hs_b');
@@ -343,9 +333,6 @@ SELECT bridge_register_source('hs_b', 'memory', 'tok_hs_reuse');
 
 statement ok
 SELECT bridge_policy('hs_b', 'main.users', 'select', 'true');
-
-statement ok
-SELECT bridge_finalize('hs_b');
 
 statement ok
 ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_b', TOKEN 'tok_hs_reuse');
@@ -380,9 +367,6 @@ SELECT bridge_policy('hs_multi', 'main.users', 'select', 'true');
 
 statement ok
 SELECT bridge_policy('hs_multi', 'sales.orders', 'select', 'true');
-
-statement ok
-SELECT bridge_finalize('hs_multi');
 
 # No CREATE SCHEMA hs.sales anywhere above.
 statement ok

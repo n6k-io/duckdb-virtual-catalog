@@ -24,9 +24,6 @@ statement ok
 SELECT bridge_policy('v2_mb_a', 'main.users', 'select', 'true');
 
 statement ok
-SELECT bridge_finalize('v2_mb_a');
-
-statement ok
 ATTACH '' AS app_a (TYPE virtual_catalog_bridge, ID 'v2_mb_a', TOKEN 'tok_mb_a');
 
 # Second bridge over the same source: logs only, with a policy of its own.
@@ -35,9 +32,6 @@ SELECT bridge_register_source('v2_mb_b', 'memory', 'tok_mb_b');
 
 statement ok
 SELECT bridge_policy('v2_mb_b', 'main.logs', 'select', 'id = 1');
-
-statement ok
-SELECT bridge_finalize('v2_mb_b');
 
 statement ok
 ATTACH '' AS app_b (TYPE virtual_catalog_bridge, ID 'v2_mb_b', TOKEN 'tok_mb_b');
@@ -77,9 +71,6 @@ SELECT bridge_register_source('v2_mb_c', 'memory', 'tok_mb_c');
 
 statement ok
 SELECT bridge_policy('v2_mb_c', 'main.users', 'select', 'id = 2');
-
-statement ok
-SELECT bridge_finalize('v2_mb_c');
 
 statement ok
 ATTACH '' AS app_c (TYPE virtual_catalog_bridge, ID 'v2_mb_c', TOKEN 'tok_mb_c');

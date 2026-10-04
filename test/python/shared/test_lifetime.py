@@ -74,7 +74,6 @@ def test_target_detach_then_reattach():
 
     token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
     source.execute("SELECT bridge_policy(?, 'main.users', 'select', 'true')", [bridge_id])
-    source.execute("SELECT bridge_finalize(?)", [bridge_id])
     target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     assert target.execute("SELECT count(*) FROM app.main.users").fetchone() == (1,)
     source.close()
@@ -89,7 +88,6 @@ def test_process_exits_cleanly_with_a_bridge_still_bound():
         source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY)")
         source.execute("SELECT bridge_register_source('leak', 'memory', 'tok_leak')")
         source.execute("SELECT bridge_policy('leak', 'main.users', 'select', 'true')")
-        source.execute("SELECT bridge_finalize('leak')")
         target.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'leak', TOKEN 'tok_leak')")
         print(target.execute("SELECT count(*) FROM app.main.users").fetchone()[0])
     """
@@ -106,7 +104,6 @@ def test_process_exits_cleanly_after_unregister():
         source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY)")
         source.execute("SELECT bridge_register_source('tidy', 'memory', 'tok_tidy')")
         source.execute("SELECT bridge_policy('tidy', 'main.users', 'select', 'true')")
-        source.execute("SELECT bridge_finalize('tidy')")
         target.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'tidy', TOKEN 'tok_tidy')")
         target.execute("DETACH app")
         source.close()
@@ -126,7 +123,6 @@ def test_process_exits_cleanly_with_the_source_closed_first():
         source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY); INSERT INTO users VALUES (1)")
         source.execute("SELECT bridge_register_source('orphan', 'memory', 'tok_orphan')")
         source.execute("SELECT bridge_policy('orphan', 'main.users', 'select', 'true')")
-        source.execute("SELECT bridge_finalize('orphan')")
         target.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'orphan', TOKEN 'tok_orphan')")
         source.close()
         print(target.execute("SELECT count(*) FROM app.main.users").fetchone()[0])
@@ -179,7 +175,6 @@ def test_bridge_id_is_reusable_after_detach():
 
     token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
     source.execute("SELECT bridge_policy(?, 'main.users', 'select', 'true')", [bridge_id])
-    source.execute("SELECT bridge_finalize(?)", [bridge_id])
     target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     assert target.execute("SELECT count(*) FROM app.main.users").fetchone() == (1,)
     unbridge(target)

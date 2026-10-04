@@ -17,9 +17,6 @@ statement ok
 SELECT bridge_policy('d_b', 'main.users', v, 'true', c) FROM (VALUES ('select', NULL), ('insert', 'true'), ('update', NULL), ('delete', NULL)) _(v, c);
 
 statement ok
-SELECT bridge_finalize('d_b');
-
-statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'd_b', TOKEN 'tok_d_b');
 
 # A DEFAULT target binds to a BoundDefaultExpression; BridgeUpdate::Sink evaluates it through the

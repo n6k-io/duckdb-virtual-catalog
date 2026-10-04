@@ -32,9 +32,6 @@ statement ok
 SELECT bridge_policy('v2_delete', 'main.nokey', 'delete', 'true');
 
 statement ok
-SELECT bridge_finalize('v2_delete');
-
-statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_delete', TOKEN 'tok_delete');
 
 statement ok

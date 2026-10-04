@@ -17,9 +17,6 @@ statement ok
 SELECT bridge_policy('v2_policy', 'main.orders', 'select', 'tenant = 7');
 
 statement ok
-SELECT bridge_finalize('v2_policy');
-
-statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_policy', TOKEN 'tok_policy');
 
 # Tenant 9 is not reachable at all.
