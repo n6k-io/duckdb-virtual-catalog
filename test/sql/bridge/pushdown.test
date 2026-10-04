@@ -26,6 +26,9 @@ statement ok
 SELECT bridge_policy('v2_pushdown', 'main.customers', 'select', 'true');
 
 statement ok
+SELECT bridge_finalize('v2_pushdown');
+
+statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_pushdown', TOKEN 'tok_pushdown');
 
 # A filter the source can run reaches the fragment, and shows up in the plan the scan carries.

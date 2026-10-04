@@ -101,6 +101,7 @@ def test_detach_frees_the_id_and_the_source(two_sources, target):
 
     token = a.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
     a.execute("SELECT bridge_policy(?, 'main.alpha', 'select', 'true')", [bridge_id])
+    a.execute("SELECT bridge_finalize(?)", [bridge_id])
     target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     assert target.execute("SELECT v FROM app.main.alpha").fetchall() == [("from-a",)]
     unbridge(target)

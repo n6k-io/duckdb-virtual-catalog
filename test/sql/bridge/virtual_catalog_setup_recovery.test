@@ -31,6 +31,9 @@ ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'recv_a', TOKEN '');
 cannot be empty
 
 statement ok
+SELECT bridge_finalize('recv_a');
+
+statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'recv_a', TOKEN 'tok_recv_a');
 
 query I

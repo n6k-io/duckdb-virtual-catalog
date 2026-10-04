@@ -17,6 +17,9 @@ statement ok
 SELECT bridge_policy('oc_b', 'main.users', v, 'true', c) FROM (VALUES ('select', NULL), ('insert', 'true'), ('update', NULL), ('delete', NULL)) _(v, c);
 
 statement ok
+SELECT bridge_finalize('oc_b');
+
+statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'oc_b', TOKEN 'tok_oc_b');
 
 # The conflict target comes from the entry's index_info, which reports the unique constraints the

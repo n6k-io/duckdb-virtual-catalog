@@ -23,6 +23,9 @@ statement ok
 SELECT bridge_policy('sr_b', 'main.anchor', 'select', 'true');
 
 statement ok
+SELECT bridge_finalize('sr_b');
+
+statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'sr_b', TOKEN 'tok_sr_b');
 
 statement ok

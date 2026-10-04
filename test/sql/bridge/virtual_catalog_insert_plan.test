@@ -17,6 +17,9 @@ statement ok
 SELECT bridge_policy('ins_plan', 'main.t', 'insert', 'true', 'true');
 
 statement ok
+SELECT bridge_finalize('ins_plan');
+
+statement ok
 ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ins_plan', TOKEN 'tok_ins_plan');
 
 # ---------------------------------------------------------------------------
@@ -82,6 +85,9 @@ SELECT bridge_policy('ins_check', 'main.c', 'select', 'true');
 
 statement ok
 SELECT bridge_policy('ins_check', 'main.c', 'insert', 'true', 'amt < 100');
+
+statement ok
+SELECT bridge_finalize('ins_check');
 
 statement ok
 ATTACH '' AS ck (TYPE virtual_catalog_bridge, ID 'ins_check', TOKEN 'tok_ins_check');

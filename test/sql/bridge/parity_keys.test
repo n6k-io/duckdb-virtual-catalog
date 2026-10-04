@@ -66,6 +66,9 @@ statement ok
 SELECT bridge_primary_key_check('v2_parity_keys', 'main.nopk', 'SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1');
 
 statement ok
+SELECT bridge_finalize('v2_parity_keys');
+
+statement ok
 ATTACH '' AS k (TYPE virtual_catalog_bridge, ID 'v2_parity_keys', TOKEN 'tok_parity_keys');
 
 # The asserted key is what the catalog reports and what a delete addresses rows by.

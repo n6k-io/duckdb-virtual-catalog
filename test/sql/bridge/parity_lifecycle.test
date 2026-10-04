@@ -28,6 +28,9 @@ ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'never_registered', TOKEN 'tok_
 no registered source
 
 statement ok
+SELECT bridge_finalize('v2_recv_a');
+
+statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_recv_a', TOKEN 'tok_recv_a');
 
 query I
@@ -99,6 +102,9 @@ SELECT bridge_register_source('v2_recv_c', 'memory', 'tok_recv_c');
 
 statement ok
 SELECT bridge_policy('v2_recv_c', 'main.users', 'select', 'true');
+
+statement ok
+SELECT bridge_finalize('v2_recv_c');
 
 statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_recv_c', TOKEN 'tok_recv_c');

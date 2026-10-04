@@ -127,6 +127,7 @@ def test_primary_key_query_supplies_a_key_discovery_cannot_find(source, target):
     source.execute(f"SELECT {fn(source, 'primary_key_query')}(?, 'main.q', ?)", [bridge_id, "SELECT 'code'"])
     source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.q', 'select', 'tenant = 1')", [bridge_id])
     source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.q', 'update', 'true')", [bridge_id])
+    source.execute(f"SELECT {fn(source, 'finalize')}(?)", [bridge_id])
     target.execute(f"ATTACH '' AS app (TYPE {attach_type(target)}, ID '{bridge_id}', TOKEN '{token}')")
 
     assert target.execute("UPDATE app.main.q SET v = 'P'").fetchall() == [(1,)]

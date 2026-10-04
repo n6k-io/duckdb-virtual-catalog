@@ -288,6 +288,7 @@ def checked(source, target):
     token = source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id]).fetchone()[0]
     source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.wide', 'select', 'true')", [bridge_id])
     source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.wide', 'insert', 'true', ?)", [bridge_id, "score < 100"])
+    source.execute(f"SELECT {fn(source, 'finalize')}(?)", [bridge_id])
     target.execute(f"ATTACH '' AS app (TYPE {attach_type(target)}, ID '{bridge_id}', TOKEN '{token}')")
     return source, target
 
@@ -436,6 +437,7 @@ def checked_update(source, target):
     token = source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id]).fetchone()[0]
     source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.keyed', 'select', 'true')", [bridge_id])
     source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.keyed', 'update', 'true', ?)", [bridge_id, "score < 100"])
+    source.execute(f"SELECT {fn(source, 'finalize')}(?)", [bridge_id])
     target.execute(f"ATTACH '' AS app (TYPE {attach_type(target)}, ID '{bridge_id}', TOKEN '{token}')")
     return source, target
 
@@ -471,6 +473,7 @@ def test_update_check_reads_columns_the_statement_does_not_set(source, target):
     source.execute(
         f"SELECT {fn(source, 'policy')}(?, 'main.keyed', 'update', 'true', ?)", [bridge_id, "name <> 'blocked'"]
     )
+    source.execute(f"SELECT {fn(source, 'finalize')}(?)", [bridge_id])
     target.execute(f"ATTACH '' AS app (TYPE {attach_type(target)}, ID '{bridge_id}', TOKEN '{token}')")
 
     target.execute("UPDATE app.main.keyed SET score = 1 WHERE id = 1")

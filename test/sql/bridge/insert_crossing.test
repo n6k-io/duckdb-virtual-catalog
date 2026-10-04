@@ -26,6 +26,9 @@ statement ok
 SELECT bridge_policy('ic', 'main.dst', 'insert', 'true', 'true');
 
 statement ok
+SELECT bridge_finalize('ic');
+
+statement ok
 ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ic', TOKEN 'tok_ic');
 
 # ---------------------------------------------------------------------------
@@ -82,6 +85,9 @@ SELECT bridge_policy('ig', 'main.guarded', 'select', 'true');
 
 statement ok
 SELECT bridge_policy('ig', 'main.guarded', 'insert', 'true', 'amt < 15');
+
+statement ok
+SELECT bridge_finalize('ig');
 
 statement ok
 ATTACH '' AS g (TYPE virtual_catalog_bridge, ID 'ig', TOKEN 'tok_ig');

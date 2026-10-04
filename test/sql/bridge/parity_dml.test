@@ -20,6 +20,9 @@ statement ok
 SELECT bridge_policy('v2_oc', 'main.users', 'insert', 'true', 'true');
 
 statement ok
+SELECT bridge_finalize('v2_oc');
+
+statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_oc', TOKEN 'tok_oc');
 
 statement ok

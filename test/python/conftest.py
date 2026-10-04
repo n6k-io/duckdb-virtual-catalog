@@ -144,6 +144,7 @@ def bridge(
                 source.execute("SELECT bridge_policy(?, ?, ?, ?)", [bridge_id, qualify(table), verb, using])
             else:
                 source.execute("SELECT bridge_policy(?, ?, ?, ?, ?)", [bridge_id, qualify(table), verb, using, check])
+    source.execute("SELECT bridge_finalize(?)", [bridge_id])
     # ATTACH options are folded to constants at bind time, so the token cannot be a parameter.
     target.execute(f"ATTACH '' AS {catalog} (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id

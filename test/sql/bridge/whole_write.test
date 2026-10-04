@@ -23,6 +23,9 @@ statement ok
 SELECT bridge_policy('ww', 'main.orders', 'delete', 'true');
 
 statement ok
+SELECT bridge_finalize('ww');
+
+statement ok
 ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ww', TOKEN 'tok_ww');
 
 # ---------------------------------------------------------------------------
@@ -84,6 +87,9 @@ SELECT bridge_policy('ws', 'main.scoped', 'select', 'true');
 
 statement ok
 SELECT bridge_policy('ws', 'main.scoped', 'update', 'tenant = 1');
+
+statement ok
+SELECT bridge_finalize('ws');
 
 statement ok
 ATTACH '' AS s (TYPE virtual_catalog_bridge, ID 'ws', TOKEN 'tok_ws');

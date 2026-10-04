@@ -1,0 +1,67 @@
+# name: test/sql/bridge/bridge_finalize.test
+# description: bridge_finalize seals a bridge on the source; ATTACH requires it.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
+
+statement ok
+INSERT INTO memory.main.users VALUES (1, 'a');
+
+statement error
+SELECT bridge_finalize('never_registered');
+----
+no registered source for bridge
+
+statement ok
+SELECT bridge_register_source('fin', 'memory', 'tok_fin');
+
+statement ok
+SELECT bridge_policy('fin', 'main.users', 'select', 'true');
+
+statement error
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'fin', TOKEN 'tok_fin');
+----
+is not finalized
+
+# The token is checked before finalization, so a wrong token is reported as such.
+statement error
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'fin', TOKEN 'wrong');
+----
+invalid setup token
+
+statement ok
+SELECT bridge_finalize('fin');
+
+statement error
+SELECT bridge_finalize('fin');
+----
+is finalized
+
+statement error
+SELECT bridge_policy('fin', 'main.users', 'update', 'true');
+----
+is finalized
+
+statement error
+SELECT bridge_set_context('fin', 'tenant', 7);
+----
+is finalized
+
+statement error
+SELECT bridge_primary_key('fin', 'main.users', ['id']);
+----
+is finalized
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'fin', TOKEN 'tok_fin');
+
+query IT
+SELECT * FROM b.main.users;
+----
+1	a
+
+statement ok
+DETACH b;

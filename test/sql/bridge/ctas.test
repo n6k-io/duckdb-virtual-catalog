@@ -20,6 +20,9 @@ statement ok
 SELECT bridge_policy('ctas', 'main.orders', 'select', 'amt > 100');
 
 statement ok
+SELECT bridge_finalize('ctas');
+
+statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ctas', TOKEN 'tok_ctas');
 
 # From a bridged table: the select policy applies to what is copied.
