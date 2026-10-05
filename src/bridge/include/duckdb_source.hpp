@@ -41,11 +41,18 @@ struct SourceGrant {
 	}
 };
 
+struct BridgeContext {
+	mutex lock;
+	case_insensitive_map_t<Value> values;
+	bool finalized = false;
+};
+
 struct GrantBook {
 	mutex lock;
 	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> tables;
 	case_insensitive_set_t create_schemas;
 	case_insensitive_map_t<shared_ptr<Connection>> shaping;
+	shared_ptr<BridgeContext> context;
 };
 
 class DuckDBSession {
@@ -80,7 +87,8 @@ class DuckDBSource {
 public:
 	using Session = DuckDBSession;
 
-	DuckDBSource(shared_ptr<DatabaseInstance> source_db, string source_catalog, shared_ptr<GrantBook> grants);
+	DuckDBSource(string bridge_id, shared_ptr<DatabaseInstance> source_db, string source_catalog,
+	             shared_ptr<GrantBook> grants);
 	~DuckDBSource();
 
 	vector<string> Schemas();
@@ -97,6 +105,7 @@ private:
 
 	bool SourceHasFunction(const string &function_name);
 
+	string bridge_id;
 	shared_ptr<DatabaseInstance> source_db;
 	string source_catalog;
 	shared_ptr<GrantBook> grants;

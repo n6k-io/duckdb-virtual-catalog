@@ -22,10 +22,12 @@ schema lands in the target schema of the same name.
 | Function | Arguments |
 |---|---|
 | `bridge_register_source` | `bridge_id, source_catalog[, token]` → token. With two arguments the token is generated as `NONCE:UUID`; with three the source names it |
+| `bridge_set_context` | `bridge_id, name, value ANY` — a value policies reference as `$name`. Must precede the `bridge_policy` that uses it. Works before and after `ATTACH`; overwrites, and the target's next statement uses the new value. Refused when the value breaks a policy that uses it, when NULL, or after `bridge_finalize_context` |
 | `bridge_policy` | `bridge_id, 'schema.table', verb, policy_using[, policy_check]` — verb is `select\|insert\|update\|delete\|alter`; the same `(table, verb)` twice is an error. `policy_using` is mandatory (`'true'` = unrestricted) and says which rows the verb may reach. `policy_check` says what it may write, applies to `insert` and `update` only, and is a violation when it evaluates to NULL. Per verb: `update` defaults it to `policy_using` when omitted; `insert` must state it (`'true'` to opt out) because an insert has no USING to inherit; `select` and `delete` write no row and reject it. On `update` it is evaluated against the row as it will be *after* the update |
 | `bridge_primary_key` | `bridge_id, 'schema.table', columns VARCHAR[]` — overrides discovery |
 | `bridge_primary_key_query` | `bridge_id, 'schema.table', sql` — runs `sql` on the source; column 0 of every row is a key column, in key order |
 | `bridge_primary_key_check` | `bridge_id, 'schema.table', sql` — runs `sql` on the source; zero rows accepts the declared key, any row rejects it |
+| `bridge_finalize_context` | `bridge_id` — optional; freezes the context, before or after `ATTACH` |
 
 ## Providers
 

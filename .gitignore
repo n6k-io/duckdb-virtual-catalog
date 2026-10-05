@@ -10,3 +10,4 @@ scratch/
 .env
 .idit/
 *.pyc
+.allonomic/

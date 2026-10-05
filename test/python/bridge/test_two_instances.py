@@ -6,7 +6,7 @@ with the source and the target sharing a DatabaseInstance. These are the tests t
 
 import pytest
 
-from conftest import READ, READWRITE, bridge, unbridge
+from conftest import READ, READWRITE, bridge, unbridge, unique_id
 
 
 def seed(source):
@@ -103,6 +103,35 @@ def test_detach_releases_the_catalog(source, target):
     unbridge(target)
     with pytest.raises(duckdb_error()):
         target.execute("SELECT count(*) FROM app.main.orders").fetchall()
+
+
+def test_only_the_source_drives_a_live_context(source, target):
+    seed(source)
+    bridge_id = unique_id()
+    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT bridge_set_context(?, 'tenant', 7)", [bridge_id])
+    source.execute("SELECT bridge_policy(?, 'main.orders', 'select', 'tenant = $tenant')", [bridge_id])
+
+    with pytest.raises(duckdb_error(), match="different source connection"):
+        target.execute("SELECT bridge_set_context(?, 'tenant', 9)", [bridge_id])
+    with pytest.raises(duckdb_error(), match="different source connection"):
+        target.execute("SELECT bridge_finalize_context(?)", [bridge_id])
+
+    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    assert target.execute("SELECT count(*) FROM app.main.orders").fetchone()[0] == 3
+
+    with pytest.raises(duckdb_error(), match="different source connection"):
+        target.execute("SELECT bridge_set_context(?, 'tenant', 9)", [bridge_id])
+    with pytest.raises(duckdb_error(), match="different source connection"):
+        target.execute("SELECT bridge_finalize_context(?)", [bridge_id])
+
+    source.execute("SELECT bridge_set_context(?, 'tenant', 9)", [bridge_id])
+    assert target.execute("SELECT count(*) FROM app.main.orders").fetchone()[0] == 1
+
+    source.execute("SELECT bridge_finalize_context(?)", [bridge_id])
+    with pytest.raises(duckdb_error(), match="is finalized"):
+        source.execute("SELECT bridge_set_context(?, 'tenant', 7)", [bridge_id])
+    unbridge(target)
 
 
 def duckdb_error():

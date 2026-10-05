@@ -89,7 +89,7 @@ must be a single expression
 statement error
 SELECT bridge_policy('v1', 'main.users', 'select', 'id = $1');
 ----
-may not contain parameters
+not positional ones
 
 # A WHERE clause would coerce all three of these, and the policy would then be stored as something
 # that is not a predicate at all. The predicate is projected and type-checked instead.

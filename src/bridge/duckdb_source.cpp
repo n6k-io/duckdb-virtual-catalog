@@ -19,6 +19,7 @@
 #include "duckdb/parser/expression/case_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/parameter_expression.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/statement/delete_statement.hpp"
 #include "duckdb/parser/statement/insert_statement.hpp"
@@ -54,6 +55,13 @@ struct PendingV2Source {
 	std::chrono::steady_clock::time_point last_touched;
 	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> schemas;
 	case_insensitive_set_t create_schemas;
+	shared_ptr<BridgeContext> context = make_shared_ptr<BridgeContext>();
+};
+
+struct LiveBridge {
+	DatabaseInstance *source_db;
+	string source_catalog;
+	weak_ptr<GrantBook> grants;
 };
 
 constexpr int64_t PENDING_SOURCE_TTL_SECONDS = 30;
@@ -71,6 +79,11 @@ mutex &PendingMutex() {
 unordered_map<string, PendingV2Source> &PendingSources() {
 	static auto *pending = new unordered_map<string, PendingV2Source>();
 	return *pending;
+}
+
+unordered_map<string, LiveBridge> &LiveBridges() {
+	static auto *live = new unordered_map<string, LiveBridge>();
+	return *live;
 }
 
 void PurgeExpiredPendingSources() {
@@ -197,28 +210,38 @@ bool IsUnrestricted(const string &text) {
 	return StringUtil::CIEquals(text.substr(first, last - first + 1), "true");
 }
 
-bool ExpressionContainsParameter(const ParsedExpression &expr) {
+void ContextNames(const ParsedExpression &expr, case_insensitive_set_t &names) {
 	if (expr.GetExpressionClass() == ExpressionClass::PARAMETER) {
-		return true;
+		names.insert(expr.Cast<ParameterExpression>().identifier);
+		return;
 	}
-	bool found = false;
-	ParsedExpressionIterator::EnumerateChildren(
-	    expr, [&](const ParsedExpression &child) { found = found || ExpressionContainsParameter(child); });
-	return found;
+	ParsedExpressionIterator::EnumerateChildren(expr,
+	                                            [&](const ParsedExpression &child) { ContextNames(child, names); });
 }
 
-unique_ptr<ParsedExpression> ParseAndValidatePredicate(const shared_ptr<Relation> &source_table, const string &text,
-                                                       const char *clause) {
-	auto parsed = Parser::ParseExpressionList(text);
-	if (parsed.size() != 1) {
-		throw IOException("virtual_catalog_bridge: the %s predicate must be a single expression", clause);
+void FillContext(unique_ptr<ParsedExpression> &expr, const case_insensitive_map_t<Value> &values) {
+	if (expr->GetExpressionClass() == ExpressionClass::PARAMETER) {
+		auto &name = expr->Cast<ParameterExpression>().identifier;
+		auto it = values.find(name);
+		if (it == values.end()) {
+			throw InternalException("virtual_catalog_bridge: context '$%s' is not set", name);
+		}
+		expr = make_uniq<ConstantExpression>(it->second);
+		return;
 	}
-	auto expr = std::move(parsed[0]);
-	if (ExpressionContainsParameter(*expr)) {
-		throw IOException("virtual_catalog_bridge: the %s predicate '%s' may not contain parameters", clause, text);
-	}
-	ClearQueryLocations(*expr);
+	ParsedExpressionIterator::EnumerateChildren(
+	    *expr, [&](unique_ptr<ParsedExpression> &child) { FillContext(child, values); });
+}
 
+case_insensitive_map_t<Value> ContextSnapshot(BridgeContext &context) {
+	lock_guard<mutex> guard(context.lock);
+	return context.values;
+}
+
+void ProbePredicate(const shared_ptr<Relation> &source_table, const ParsedExpression &predicate,
+                    const case_insensitive_map_t<Value> &values, const string &text, const char *clause) {
+	auto expr = predicate.Copy();
+	FillContext(expr, values);
 	shared_ptr<Relation> probe;
 	try {
 		source_table->Filter(expr->Copy());
@@ -238,6 +261,32 @@ unique_ptr<ParsedExpression> ParseAndValidatePredicate(const shared_ptr<Relation
 		throw IOException("virtual_catalog_bridge: the %s predicate '%s' must be BOOLEAN, but it is %s", clause, text,
 		                  columns[0].Type().ToString());
 	}
+}
+
+unique_ptr<ParsedExpression> ParseAndValidatePredicate(const shared_ptr<Relation> &source_table, const string &text,
+                                                       const char *clause,
+                                                       const case_insensitive_map_t<Value> &values) {
+	auto parsed = Parser::ParseExpressionList(text);
+	if (parsed.size() != 1) {
+		throw IOException("virtual_catalog_bridge: the %s predicate must be a single expression", clause);
+	}
+	auto expr = std::move(parsed[0]);
+	case_insensitive_set_t names;
+	ContextNames(*expr, names);
+	for (auto &name : names) {
+		if (std::all_of(name.begin(), name.end(), StringUtil::CharacterIsDigit)) {
+			throw IOException("virtual_catalog_bridge: the %s predicate '%s' may only use named context "
+			                  "parameters ($name), not positional ones",
+			                  clause, text);
+		}
+		if (!values.count(name)) {
+			throw IOException("virtual_catalog_bridge: the %s predicate '%s' uses context '$%s', which is not set; "
+			                  "call bridge_set_context before bridge_policy",
+			                  clause, text, name);
+		}
+	}
+	ClearQueryLocations(*expr);
+	ProbePredicate(source_table, *expr, values, text, clause);
 	return expr;
 }
 
@@ -332,11 +381,13 @@ unique_ptr<ParsedExpression> And(unique_ptr<ParsedExpression> left, unique_ptr<P
 //! Stands the table behind its select policy: a floor with a policy binds to
 //! `SELECT <columns> FROM catalog.schema.table WHERE <using>`, one without binds to the table.
 CrossingFloorResolver PolicyResolver(const shared_ptr<GrantBook> &grants, const string &source_catalog) {
-	return [grants, source_catalog](const CrossingFloor &floor) -> unique_ptr<TableRef> {
+	auto values = ContextSnapshot(*grants->context);
+	return [grants, source_catalog, values](const CrossingFloor &floor) -> unique_ptr<TableRef> {
 		auto using_predicate = UsingFor(*grants, floor.schema, floor.table, CrossingVerb::SELECT);
 		if (!using_predicate) {
 			return nullptr;
 		}
+		FillContext(using_predicate, values);
 		auto table_ref = make_uniq<BaseTableRef>();
 		table_ref->catalog_name = source_catalog;
 		table_ref->schema_name = floor.schema;
@@ -357,9 +408,16 @@ CrossingFloorResolver PolicyResolver(const shared_ptr<GrantBook> &grants, const 
 //! rows an update or delete touches, the check guards the first written value with error() so a
 //! violating row fails the statement.
 CrossingWriteShaper PolicyShaper(const shared_ptr<GrantBook> &grants, const CrossingWriteTarget &target) {
-	return [grants, target](CrossingWriteStatement &built) {
+	auto values = ContextSnapshot(*grants->context);
+	return [grants, target, values](CrossingWriteStatement &built) {
 		auto using_predicate = UsingFor(*grants, target.schema, target.table, target.verb);
 		auto check = CheckFor(*grants, target.schema, target.table, target.verb);
+		if (using_predicate) {
+			FillContext(using_predicate, values);
+		}
+		if (check) {
+			FillContext(check, values);
+		}
 		switch (target.verb) {
 		case CrossingVerb::INSERT: {
 			if (!check) {
@@ -469,11 +527,12 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 
 			auto source_table = source_conn.Table(pending.source_catalog, schema, table);
 
-			auto using_predicate = ParseAndValidatePredicate(source_table, using_text, "USING");
+			auto values = ContextSnapshot(*pending.context);
+			auto using_predicate = ParseAndValidatePredicate(source_table, using_text, "USING", values);
 			unique_ptr<ParsedExpression> check_predicate;
 			if (has_check) {
 				auto checks = FlatVector::GetData<string_t>(args.data[4]);
-				check_predicate = ParseAndValidatePredicate(source_table, checks[i].GetString(), "WITH CHECK");
+				check_predicate = ParseAndValidatePredicate(source_table, checks[i].GetString(), "WITH CHECK", values);
 			} else if (verb == CrossingVerb::INSERT) {
 				throw IOException("virtual_catalog_bridge: an 'insert' grant must state a WITH CHECK predicate");
 			} else if (verb == CrossingVerb::UPDATE && using_predicate) {
@@ -685,6 +744,155 @@ void PrimaryKeyCheckFunc(DataChunk &args, ExpressionState &state, Vector &result
 	}
 }
 
+struct ContextDependent {
+	string schema;
+	string table;
+	const char *clause;
+	unique_ptr<ParsedExpression> predicate;
+};
+
+struct ContextTarget {
+	shared_ptr<BridgeContext> context;
+	string source_catalog;
+	vector<ContextDependent> dependents;
+};
+
+void CollectDependents(const case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> &tables, const string &name,
+                       vector<ContextDependent> &out) {
+	auto uses_name = [&](const unique_ptr<ParsedExpression> &predicate) {
+		if (!predicate) {
+			return false;
+		}
+		case_insensitive_set_t names;
+		ContextNames(*predicate, names);
+		return names.count(name) > 0;
+	};
+	for (auto &schema_entry : tables) {
+		for (auto &table_entry : schema_entry.second) {
+			auto &grant = table_entry.second;
+			for (idx_t v = 0; v < grant.using_predicates.size(); v++) {
+				if (uses_name(grant.using_predicates[v])) {
+					out.push_back({schema_entry.first, table_entry.first, "USING", grant.using_predicates[v]->Copy()});
+				}
+				if (uses_name(grant.check_predicates[v])) {
+					out.push_back(
+					    {schema_entry.first, table_entry.first, "WITH CHECK", grant.check_predicates[v]->Copy()});
+				}
+			}
+		}
+	}
+}
+
+//! Caller holds PendingMutex. A bridge's context outlives its pending entry: once attached it is found
+//! through LiveBridges until the DuckDBSource is destroyed.
+ContextTarget LookupContext(const string &bridge_id, ClientContext &context, const string &name) {
+	ContextTarget target;
+	PurgeExpiredPendingSources();
+	if (PendingSources().count(bridge_id)) {
+		auto &pending = LookupPendingForGrant(bridge_id, context);
+		target.context = pending.context;
+		target.source_catalog = pending.source_catalog;
+		if (!name.empty()) {
+			CollectDependents(pending.schemas, name, target.dependents);
+		}
+		return target;
+	}
+	auto it = LiveBridges().find(bridge_id);
+	shared_ptr<GrantBook> grants;
+	if (it != LiveBridges().end()) {
+		grants = it->second.grants.lock();
+	}
+	if (!grants) {
+		throw PermissionException("virtual_catalog_bridge: no registered source for bridge '%s'", bridge_id);
+	}
+	if (it->second.source_db != context.db.get()) {
+		throw PermissionException("virtual_catalog_bridge: bridge '%s' was registered by a different source connection",
+		                          bridge_id);
+	}
+	target.context = grants->context;
+	target.source_catalog = it->second.source_catalog;
+	if (!name.empty()) {
+		lock_guard<mutex> guard(grants->lock);
+		CollectDependents(grants->tables, name, target.dependents);
+	}
+	return target;
+}
+
+void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &context = state.GetContext();
+	auto count = args.size();
+	auto result_data = FlatVector::GetData<string_t>(result);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto id_value = args.data[0].GetValue(i);
+		auto name_value = args.data[1].GetValue(i);
+		auto value = args.data[2].GetValue(i);
+		if (id_value.IsNull() || name_value.IsNull()) {
+			throw IOException("virtual_catalog_bridge: bridge_set_context needs a bridge id and a context name");
+		}
+		auto bridge_id = StringValue::Get(id_value);
+		auto name = StringValue::Get(name_value);
+		if (name.empty()) {
+			throw IOException("virtual_catalog_bridge: the context name cannot be empty");
+		}
+		if (value.IsNull()) {
+			throw IOException("virtual_catalog_bridge: context '%s' cannot be NULL", name);
+		}
+		lock_guard<mutex> lock(PendingMutex());
+		auto target = LookupContext(bridge_id, context, name);
+		auto values = ContextSnapshot(*target.context);
+		if (target.context->finalized) {
+			throw PermissionException("virtual_catalog_bridge: the context of bridge '%s' is finalized", bridge_id);
+		}
+		values[name] = value;
+		if (!target.dependents.empty()) {
+			Connection source_conn(*context.db);
+			source_conn.BeginTransaction();
+			try {
+				for (auto &dependent : target.dependents) {
+					EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, dependent.table);
+					auto entry = Catalog::GetEntry(*source_conn.context, target.source_catalog, dependent.schema,
+					                               lookup, OnEntryNotFound::RETURN_NULL);
+					if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
+						continue;
+					}
+					auto source_table = source_conn.Table(target.source_catalog, dependent.schema, dependent.table);
+					ProbePredicate(source_table, *dependent.predicate, values, dependent.predicate->ToString(),
+					               dependent.clause);
+				}
+			} catch (...) {
+				source_conn.Rollback();
+				throw;
+			}
+			source_conn.Rollback();
+		}
+		lock_guard<mutex> guard(target.context->lock);
+		target.context->values[name] = std::move(value);
+		result_data[i] = StringVector::AddString(result, "ok");
+	}
+}
+
+void FinalizeContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &context = state.GetContext();
+	auto count = args.size();
+	args.data[0].Flatten(count);
+	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
+	auto result_data = FlatVector::GetData<string_t>(result);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto bridge_id = bridge_ids[i].GetString();
+		lock_guard<mutex> lock(PendingMutex());
+		auto target = LookupContext(bridge_id, context, string());
+		lock_guard<mutex> guard(target.context->lock);
+		if (target.context->finalized) {
+			throw PermissionException("virtual_catalog_bridge: the context of bridge '%s' is already finalized",
+			                          bridge_id);
+		}
+		target.context->finalized = true;
+		result_data[i] = StringVector::AddString(result, "ok");
+	}
+}
+
 } // namespace
 
 unique_ptr<DuckDBSource> RedeemBridgeAttach(ClientContext &, AttachInfo &info) {
@@ -736,12 +944,14 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(ClientContext &, AttachInfo &info) {
 			                          bridge_id);
 		}
 		source_db = it->second.source_db;
-		source_catalog = std::move(it->second.source_catalog);
+		source_catalog = it->second.source_catalog;
 		grants->tables = std::move(it->second.schemas);
 		grants->create_schemas = std::move(it->second.create_schemas);
+		grants->context = std::move(it->second.context);
 		PendingSources().erase(it);
+		LiveBridges()[bridge_id] = LiveBridge {source_db.get(), source_catalog, grants};
 	}
-	return make_uniq<DuckDBSource>(source_db, std::move(source_catalog), std::move(grants));
+	return make_uniq<DuckDBSource>(bridge_id, source_db, std::move(source_catalog), std::move(grants));
 }
 
 bool TryParseCrossingVerb(const string &text, CrossingVerb &out) {
@@ -754,12 +964,19 @@ bool TryParseCrossingVerb(const string &text, CrossingVerb &out) {
 	return false;
 }
 
-DuckDBSource::DuckDBSource(shared_ptr<DatabaseInstance> source_db_p, string source_catalog_p,
+DuckDBSource::DuckDBSource(string bridge_id_p, shared_ptr<DatabaseInstance> source_db_p, string source_catalog_p,
                            shared_ptr<GrantBook> grants_p)
-    : source_db(std::move(source_db_p)), source_catalog(std::move(source_catalog_p)), grants(std::move(grants_p)) {
+    : bridge_id(std::move(bridge_id_p)), source_db(std::move(source_db_p)), source_catalog(std::move(source_catalog_p)),
+      grants(std::move(grants_p)) {
 }
 
-DuckDBSource::~DuckDBSource() = default;
+DuckDBSource::~DuckDBSource() {
+	lock_guard<mutex> lock(PendingMutex());
+	auto it = LiveBridges().find(bridge_id);
+	if (it != LiveBridges().end() && it->second.grants.lock() == grants) {
+		LiveBridges().erase(it);
+	}
+}
 
 vector<string> DuckDBSource::Schemas() {
 	lock_guard<mutex> guard(grants->lock);
@@ -1334,6 +1551,17 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	                                 LogicalType::VARCHAR, PrimaryKeyCheckFunc);
 	primary_key_check.stability = FunctionStability::VOLATILE;
 	loader.RegisterFunction(primary_key_check);
+
+	ScalarFunction set_context("bridge_set_context", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
+	                           LogicalType::VARCHAR, SetContextFunc);
+	set_context.stability = FunctionStability::VOLATILE;
+	set_context.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	loader.RegisterFunction(set_context);
+
+	ScalarFunction finalize_context("bridge_finalize_context", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                                FinalizeContextFunc);
+	finalize_context.stability = FunctionStability::VOLATILE;
+	loader.RegisterFunction(finalize_context);
 }
 
 } // namespace duckdb

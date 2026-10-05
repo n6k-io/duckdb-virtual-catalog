@@ -27,15 +27,18 @@ source schema, named the same.
 SELECT bridge_register_source('b1', 'source_catalog');
 -- → 'NONCE:UUID'
 
--- 2. On the SOURCE: grant one (table, verb) at a time. Names are 'schema.table'.
+-- 2. On the SOURCE: set any context values the policies reference.
+SELECT bridge_set_context('b1', 'tenant', 42);
+
+-- 3. On the SOURCE: grant one (table, verb) at a time. Names are 'schema.table'.
 --    Optionally supply a key first.
 SELECT bridge_primary_key('b1', 'main.logs', ['id', 'timestamp']);
 SELECT bridge_policy('b1', 'main.users',  'select', 'true');
-SELECT bridge_policy('b1', 'main.users',  'update', 'tenant_id = 42');
+SELECT bridge_policy('b1', 'main.users',  'update', 'tenant_id = $tenant');
 SELECT bridge_policy('b1', 'sales.orders', 'select', 'true');
 -- → 'ok'
 
--- 3. On the TARGET: redeem the token into a new catalog.
+-- 4. On the TARGET: redeem the token into a new catalog.
 ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'NONCE:UUID');
 -- my_bridge.main.users, my_bridge.main.logs, my_bridge.sales.orders
 ```
@@ -48,10 +51,11 @@ The token contains a nonce unique to the loaded extension binary — mismatched
 extension versions are rejected. Tokens expire after **30 seconds** if not
 consumed — the clock measures inactivity, so it covers the whole grant script
 rather than the first call alone. Grants are declared by the source (trusted
-side) and cannot be modified by the target: `bridge_policy` refuses any connection
-whose `DatabaseInstance` is not the one that called `bridge_register_source` — so
-any connection on the source instance may add grants, but no connection outside
-it can. Once the token is redeemed the grant set is frozen.
+side) and cannot be modified by the target: `bridge_policy`, `bridge_set_context`
+and `bridge_finalize_context` refuse any connection whose `DatabaseInstance` is
+not the one that called `bridge_register_source` — so any connection on the
+source instance may add grants, but no connection outside it can. Once the token
+is redeemed the grant set is frozen; the [context](#context-values) is not.
 
 A source that already holds a secret can name the token itself, with the 3-arg
 form. This is also what lets a test hardcode one:
@@ -79,6 +83,8 @@ alongside the bridged ones.
 Every refusal during `ATTACH` — a missing option, a bad token, a grant set that
 does not hold together — is raised before the pending source is taken, so the
 same token still redeems once the cause is fixed.
+
+After the detach the bridge id no longer reaches the context.
 
 ## Permission model
 
@@ -118,9 +124,41 @@ A policy has the two halves of a Postgres `CREATE POLICY`:
 access by accident.
 
 Both halves are compiled at grant time against the source table they will apply
-to: each must be a single BOOLEAN expression over that table's columns, with no
-parameters. They are stored parsed and grafted into the source statement as
-syntax-tree nodes, never spliced in as text.
+to: each must be a single BOOLEAN expression over that table's columns. They are
+stored parsed and grafted into the source statement as syntax-tree nodes, never
+spliced in as text.
+
+### Context values
+
+A predicate may reference `$name`, a value the source set on this bridge with
+`bridge_set_context(bridge_id, name, value)`:
+
+```sql
+SELECT bridge_set_context('b1', 'tenant', 42);
+SELECT bridge_policy('b1', 'main.orders', 'select', 'tenant_id = $tenant');
+```
+
+The predicate is stored with `$name` in it. Each target statement takes one
+snapshot of the context and fills every `$name` in as a constant node, so all
+tables in a statement see the same values.
+
+- **Set before use.** A predicate naming an unset `$name` is refused by
+  `bridge_policy`.
+- **Live.** The context stays changeable after `ATTACH`, unlike the grants:
+  `bridge_set_context` overwrites a value and the target's next statement —
+  a prepared one included — uses it.
+- **Checked on change.** A new value is bound into every policy that uses it,
+  as `bridge_policy` binds; one that stops a policy binding or being BOOLEAN is
+  refused and the old value stays. Binding casts nothing, so a value that only
+  fails a cast (`'abc'` against an INTEGER column) passes, and the target's
+  statement fails instead.
+- **Lockable.** `bridge_finalize_context(bridge_id)` freezes the context, before
+  or after `ATTACH`; every later `bridge_set_context` is refused. It is optional.
+- **Any type, never NULL.** The value keeps its type (`42` is an INTEGER,
+  `DATE '2024-01-01'` a DATE).
+- **Named only.** Positional `$1` and `?` are refused.
+- **Source only.** The target cannot set or read context. A `$name` in a target
+  query is that query's own parameter and never reaches a policy.
 
 Per verb:
 

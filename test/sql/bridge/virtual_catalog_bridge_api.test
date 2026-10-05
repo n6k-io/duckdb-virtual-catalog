@@ -10,6 +10,7 @@ FROM duckdb_functions()
 WHERE function_name LIKE 'bridge!_%' ESCAPE '!'
 ORDER BY 1, 2;
 ----
+bridge_finalize_context	1
 bridge_policy	4
 bridge_policy	5
 bridge_primary_key	3
@@ -17,6 +18,7 @@ bridge_primary_key_check	3
 bridge_primary_key_query	3
 bridge_register_source	2
 bridge_register_source	3
+bridge_set_context	3
 bridge_table_describe	3
 bridge_table_permissions	3
 
