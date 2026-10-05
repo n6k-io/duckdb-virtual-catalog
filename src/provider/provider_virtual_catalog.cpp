@@ -21,7 +21,6 @@
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
-#include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "yyjson.hpp"
 
 namespace duckdb {
@@ -323,11 +322,8 @@ VirtualCatalogProviderSchemaEntry::GetOrQueryProviderEntry(const VirtualCatalogP
 
 	auto table_info = make_shared_ptr<ProviderTableInfo>();
 	table_info->table_name = qualified;
-	table_info->column_names = column_names;
-	table_info->column_types = column_types;
 	table_info->primary_keys = std::move(decoded.primary_keys);
 	table_info->provider = tables.provider;
-	table_info->db_instance = info.db_instance;
 
 	auto create_info = make_uniq<CreateTableInfo>(*this, entry_name);
 	for (idx_t c = 0; c < column_names.size(); c++) {

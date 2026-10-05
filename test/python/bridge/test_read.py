@@ -1,8 +1,9 @@
 """Reads across two DatabaseInstances, with pushdown checked against the source's own answer."""
 
+import duckdb
 import pytest
 
-from conftest import READ, READWRITE, bridge, fn, unique_id
+from conftest import READ, READWRITE, bridge, unique_id
 
 SETUP = """
 CREATE TABLE users(
@@ -135,9 +136,9 @@ def test_a_three_part_grant_name_is_rejected(source, target):
 def test_a_bare_grant_name_is_rejected(source, target):
     source.execute(SETUP)
     bridge_id = unique_id()
-    source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id])
+    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
     with pytest.raises(Exception, match="must be schema-qualified"):
-        source.execute(f"SELECT {fn(source, 'policy')}(?, 'users', 'select', 'true')", [bridge_id])
+        source.execute("SELECT bridge_policy(?, 'users', 'select', 'true')", [bridge_id])
 
 
 def test_source_tables_outside_the_default_catalog_reach_via_source_args(source, target):
@@ -208,6 +209,17 @@ def test_chunks_outlive_the_scan(big):
         target.execute("SELECT name FROM app.main.big ORDER BY score, id LIMIT 3").fetchall()
         == source.execute("SELECT name FROM big ORDER BY score, id LIMIT 3").fetchall()
     )
+
+
+def test_a_source_error_mid_stream_fails_the_read(source, target):
+    source.execute("CREATE TABLE late_fail AS SELECT i::INTEGER AS id FROM range(400000) t(i)")
+    bridge(
+        source,
+        target,
+        {"late_fail": {"select": "CAST(CASE WHEN id < 300000 THEN '1' ELSE 'x' END AS INTEGER) = 1"}},
+    )
+    with pytest.raises(duckdb.ConversionException):
+        target.execute("SELECT count(*) FROM app.main.late_fail").fetchall()
 
 
 def test_string_columns_survive_the_source_connection(big):

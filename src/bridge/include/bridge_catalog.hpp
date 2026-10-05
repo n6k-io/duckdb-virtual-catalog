@@ -4,7 +4,6 @@
 // Everything about the source is behind CrossingAttach.
 
 #include "duckdb.hpp"
-#include "duckdb/common/mutex.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 
 #include "crossing_attach.hpp"

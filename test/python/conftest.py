@@ -54,16 +54,6 @@ def new_connection(*, bridge=True, provider=False):
     return con
 
 
-def fn(con, name):
-    """The handshake function `name`. Kept so call sites read the same as the ATTACH type helper."""
-    return f"bridge_{name}"
-
-
-def attach_type(con):
-    """The ATTACH TYPE string for the bridge."""
-    return "virtual_catalog_bridge"
-
-
 @pytest.fixture
 def source():
     con = new_connection()

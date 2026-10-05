@@ -71,7 +71,7 @@ reaching a half-freed provider. `DETACH` does the same on its way out.
 | `schema_udf` | `schema(table_name)` | one Arrow IPC **schema** message |
 | `scan_udf` | `scan(table_name, columns VARCHAR[], filters_json)` | Arrow IPC stream of the rows |
 | `insert_udf` | `insert(table_name, arrow_ipc)` | affected row count |
-| `update_udf` | `update(table_name, arrow_ipc, changed_columns)` | affected row count |
+| `update_udf` | `update(table_name, arrow_ipc, changed_columns VARCHAR[])` | affected row count |
 | `delete_udf` | `delete(table_name, arrow_ipc)` | affected row count |
 | `alter_udf` | `alter(table_name, kind, details_json)` | ignored |
 
@@ -105,6 +105,11 @@ time with "has no primary key declared".
 express a disjunction, and a filter that cannot be rendered exactly makes the
 scan throw rather than fall back to filtering locally — the provider must never
 be handed a predicate narrower than the one the user wrote.
+
+An infinite `FLOAT`/`DOUBLE` literal is written as the bare token `Infinity` or
+`-Infinity`, which Python's `json.loads` accepts but strict JSON parsers do
+not. A `NaN` literal is refused like any other unrenderable filter: DuckDB
+orders NaN above every number, and a host comparing IEEE doubles would not.
 
 Literals that cross as text carry a rebuild tag, so the callee does not have to
 re-fetch the schema on every filtered scan to learn that `'2026-05-01'` was a

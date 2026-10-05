@@ -8,7 +8,7 @@ namespace duckdb {
 
 // FIXME: unbounded — rows accumulates every PK value the statement scans; large deletes/updates
 // could OOM.
-struct BridgePKBuffer {
+struct ProviderPKBuffer {
 	// Guards Append alone. PKBufferRow reads unlocked because the DML operators call it from
 	// Finalize, by which point every scan feeding the buffer has drained.
 	mutex lock;
@@ -28,7 +28,7 @@ struct BridgePKBuffer {
 // the right one until the index misses. Every DML path resolves keys through here to make that miss
 // an error rather than a write against whatever row the index landed on. Not left to
 // duckdb::vector, whose bounds check is compiled out under DUCKDB_DEBUG_NO_SAFETY.
-inline vector<Value> &PKBufferRow(BridgePKBuffer *buffer, int64_t row_id, idx_t key_columns, const char *context) {
+inline vector<Value> &PKBufferRow(ProviderPKBuffer *buffer, int64_t row_id, idx_t key_columns, const char *context) {
 	if (!buffer) {
 		throw InternalException("%s: no primary key buffer was attached to the scan", context);
 	}

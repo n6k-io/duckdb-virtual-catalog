@@ -19,18 +19,13 @@ VirtualCatalogSchemaInfoHolder::VirtualCatalogSchemaInfoHolder(const SchemaCatal
 
 VirtualCatalogSchemaEntryBase::VirtualCatalogSchemaEntryBase(Catalog &catalog, SchemaCatalogEntry &target_schema_p)
     : VirtualCatalogSchemaInfoHolder(target_schema_p), SchemaCatalogEntry(catalog, info),
-      target_schema(target_schema_p), target_catalog(target_schema_p.ParentCatalog()) {
-}
-
-CatalogTransaction VirtualCatalogSchemaEntryBase::TargetTransaction(CatalogTransaction alias_txn) {
-	return CatalogTransaction(target_catalog, alias_txn.GetContext());
+      target_schema(target_schema_p) {
 }
 
 bool VirtualCatalogSchemaEntryBase::HasNativeEntry(CatalogTransaction transaction, CatalogType type,
                                                    const string &entry_name) {
-	auto txn = TargetTransaction(transaction);
 	EntryLookupInfo lookup(type, entry_name);
-	return target_schema.LookupEntry(txn, lookup) != nullptr;
+	return target_schema.LookupEntry(transaction, lookup) != nullptr;
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateTable(CatalogTransaction transaction,
@@ -42,70 +37,59 @@ optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateTable(CatalogTra
 			return created;
 		}
 	}
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreateTable(txn, info);
+	return target_schema.CreateTable(transaction, info);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateFunction(CatalogTransaction transaction,
                                                                          CreateFunctionInfo &info) {
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreateFunction(txn, info);
+	return target_schema.CreateFunction(transaction, info);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateView(CatalogTransaction transaction,
                                                                      CreateViewInfo &info) {
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreateView(txn, info);
+	return target_schema.CreateView(transaction, info);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateIndex(CatalogTransaction transaction,
                                                                       CreateIndexInfo &info, TableCatalogEntry &table) {
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreateIndex(txn, info, table);
+	return target_schema.CreateIndex(transaction, info, table);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateSequence(CatalogTransaction transaction,
                                                                          CreateSequenceInfo &info) {
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreateSequence(txn, info);
+	return target_schema.CreateSequence(transaction, info);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateTableFunction(CatalogTransaction transaction,
                                                                               CreateTableFunctionInfo &info) {
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreateTableFunction(txn, info);
+	return target_schema.CreateTableFunction(transaction, info);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateCopyFunction(CatalogTransaction transaction,
                                                                              CreateCopyFunctionInfo &info) {
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreateCopyFunction(txn, info);
+	return target_schema.CreateCopyFunction(transaction, info);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreatePragmaFunction(CatalogTransaction transaction,
                                                                                CreatePragmaFunctionInfo &info) {
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreatePragmaFunction(txn, info);
+	return target_schema.CreatePragmaFunction(transaction, info);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateCollation(CatalogTransaction transaction,
                                                                           CreateCollationInfo &info) {
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreateCollation(txn, info);
+	return target_schema.CreateCollation(transaction, info);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateType(CatalogTransaction transaction,
                                                                      CreateTypeInfo &info) {
-	auto txn = TargetTransaction(transaction);
-	return target_schema.CreateType(txn, info);
+	return target_schema.CreateType(transaction, info);
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::LookupEntry(CatalogTransaction transaction,
                                                                       const EntryLookupInfo &lookup_info) {
 	// Native wins a name collision; the extension only answers for names the wrapped schema does not
 	// have.
-	auto txn = TargetTransaction(transaction);
-	auto native = target_schema.LookupEntry(txn, lookup_info);
+	auto native = target_schema.LookupEntry(transaction, lookup_info);
 	if (native) {
 		return native;
 	}
@@ -150,7 +134,6 @@ void VirtualCatalogSchemaEntryBase::Alter(CatalogTransaction transaction, AlterI
 			return;
 		}
 	}
-	auto txn = TargetTransaction(transaction);
 	// A comment is the target's own note about the entry, not a change to what backs it, so an
 	// extension entry takes it the same way a native one does. Native still wins the name, as it
 	// does in LookupEntry.
@@ -159,7 +142,7 @@ void VirtualCatalogSchemaEntryBase::Alter(CatalogTransaction transaction, AlterI
 		if (comment.entry_catalog_type == CatalogType::TABLE_ENTRY ||
 		    comment.entry_catalog_type == CatalogType::VIEW_ENTRY) {
 			EntryLookupInfo lookup(comment.entry_catalog_type, info.name);
-			if (!target_schema.LookupEntry(txn, lookup)) {
+			if (!target_schema.LookupEntry(transaction, lookup)) {
 				if (auto *entry = LookupExtensionEntry(transaction, info.name)) {
 					entry->comment = comment.comment_value;
 					return;
@@ -167,7 +150,7 @@ void VirtualCatalogSchemaEntryBase::Alter(CatalogTransaction transaction, AlterI
 			}
 		}
 	}
-	target_schema.Alter(txn, info);
+	target_schema.Alter(transaction, info);
 }
 
 void VirtualCatalogSchemaEntryBase::Scan(ClientContext &context, CatalogType type,

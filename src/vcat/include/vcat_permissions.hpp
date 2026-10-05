@@ -13,7 +13,7 @@ class ExtensionLoader;
 struct TablePermissionRow {
 	string schema;
 	string name;
-	string kind; // native_table | native_view | bridge | provider
+	string kind;
 	vector<string> primary_key;
 	//! In select/insert/update/delete/alter order. The only capability signal there is: do not add
 	//! a coarse `writeable`/`editable` boolean beside it.
@@ -35,10 +35,6 @@ struct PermissionsArgs {
 
 PermissionsArgs ParsePermissionsArgs(TableFunctionBindInput &input);
 
-// A catalog whose schemas are VirtualCatalogSchemaEntryBase wrappers is collected through them, so
-// the owning extension classifies its own entries; everything else takes the plain-catalog
-// fallback. The extensions are separate binaries, so the *other* one's catalog fails the cast and
-// is reported as a plain DuckDB catalog.
 void CollectCatalogPermissions(ClientContext &context, Catalog &catalog, optional_ptr<const string> schema_filter,
                                optional_ptr<const string> table_filter, vector<TablePermissionRow> &out);
 

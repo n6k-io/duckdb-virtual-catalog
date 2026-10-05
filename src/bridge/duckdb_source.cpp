@@ -11,10 +11,8 @@
 #include "duckdb/main/pending_query_result.hpp"
 #include "duckdb/main/query_parameters.hpp"
 #include "duckdb/main/relation.hpp"
-#include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
-#include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/parser/expression/case_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -48,7 +46,7 @@ namespace duckdb {
 
 namespace {
 
-struct PendingV2Source {
+struct PendingSource {
 	shared_ptr<DatabaseInstance> source_db;
 	string token;
 	string source_catalog;
@@ -76,8 +74,8 @@ mutex &PendingMutex() {
 	return *lock;
 }
 
-unordered_map<string, PendingV2Source> &PendingSources() {
-	static auto *pending = new unordered_map<string, PendingV2Source>();
+unordered_map<string, PendingSource> &PendingSources() {
+	static auto *pending = new unordered_map<string, PendingSource>();
 	return *pending;
 }
 
@@ -123,7 +121,7 @@ void SplitGrantName(const string &qualified, string &schema, string &table) {
 	}
 }
 
-PendingV2Source &LookupPendingForGrant(const string &bridge_id, ClientContext &context) {
+PendingSource &LookupPendingForGrant(const string &bridge_id, ClientContext &context) {
 	PurgeExpiredPendingSources();
 	auto it = PendingSources().find(bridge_id);
 	if (it == PendingSources().end()) {
@@ -145,6 +143,18 @@ PendingV2Source &LookupPendingForGrant(const string &bridge_id, ClientContext &c
 	return it->second;
 }
 
+void ThrowIfAnyNull(DataChunk &args, idx_t columns, const char *function) {
+	for (idx_t c = 0; c < columns; c++) {
+		auto &validity = FlatVector::Validity(args.data[c]);
+		for (idx_t i = 0; i < args.size(); i++) {
+			if (!validity.RowIsValid(i)) {
+				throw IOException("virtual_catalog_bridge: argument %llu of %s cannot be NULL",
+				                  static_cast<uint64_t>(c + 1), function);
+			}
+		}
+	}
+}
+
 void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &context = state.GetContext();
 	auto count = args.size();
@@ -152,6 +162,7 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 	for (idx_t c = 0; c < arg_count; c++) {
 		args.data[c].Flatten(count);
 	}
+	ThrowIfAnyNull(args, arg_count, "bridge_register_source");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto source_catalogs = FlatVector::GetData<string_t>(args.data[1]);
 	auto result_data = FlatVector::GetData<string_t>(result);
@@ -172,7 +183,7 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 			                       source_catalog);
 		}
 
-		PendingV2Source pending;
+		PendingSource pending;
 		pending.source_db = context.db;
 		if (arg_count > 2) {
 			auto chosen = FlatVector::GetData<string_t>(args.data[2])[i].GetString();
@@ -461,6 +472,7 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	for (idx_t c = 0; c < arg_count; c++) {
 		args.data[c].Flatten(count);
 	}
+	ThrowIfAnyNull(args, 4, "bridge_policy");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto table_names = FlatVector::GetData<string_t>(args.data[1]);
 	auto verbs = FlatVector::GetData<string_t>(args.data[2]);
@@ -535,7 +547,7 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 				check_predicate = ParseAndValidatePredicate(source_table, checks[i].GetString(), "WITH CHECK", values);
 			} else if (verb == CrossingVerb::INSERT) {
 				throw IOException("virtual_catalog_bridge: an 'insert' grant must state a WITH CHECK predicate");
-			} else if (verb == CrossingVerb::UPDATE && using_predicate) {
+			} else if (verb == CrossingVerb::UPDATE) {
 				check_predicate = using_predicate->Copy();
 			}
 			if (IsDdlVerb(verb)) {
@@ -580,6 +592,7 @@ void PrimaryKeyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto count = args.size();
 	args.data[0].Flatten(count);
 	args.data[1].Flatten(count);
+	ThrowIfAnyNull(args, 2, "bridge_primary_key");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto table_names = FlatVector::GetData<string_t>(args.data[1]);
 	auto result_data = FlatVector::GetData<string_t>(result);
@@ -644,6 +657,7 @@ void PrimaryKeyQueryFunc(DataChunk &args, ExpressionState &state, Vector &result
 	for (idx_t c = 0; c < 3; c++) {
 		args.data[c].Flatten(count);
 	}
+	ThrowIfAnyNull(args, 3, "bridge_primary_key_query");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto tables = FlatVector::GetData<string_t>(args.data[1]);
 	auto queries = FlatVector::GetData<string_t>(args.data[2]);
@@ -669,6 +683,10 @@ void PrimaryKeyQueryFunc(DataChunk &args, ExpressionState &state, Vector &result
 		vector<string> key;
 		while (true) {
 			auto chunk = key_result->Fetch();
+			if (key_result->HasError()) {
+				key_result->GetErrorObject().Throw("virtual_catalog_bridge: primary key query for table '" + qualified +
+				                                   "' failed: ");
+			}
 			if (!chunk || chunk->size() == 0) {
 				break;
 			}
@@ -703,6 +721,7 @@ void PrimaryKeyCheckFunc(DataChunk &args, ExpressionState &state, Vector &result
 	for (idx_t c = 0; c < 3; c++) {
 		args.data[c].Flatten(count);
 	}
+	ThrowIfAnyNull(args, 3, "bridge_primary_key_check");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto tables = FlatVector::GetData<string_t>(args.data[1]);
 	auto queries = FlatVector::GetData<string_t>(args.data[2]);
@@ -731,6 +750,10 @@ void PrimaryKeyCheckFunc(DataChunk &args, ExpressionState &state, Vector &result
 			                                     "' failed: ");
 		}
 		auto chunk = check_result->Fetch();
+		if (check_result->HasError()) {
+			check_result->GetErrorObject().Throw("virtual_catalog_bridge: primary key check for table '" + qualified +
+			                                     "' failed: ");
+		}
 		if (chunk && chunk->size() > 0) {
 			throw ConstraintException("virtual_catalog_bridge: primary key check for table '%s' returned rows; the "
 			                          "declared key is not unique on the source",
@@ -876,6 +899,7 @@ void FinalizeContextFunc(DataChunk &args, ExpressionState &state, Vector &result
 	auto &context = state.GetContext();
 	auto count = args.size();
 	args.data[0].Flatten(count);
+	ThrowIfAnyNull(args, 1, "bridge_finalize_context");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto result_data = FlatVector::GetData<string_t>(result);
 
@@ -895,7 +919,7 @@ void FinalizeContextFunc(DataChunk &args, ExpressionState &state, Vector &result
 
 } // namespace
 
-unique_ptr<DuckDBSource> RedeemBridgeAttach(ClientContext &, AttachInfo &info) {
+unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info) {
 	auto bridge_id = RequiredAttachOption(info, "id");
 	auto token = RequiredAttachOption(info, "token");
 
@@ -1121,7 +1145,6 @@ void DuckDBSession::UndoGrants() {
 void DuckDBSession::Commit() {
 	lock_guard<mutex> guard(lock);
 	if (!conn) {
-		grant_undo.clear();
 		return;
 	}
 	try {
@@ -1171,13 +1194,6 @@ CrossingPlan DuckDBSource::Plan(const CrossingPlanRequest &request) {
 		auto &described = *request.described;
 		return CrossingPlan::Of(
 		    MakeFloorNode(request.schema, request.table, described.column_names, described.column_types));
-	}
-	if (request.verb != CrossingVerb::INSERT && request.seam.key_columns.empty()) {
-		throw InternalException("virtual_catalog_bridge: '%s.%s' has no key to write by", request.schema,
-		                        request.table);
-	}
-	if (request.seam.key_columns.size() + request.seam.set_columns.size() != request.seam.types.size()) {
-		return CrossingPlan::Declined("the seam does not carry one value per column");
 	}
 	return CrossingPlan::Of(MakeSeamNode(request.seam.types));
 }
@@ -1485,6 +1501,9 @@ CrossingScan ScanOf(const shared_ptr<Connection> &conn, unique_ptr<QueryResult> 
 	scan.open = [conn, result](ClientContext &, idx_t) -> CrossingReader {
 		return [conn, result](ClientContext &, DataChunk &chunk, const CrossingWaker &) {
 			auto raw = result->FetchRaw();
+			if (result->HasError()) {
+				result->ThrowError("virtual_catalog_bridge: source query failed: ");
+			}
 			if (!raw || raw->size() == 0) {
 				return CrossingReadResult::Done();
 			}

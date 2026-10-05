@@ -1,8 +1,9 @@
 """A declared primary key that is not unique turns a per-row write into a per-group write."""
 
+import duckdb
 import pytest
 
-from conftest import BRIDGE_EXTENSION, READWRITE, attach_type, bridge, fn, new_connection, unique_id
+from conftest import BRIDGE_EXTENSION, READWRITE, bridge, new_connection, unique_id
 
 pytestmark = pytest.mark.skipif(
     not BRIDGE_EXTENSION.exists(),
@@ -123,11 +124,11 @@ def test_primary_key_query_supplies_a_key_discovery_cannot_find(source, target):
     source.executemany("INSERT INTO q VALUES (?, ?, ?)", [("a", 1, "x"), ("b", 2, "hidden")])
 
     bridge_id = unique_id()
-    token = source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute(f"SELECT {fn(source, 'primary_key_query')}(?, 'main.q', ?)", [bridge_id, "SELECT 'code'"])
-    source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.q', 'select', 'tenant = 1')", [bridge_id])
-    source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.q', 'update', 'true')", [bridge_id])
-    target.execute(f"ATTACH '' AS app (TYPE {attach_type(target)}, ID '{bridge_id}', TOKEN '{token}')")
+    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT bridge_primary_key_query(?, 'main.q', ?)", [bridge_id, "SELECT 'code'"])
+    source.execute("SELECT bridge_policy(?, 'main.q', 'select', 'tenant = 1')", [bridge_id])
+    source.execute("SELECT bridge_policy(?, 'main.q', 'update', 'true')", [bridge_id])
+    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
 
     assert target.execute("UPDATE app.main.q SET v = 'P'").fetchall() == [(1,)]
     assert source.execute("SELECT * FROM q ORDER BY code").fetchall() == [
@@ -139,25 +140,72 @@ def test_primary_key_query_supplies_a_key_discovery_cannot_find(source, target):
 def test_primary_key_check_rejects_a_bad_key_before_any_write(source, target):
     fanout_source(source)
     bridge_id = unique_id()
-    source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id])
-    source.execute(f"SELECT {fn(source, 'primary_key')}(?, 'main.t1', ['grp'])", [bridge_id])
+    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT bridge_primary_key(?, 'main.t1', ['grp'])", [bridge_id])
 
     with pytest.raises(Exception, match="not unique on the source"):
         source.execute(
-            f"SELECT {fn(source, 'primary_key_check')}(?, 'main.t1', ?)",
+            "SELECT bridge_primary_key_check(?, 'main.t1', ?)",
             [bridge_id, "SELECT grp FROM t1 GROUP BY grp HAVING count(*) > 1"],
         )
 
     assert source_rows(source) == FANOUT_ROWS
 
 
+def test_primary_key_check_that_fails_at_runtime_is_an_error(source):
+    fanout_source(source)
+    bridge_id = unique_id()
+    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT bridge_primary_key(?, 'main.t1', ['id'])", [bridge_id])
+
+    with pytest.raises(duckdb.ConversionException, match="primary key check for table 'main.t1' failed"):
+        source.execute(
+            "SELECT bridge_primary_key_check(?, 'main.t1', ?)",
+            [bridge_id, "SELECT CAST(secret AS INTEGER) FROM t1"],
+        )
+
+
+def test_primary_key_query_that_fails_at_runtime_is_an_error(source):
+    fanout_source(source)
+    bridge_id = unique_id()
+    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+
+    with pytest.raises(duckdb.ConversionException, match="primary key query for table 'main.t1' failed"):
+        source.execute(
+            "SELECT bridge_primary_key_query(?, 'main.t1', ?)",
+            [bridge_id, "SELECT CAST(secret AS INTEGER)::VARCHAR FROM t1"],
+        )
+
+
+@pytest.mark.parametrize(
+    "sql, params",
+    [
+        ("SELECT bridge_register_source(x, 'memory') FROM (VALUES (NULL::VARCHAR)) t(x)", []),
+        ("SELECT bridge_policy(?, x, 'select', 'true') FROM (VALUES (NULL::VARCHAR)) t(x)", None),
+        ("SELECT bridge_policy(?, 'main.t1', 'select', x) FROM (VALUES (NULL::VARCHAR)) t(x)", None),
+        ("SELECT bridge_primary_key(?, x, ['id']) FROM (VALUES (NULL::VARCHAR)) t(x)", None),
+        ("SELECT bridge_primary_key_query(?, 'main.t1', x) FROM (VALUES (NULL::VARCHAR)) t(x)", None),
+        ("SELECT bridge_primary_key_check(?, 'main.t1', x) FROM (VALUES (NULL::VARCHAR)) t(x)", None),
+        ("SELECT bridge_finalize_context(x) FROM (VALUES (NULL::VARCHAR)) t(x)", []),
+    ],
+)
+def test_a_null_setup_argument_is_refused(source, sql, params):
+    fanout_source(source)
+    bridge_id = unique_id()
+    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT bridge_primary_key(?, 'main.t1', ['id'])", [bridge_id])
+
+    with pytest.raises(duckdb.IOException, match="cannot be NULL"):
+        source.execute(sql, [bridge_id] if params is None else params)
+
+
 def test_primary_key_check_accepts_a_key_that_holds(source):
     fanout_source(source)
     bridge_id = unique_id()
-    source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id])
-    source.execute(f"SELECT {fn(source, 'primary_key')}(?, 'main.t1', ['id'])", [bridge_id])
+    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT bridge_primary_key(?, 'main.t1', ['id'])", [bridge_id])
 
     assert source.execute(
-        f"SELECT {fn(source, 'primary_key_check')}(?, 'main.t1', ?)",
+        "SELECT bridge_primary_key_check(?, 'main.t1', ?)",
         [bridge_id, "SELECT id FROM t1 GROUP BY id HAVING count(*) > 1"],
     ).fetchone() == ("ok",)

@@ -16,7 +16,7 @@ public:
 
 	ProviderTableCatalogEntry &table;
 	idx_t row_id_index;
-	shared_ptr<BridgePKBuffer> pk_buffer;
+	shared_ptr<ProviderPKBuffer> pk_buffer;
 
 public:
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;

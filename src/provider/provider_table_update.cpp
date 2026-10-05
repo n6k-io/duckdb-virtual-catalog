@@ -76,18 +76,10 @@ SinkFinalizeType ProviderTableUpdate::Finalize(Pipeline &pipeline, Event &event,
 		return SinkFinalizeType::READY;
 	}
 
-	if (!table.table_info->db_instance) {
-		throw IOException("virtual_catalog_provider: database instance unavailable");
-	}
-
-	if (!table.table_info->provider) {
-		throw IOException("virtual_catalog_provider: provider table '%s' has no provider bound", table.name);
-	}
-
 	auto &pk_cols = table.table_info->primary_keys;
 	auto &all_columns = table.GetColumns();
 
-	auto conn = make_uniq<Connection>(*table.table_info->db_instance);
+	auto conn = make_uniq<Connection>(*table.table_info->provider->db_instance);
 
 	// The row layout the provider is handed: every key column, then only the changed ones.
 	// `changed_col_names` names that second half so the provider knows where the keys stop.
@@ -103,12 +95,12 @@ SinkFinalizeType ProviderTableUpdate::Finalize(Pipeline &pipeline, Event &event,
 		}
 	}
 
-	vector<string> changed_col_names;
+	vector<Value> changed_col_names;
 	for (auto &col_idx : update_columns) {
 		auto &col = all_columns.GetColumn(col_idx);
 		row_types.push_back(col.GetType());
 		row_col_names.push_back(col.Name());
-		changed_col_names.push_back(col.Name());
+		changed_col_names.emplace_back(col.Name());
 	}
 
 	// Each sunk chunk holds a PK-buffer row id in column 0 and the new values after it; the keys
@@ -131,21 +123,14 @@ SinkFinalizeType ProviderTableUpdate::Finalize(Pipeline &pipeline, Event &event,
 		}
 	}
 
-	string changed_cols_str;
-	for (idx_t i = 0; i < changed_col_names.size(); i++) {
-		if (i > 0) {
-			changed_cols_str += ",";
-		}
-		changed_cols_str += changed_col_names[i];
-	}
-
 	auto chunks = builder.Finish();
 	auto arrow_ipc = vcat_provider::EncodeChunksAsIpc(*conn->context, row_types, row_col_names, chunks);
 	auto affected = NumericCast<idx_t>(vcat_provider::CallWriteUdf(
 	    *conn, table.table_info->provider->update_udf, table.table_info->table_name, arrow_ipc,
-	    vector<Value> {Value(changed_cols_str)}, "virtual_catalog_provider: update UDF"));
+	    vector<Value> {Value::LIST(LogicalType::VARCHAR, std::move(changed_col_names))},
+	    "virtual_catalog_provider: update UDF"));
 	// The UDF has already run and nothing here can undo it: this reports, it does not prevent.
-	EnsureKeyIsUnique(affected, rows_sent, table.table_info->table_name, pk_cols, "UPDATE", false);
+	EnsureKeyIsUnique(affected, rows_sent, table.table_info->table_name, pk_cols, "UPDATE");
 	gstate.affected_rows = affected;
 
 	return SinkFinalizeType::READY;

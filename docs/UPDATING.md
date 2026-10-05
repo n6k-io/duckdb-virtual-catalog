@@ -31,7 +31,7 @@ Then flatten into `third_party/nanoarrow/`:
   `sed -i '' 's|#include "nanoarrow/|#include "|' nanoarrow*.c nanoarrow*.h nanoarrow*.hpp`
 
 No other local patches exist; the result must be byte-identical to the bundler
-output apart from that include rewrite. The root `CMakeLists.txt` lists the sources by
+output apart from that include rewrite. `src/provider/CMakeLists.txt` lists the sources by
 name, so no build-file changes are needed unless the file set changes.
 
 # API changes

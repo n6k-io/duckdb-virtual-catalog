@@ -105,10 +105,6 @@ struct HostStream {
 
 int HostStreamGetSchema(ArrowArrayStream *stream, ArrowSchema *out) {
 	auto *self = static_cast<HostStream *>(stream->private_data);
-	if (!self->schema_owned) {
-		self->last_error = "virtual_catalog_provider: stream has no schema";
-		return EINVAL;
-	}
 	return ArrowSchemaDeepCopy(&self->schema, out) == NANOARROW_OK ? 0 : EIO;
 }
 
@@ -259,15 +255,18 @@ struct StreamScanData : public ArrowScanFunctionData {
 		// The generator is single-pass, so a projected re-scan cannot be honoured.
 		projection_pushdown_enabled = false;
 	}
+
+	bool SupportStatementCache() const override {
+		return false;
+	}
 };
 
 unique_ptr<ArrowArrayStreamWrapper> TakeHostStreamOnce(uintptr_t factory_ptr, ArrowStreamParameters &) {
 	auto *stream_data = reinterpret_cast<HostStreamData *>(factory_ptr);
-	auto wrapper = make_uniq<ArrowArrayStreamWrapper>();
 	if (stream_data->consumed) {
-		wrapper->arrow_array_stream.release = nullptr;
-		return wrapper;
+		throw InvalidInputException("virtual_catalog_provider: a stream function result can only be scanned once");
 	}
+	auto wrapper = make_uniq<ArrowArrayStreamWrapper>();
 	wrapper->arrow_array_stream = stream_data->stream;
 	stream_data->stream.release = nullptr;
 	stream_data->consumed = true;
@@ -462,11 +461,13 @@ void RegisterStreamFunctionCreators(ExtensionLoader &loader) {
 	                           {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
 	                            LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                           LogicalType::VARCHAR, CreateStreamFunctionEntries);
+	create_func.SetVolatile();
 	loader.RegisterFunction(create_func);
 
 	ScalarFunction drop_func("provider_drop_stream_function",
 	                         {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                         DropStreamFunctionEntries);
+	drop_func.SetVolatile();
 	loader.RegisterFunction(drop_func);
 
 	TableFunction list_func("provider_stream_functions", {}, StreamFunctionsScan, StreamFunctionsBind,

@@ -43,7 +43,7 @@ struct TrailingColumns {
 TrailingColumns DescribeTrailingColumns(ClientContext &context, ArrowArrayStream &stream, idx_t count,
                                         const char *what);
 
-// Gathers loose Values into DataChunks: DML key rows come out of a BridgePKBuffer one value at a
+// Gathers loose Values into DataChunks: DML key rows come out of a ProviderPKBuffer one value at a
 // time, not as a relation, and the Arrow encoder takes chunks.
 class RowChunkBuilder {
 public:

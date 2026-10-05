@@ -29,7 +29,6 @@ SinkResultType ProviderTableInsert::Sink(ExecutionContext &context, DataChunk &c
 	auto copy = make_uniq<DataChunk>();
 	copy->Initialize(Allocator::DefaultAllocator(), chunk.GetTypes());
 	chunk.Copy(*copy, 0);
-	gstate.affected_rows += chunk.size();
 	gstate.chunks.push_back(std::move(copy));
 	return SinkResultType::NEED_MORE_INPUT;
 }
@@ -42,15 +41,7 @@ SinkFinalizeType ProviderTableInsert::Finalize(Pipeline &pipeline, Event &event,
 		return SinkFinalizeType::READY;
 	}
 
-	if (!table.table_info->db_instance) {
-		throw IOException("virtual_catalog_provider: database instance unavailable for provider table '%s'",
-		                  table.name);
-	}
-	if (!table.table_info->provider) {
-		throw IOException("virtual_catalog_provider: provider table '%s' has no provider bound", table.name);
-	}
-
-	auto conn = make_uniq<Connection>(*table.table_info->db_instance);
+	auto conn = make_uniq<Connection>(*table.table_info->provider->db_instance);
 
 	vector<LogicalType> types;
 	vector<string> names;

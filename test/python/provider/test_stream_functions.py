@@ -143,6 +143,12 @@ def test_early_termination_still_closes(con, gen):
     assert gen.closed, "close UDF was not called after an early-terminated scan"
 
 
+def test_a_prepared_stream_function_runs_twice(con, gen):
+    con.execute("PREPARE twice AS SELECT count(*) FROM app.main.gen()")
+    assert con.execute("EXECUTE twice").fetchone() == (9,)
+    assert con.execute("EXECUTE twice").fetchone() == (9,)
+
+
 def test_dropping_the_stream_function_removes_it(con, gen):
     con.execute("SELECT provider_drop_stream_function('app', 'main', 'gen')").fetchall()
     assert con.execute("SELECT count(*) FROM provider_stream_functions() WHERE catalog = 'app'").fetchone() == (0,)

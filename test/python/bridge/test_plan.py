@@ -12,7 +12,7 @@ import re
 import duckdb
 import pytest
 
-from conftest import READ, attach_type, bridge, fn, unique_id
+from conftest import READ, bridge, unique_id
 
 ROWS = 5_000
 
@@ -285,10 +285,10 @@ def checked(source, target):
     """Insert granted with a check predicate: rows written must satisfy it."""
     source.execute(SETUP)
     bridge_id = unique_id()
-    token = source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.wide', 'select', 'true')", [bridge_id])
-    source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.wide', 'insert', 'true', ?)", [bridge_id, "score < 100"])
-    target.execute(f"ATTACH '' AS app (TYPE {attach_type(target)}, ID '{bridge_id}', TOKEN '{token}')")
+    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT bridge_policy(?, 'main.wide', 'select', 'true')", [bridge_id])
+    source.execute("SELECT bridge_policy(?, 'main.wide', 'insert', 'true', ?)", [bridge_id, "score < 100"])
+    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     return source, target
 
 
@@ -327,9 +327,9 @@ def test_one_violating_row_rejects_the_whole_statement(checked):
 def test_check_is_refused_on_select(source):
     source.execute(SETUP)
     bridge_id = unique_id()
-    source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id])
+    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
     with pytest.raises(duckdb.Error, match="only supported for 'insert'"):
-        source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.wide', 'select', 'true', 'score < 100')", [bridge_id])
+        source.execute("SELECT bridge_policy(?, 'main.wide', 'select', 'true', 'score < 100')", [bridge_id])
 
 
 def test_insert_without_a_grant_is_refused(bridged):
@@ -433,10 +433,10 @@ def checked_update(source, target):
     source.execute("CREATE TABLE keyed(id INTEGER PRIMARY KEY, name VARCHAR, score INTEGER)")
     source.execute("INSERT INTO keyed VALUES (1, 'ana', 10), (2, 'bo', 20)")
     bridge_id = unique_id()
-    token = source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.keyed', 'select', 'true')", [bridge_id])
-    source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.keyed', 'update', 'true', ?)", [bridge_id, "score < 100"])
-    target.execute(f"ATTACH '' AS app (TYPE {attach_type(target)}, ID '{bridge_id}', TOKEN '{token}')")
+    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT bridge_policy(?, 'main.keyed', 'select', 'true')", [bridge_id])
+    source.execute("SELECT bridge_policy(?, 'main.keyed', 'update', 'true', ?)", [bridge_id, "score < 100"])
+    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     return source, target
 
 
@@ -466,12 +466,10 @@ def test_update_check_reads_columns_the_statement_does_not_set(source, target):
     source.execute("CREATE TABLE keyed(id INTEGER PRIMARY KEY, name VARCHAR, score INTEGER)")
     source.execute("INSERT INTO keyed VALUES (1, 'ana', 10), (2, 'blocked', 20)")
     bridge_id = unique_id()
-    token = source.execute(f"SELECT {fn(source, 'register_source')}(?, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute(f"SELECT {fn(source, 'policy')}(?, 'main.keyed', 'select', 'true')", [bridge_id])
-    source.execute(
-        f"SELECT {fn(source, 'policy')}(?, 'main.keyed', 'update', 'true', ?)", [bridge_id, "name <> 'blocked'"]
-    )
-    target.execute(f"ATTACH '' AS app (TYPE {attach_type(target)}, ID '{bridge_id}', TOKEN '{token}')")
+    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT bridge_policy(?, 'main.keyed', 'select', 'true')", [bridge_id])
+    source.execute("SELECT bridge_policy(?, 'main.keyed', 'update', 'true', ?)", [bridge_id, "name <> 'blocked'"])
+    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
 
     target.execute("UPDATE app.main.keyed SET score = 1 WHERE id = 1")
     assert source.execute("SELECT score FROM keyed WHERE id = 1").fetchone() == (1,)

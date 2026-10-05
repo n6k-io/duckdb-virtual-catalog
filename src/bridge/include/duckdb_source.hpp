@@ -5,7 +5,6 @@
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
-#include "duckdb/planner/logical_operator.hpp"
 
 #include "crossing.hpp"
 
@@ -115,7 +114,7 @@ private:
 
 bool TryParseCrossingVerb(const string &text, CrossingVerb &out);
 
-unique_ptr<DuckDBSource> RedeemBridgeAttach(ClientContext &context, AttachInfo &info);
+unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info);
 
 void RegisterBridgeFunctions(ExtensionLoader &loader);
 

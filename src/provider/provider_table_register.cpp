@@ -86,6 +86,10 @@ static void AttachProviderToCatalogAndRegister(DataChunk &args, ExpressionState 
 		info->update_udf = update_udfs[i].GetString();
 		info->delete_udf = delete_udfs[i].GetString();
 		info->alter_udf = alter_udfs[i].GetString();
+		if (info->list_udf.empty() || info->schema_udf.empty() || info->scan_udf.empty()) {
+			throw BinderException("virtual_catalog_provider: provider_register needs non-empty list, schema and scan "
+			                      "function names");
+		}
 		info->phantom_catalog = make_shared_ptr<ProviderTableCatalog>(vcat.GetAttached());
 
 		vcat.SetProvider(info);
@@ -140,14 +144,17 @@ void RegisterProviderFunctions(ExtensionLoader &loader) {
 	                              LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
 	                              LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                             LogicalType::VARCHAR, AttachProviderToCatalogAndRegister);
+	register_func.SetVolatile();
 	loader.RegisterFunction(register_func);
 
 	ScalarFunction invalidate_func("provider_invalidate_tables", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                               BumpProviderVersionOrThrow);
+	invalidate_func.SetVolatile();
 	loader.RegisterFunction(invalidate_func);
 
 	ScalarFunction unregister_func("provider_unregister", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                               DetachProviderFromCatalogAndUnregister);
+	unregister_func.SetVolatile();
 	loader.RegisterFunction(unregister_func);
 }
 
