@@ -34,13 +34,14 @@ def test_finite_filter_is_pushed(con, provider):
         ("d > 'inf'::DOUBLE", []),
         ("d < '-inf'::DOUBLE", []),
         ("d > '-inf'::DOUBLE", [(1,), (2,), (3,)]),
+        ("d IN (1.5, 'nan'::DOUBLE)", [(1,)]),
     ],
 )
 def test_nonfinite_filter_is_applied(con, provider, predicate, expected):
     assert con.execute(f"SELECT id FROM app.main.measurements WHERE {predicate} ORDER BY id").fetchall() == expected
 
 
-@pytest.mark.parametrize("predicate", ["d = 'nan'::DOUBLE", "d < 'nan'::DOUBLE", "d IN (1.5, 'nan'::DOUBLE)"])
+@pytest.mark.parametrize("predicate", ["d = 'nan'::DOUBLE", "d < 'nan'::DOUBLE"])
 def test_nan_filter_is_refused(con, provider, predicate):
     with pytest.raises(duckdb.NotImplementedException, match="no wire representation"):
         con.execute(f"SELECT id FROM app.main.measurements WHERE {predicate}").fetchall()
