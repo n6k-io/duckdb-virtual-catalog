@@ -5,7 +5,6 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/arrow/arrow_wrapper.hpp"
-#include "duckdb/common/arrow/result_arrow_wrapper.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
@@ -30,12 +29,11 @@ struct ProviderStreamData {
 	vector<string> column_names;
 	bool consumed;
 	vector<string> include_pk_columns;
-	shared_ptr<BridgePKBuffer> pk_buffer;
+	shared_ptr<ProviderPKBuffer> pk_buffer;
 	vector<LogicalType> pk_types;
 	// Arrow format string per primary key column: a provider's VARCHAR may arrive as utf8 or
 	// large_utf8, and reading one as the other silently returns garbage.
 	vector<string> pk_formats;
-	unique_ptr<ParsedExpression> read_policy;
 
 	// Connection must outlive the query result.
 	unique_ptr<Connection> source_conn;
@@ -46,8 +44,6 @@ struct ProviderStreamData {
 
 struct ProviderScanFunctionData : public ArrowScanFunctionData {
 	unique_ptr<ProviderStreamData> owned_stream_data;
-	unique_ptr<ResultArrowArrayStreamWrapper> owned_schema_wrapper;
-	unique_ptr<Connection> schema_conn;
 	TableCatalogEntry *table = nullptr;
 
 	ProviderScanFunctionData(stream_factory_produce_t producer, unique_ptr<ProviderStreamData> stream_data)
@@ -55,21 +51,14 @@ struct ProviderScanFunctionData : public ArrowScanFunctionData {
 	      owned_stream_data(std::move(stream_data)) {
 	}
 
-	~ProviderScanFunctionData() override {
-		// owned_schema_wrapper aliases schema_root.arrow_schema's memory; null out release to avoid double-free.
-		if (owned_schema_wrapper) {
-			schema_root.arrow_schema.release = nullptr;
-		}
-	}
-
 	bool SupportStatementCache() const override {
 		return false;
 	}
 };
 
-// `context` names the caller in the error message. `format` is the column's Arrow format string, or
-// nullptr when the layout is known: utf8 (int32 offsets) and large_utf8 (int64 offsets) are
-// indistinguishable from the buffer alone, so an unknown string layout is rejected, not guessed at.
+// `context` names the caller in the error message. `format` is the column's Arrow format string:
+// utf8 (int32 offsets) and large_utf8 (int64 offsets) are indistinguishable from the buffer alone,
+// so an unknown string layout is rejected, not guessed at.
 inline Value ReadArrowValue(ArrowArray &array, idx_t pos, const LogicalType &type, const char *format,
                             const char *context) {
 	if (array.buffers[0]) {
@@ -85,7 +74,7 @@ inline Value ReadArrowValue(ArrowArray &array, idx_t pos, const LogicalType &typ
 	// InternalType() is the DuckDB layout, not the Arrow one: DECIMAL(9,2) reports INT32 while the
 	// Arrow buffer is 16 bytes per element, and reading it at the INT32 stride returns a value from
 	// the wrong row. The format string decides wherever the two widths can disagree.
-	if (format && format[0] == 'd') {
+	if (format[0] == 'd') {
 		if (type.id() != LogicalTypeId::DECIMAL) {
 			throw IOException("%s: primary key column has Arrow layout '%s' but DuckDB type %s", context, format,
 			                  type.ToString());
@@ -137,8 +126,8 @@ inline Value ReadArrowValue(ArrowArray &array, idx_t pos, const LogicalType &typ
 	case PhysicalType::VARCHAR: {
 		// Offsets in buffers[1], char data in buffers[2]; the offset WIDTH is what the format says.
 		auto *data = reinterpret_cast<const char *>(array.buffers[2]);
-		const bool is_utf8 = !format || (format[0] == 'u' && format[1] == '\0');
-		const bool is_large_utf8 = format && format[0] == 'U' && format[1] == '\0';
+		const bool is_utf8 = format[0] == 'u' && format[1] == '\0';
+		const bool is_large_utf8 = format[0] == 'U' && format[1] == '\0';
 		if (is_utf8) {
 			auto *offsets = reinterpret_cast<const int32_t *>(array.buffers[1]);
 			return Value(string(data + offsets[offset], NumericCast<size_t>(offsets[offset + 1] - offsets[offset])));
@@ -178,8 +167,7 @@ void AppendPKValuesAndEmitBufferRowIds(Vector &rowid_vec, ArrowArray &parent_arr
 		for (idx_t pk_idx = 0; pk_idx < global_state.pk_count; pk_idx++) {
 			auto arrow_col = global_state.pk_start_index + pk_idx;
 			auto &array = *parent_array.children[arrow_col];
-			const char *format =
-			    pk_idx < global_state.pk_formats.size() ? global_state.pk_formats[pk_idx].c_str() : nullptr;
+			const char *format = global_state.pk_formats[pk_idx].c_str();
 			pk_vals.push_back(ReadArrowValue(array, chunk_offset + i, global_state.pk_types[pk_idx], format, context));
 		}
 		row_ids[i] = static_cast<row_t>(buffer.Append(std::move(pk_vals)));
@@ -194,9 +182,7 @@ BuildProjectionParamsAndProduceStream(const ProviderScanFunctionData &function, 
 	auto &col_names = function.owned_stream_data->column_names;
 	for (idx_t idx = 0; idx < column_ids.size(); idx++) {
 		auto col_idx = column_ids[idx];
-		// Bounds-checked, not just ROW_ID-checked: COLUMN_IDENTIFIER_EMPTY is also a sentinel far past
-		// the end of col_names, and indexing the vector with either one reads out of bounds.
-		if (col_idx != COLUMN_IDENTIFIER_ROW_ID && col_idx < col_names.size()) {
+		if (col_idx != COLUMN_IDENTIFIER_ROW_ID) {
 			parameters.projected_columns.projection_map[idx] = col_names[col_idx];
 			parameters.projected_columns.columns.emplace_back(col_names[col_idx]);
 			parameters.projected_columns.filter_to_col[idx] = col_idx;

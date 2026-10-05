@@ -63,8 +63,6 @@ public:
 	                        vector<TablePermissionRow> &out);
 
 protected:
-	// Rebind the transaction to the target (wrapped) catalog for DuckSchemaEntry operations.
-	CatalogTransaction TargetTransaction(CatalogTransaction alias_txn);
 	bool HasNativeEntry(CatalogTransaction transaction, CatalogType type, const string &entry_name);
 
 	//! The extension's entry for `name` in this schema, or null when it serves no such name. Called
@@ -100,7 +98,6 @@ protected:
 	                                         case_insensitive_set_t &seen, vector<TablePermissionRow> &out) = 0;
 
 	SchemaCatalogEntry &target_schema;
-	Catalog &target_catalog;
 };
 
 } // namespace duckdb

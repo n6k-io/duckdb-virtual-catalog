@@ -27,6 +27,7 @@
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "yyjson.hpp"
 
+#include <cmath>
 #include <cstring>
 
 namespace duckdb {
@@ -141,6 +142,14 @@ inline yyjson_mut_val *ValueNode(yyjson_mut_doc *doc, const Value &val) {
 	}
 }
 
+inline bool IsNaN(const Value &val) {
+	if (val.IsNull()) {
+		return false;
+	}
+	auto id = val.type().id();
+	return (id == LogicalTypeId::FLOAT || id == LogicalTypeId::DOUBLE) && std::isnan(val.GetValue<double>());
+}
+
 // Empty result means the comparison has no wire representation; the caller reports UNSUPPORTED.
 inline string ComparisonOp(ExpressionType type) {
 	switch (type) {
@@ -186,7 +195,7 @@ inline FilterFidelity TryBuildClauses(const TableFilter &filter, const string &c
 	case TableFilterType::CONSTANT_COMPARISON: {
 		auto &cf = filter.Cast<ConstantFilter>();
 		auto op = ComparisonOp(cf.comparison_type);
-		if (op.empty()) {
+		if (op.empty() || IsNaN(cf.constant)) {
 			return FilterFidelity::UNSUPPORTED;
 		}
 		out.push_back(MakeClause(doc, col_name, op, ValueNode(doc, cf.constant), ValueTypeTag(cf.constant)));
@@ -194,6 +203,11 @@ inline FilterFidelity TryBuildClauses(const TableFilter &filter, const string &c
 	}
 	case TableFilterType::IN_FILTER: {
 		auto &inf = filter.Cast<InFilter>();
+		for (auto &value : inf.values) {
+			if (IsNaN(value)) {
+				return FilterFidelity::UNSUPPORTED;
+			}
+		}
 		auto *arr = yyjson_mut_arr(doc);
 		// One tag for the list: every element is compared to the same column, so they share a type.
 		// Taken from the first non-NULL, since a NULL carries none.
@@ -299,7 +313,11 @@ inline string SerializeFilters(const TableFilterSet &filter_set, const unordered
 	string out;
 	if (yyjson_mut_arr_size(root) > 0) {
 		size_t len = 0;
-		auto *json = yyjson_mut_write(doc, 0, &len);
+		auto *json = yyjson_mut_write(doc, duckdb_yyjson::YYJSON_WRITE_ALLOW_INF_AND_NAN, &len);
+		if (!json) {
+			yyjson_mut_doc_free(doc);
+			throw InvalidInputException("virtual_catalog_provider: pushed filters could not be written as JSON");
+		}
 		out.assign(json, len);
 		free(json);
 	}

@@ -180,7 +180,7 @@ namespace {
 
 unique_ptr<Catalog> AttachBridge(optional_ptr<StorageExtensionInfo>, ClientContext &context, AttachedDatabase &db,
                                  const string &, AttachInfo &info, AttachOptions &) {
-	auto source = RedeemBridgeAttach(context, info);
+	auto source = RedeemBridgeAttach(info);
 	info.path = string();
 	return make_uniq<BridgeCatalog>(db, std::move(source));
 }

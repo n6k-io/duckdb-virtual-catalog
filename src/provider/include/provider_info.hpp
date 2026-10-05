@@ -2,7 +2,6 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/atomic.hpp"
-#include "duckdb/common/mutex.hpp"
 
 namespace duckdb {
 

@@ -18,35 +18,20 @@
 namespace duckdb {
 namespace vcat {
 
-//! `PointerT` defaults to duckdb::shared_ptr because that is what catalog-side code holds; pass
-//! std::shared_ptr<T> explicitly for a registry whose values come from the std side.
-template <class T, class PointerT = shared_ptr<T>>
+template <class T>
 class SharedRegistry {
 public:
 	//! The entry for `key`, or null. By value, so the caller's reference survives a concurrent Erase.
-	PointerT Get(const std::string &key) const {
+	shared_ptr<T> Get(const std::string &key) const {
 		std::lock_guard<std::mutex> lock(mutex_);
 		auto it = entries_.find(key);
 		if (it == entries_.end()) {
-			return PointerT();
+			return shared_ptr<T>();
 		}
 		return it->second;
 	}
 
-	bool Contains(const std::string &key) const {
-		std::lock_guard<std::mutex> lock(mutex_);
-		return entries_.find(key) != entries_.end();
-	}
-
-	//! Claim `key`. False (and no write) if already taken; check and insert are one critical section.
-	bool Insert(const std::string &key, PointerT value) {
-		std::lock_guard<std::mutex> lock(mutex_);
-		return entries_.emplace(key, std::move(value)).second;
-	}
-
-	//! Register `key`, replacing any existing entry. For registries where re-registration is the
-	//! documented way to update; use Insert where a duplicate is an error.
-	void Put(const std::string &key, PointerT value) {
+	void Put(const std::string &key, shared_ptr<T> value) {
 		std::lock_guard<std::mutex> lock(mutex_);
 		entries_[key] = std::move(value);
 	}
@@ -54,7 +39,7 @@ public:
 	//! False if there was nothing to remove. The entry is destroyed after the lock is released:
 	//! dropping the last reference can close a DatabaseInstance, which must not run under the mutex.
 	bool Erase(const std::string &key) {
-		PointerT removed;
+		shared_ptr<T> removed;
 		{
 			std::lock_guard<std::mutex> lock(mutex_);
 			auto it = entries_.find(key);
@@ -69,7 +54,7 @@ public:
 
 private:
 	mutable std::mutex mutex_;
-	std::unordered_map<std::string, PointerT> entries_;
+	std::unordered_map<std::string, shared_ptr<T>> entries_;
 };
 
 } // namespace vcat

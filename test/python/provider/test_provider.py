@@ -5,6 +5,7 @@ Nothing here is reachable from sqllogictest -- the provider contract is Arrow IP
 
 import datetime
 
+import duckdb
 import pyarrow as pa
 import pytest
 
@@ -327,3 +328,68 @@ def test_a_malformed_arrow_payload_is_reported_not_crashed(con):
     con.execute("SELECT provider_register('junk', 'j_list', 'j_schema', 'j_scan', '', '', '', '')")
     with pytest.raises(Exception, match="Arrow"):
         con.execute("SELECT * FROM junk.main.t").fetchall()
+
+
+def test_a_write_matching_nothing_by_constant_reports_zero(con, provider):
+    assert con.execute("DELETE FROM app.main.users WHERE false").fetchall() == [(0,)]
+    assert con.execute("UPDATE app.main.users SET score = 1 WHERE 1 = 0").fetchall() == [(0,)]
+    assert [r["score"] for r in provider.rows("users")] == [10, 20, 30]
+
+
+def test_a_primary_key_that_names_no_column_is_refused(con):
+    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    p = FakeProvider(con)
+    p.add_table("users", USERS, primary_key=["ID"])
+    p.register()
+    with pytest.raises(duckdb.IOException, match="primary key column 'ID' is not a column"):
+        con.execute("SELECT * FROM app.main.users").fetchall()
+
+
+class NegativeCountProvider(FakeProvider):
+    def _insert(self, name, payload):
+        super()._insert(name, payload)
+        return -1
+
+
+def test_a_negative_row_count_from_a_write_udf_is_an_error(con):
+    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    p = NegativeCountProvider(con)
+    p.add_table("users", USERS, primary_key=["id"])
+    p.register()
+    with pytest.raises(duckdb.IOException, match="negative row count"):
+        con.execute("INSERT INTO app.main.users VALUES (4, 'di', 40, NULL)")
+    assert con.execute("SELECT 1").fetchone() == (1,)
+
+
+def test_provider_register_refuses_empty_read_functions(con):
+    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    with pytest.raises(duckdb.BinderException, match="non-empty list, schema and scan"):
+        con.execute("SELECT provider_register('app', '', '', '', '', '', '', '')")
+
+
+def test_explain_does_not_run_provider_unregister(con, provider):
+    con.execute("EXPLAIN SELECT provider_unregister('app')").fetchall()
+    provider.invalidate()
+
+
+def test_update_of_a_column_whose_name_contains_a_comma(con):
+    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    p = FakeProvider(con)
+    odd = pa.table({"id": pa.array([1], type=pa.int32()), "a,b": pa.array([1], type=pa.int32())})
+    p.add_table("odd", odd, primary_key=["id"])
+    p.register()
+    con.execute('UPDATE app.main.odd SET "a,b" = 7')
+    assert p.rows("odd") == [{"id": 1, "a,b": 7}]
+
+
+def test_rowid_beside_a_column_is_refused(con, provider):
+    with pytest.raises(duckdb.BinderException, match="rowid is not available"):
+        con.execute("SELECT rowid, name FROM app.main.users").fetchall()
+
+
+def test_a_provider_scan_inside_a_recursive_cte_is_refused(con, provider):
+    with pytest.raises(duckdb.InvalidInputException, match="cannot be restarted"):
+        con.execute(
+            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL "
+            "SELECT n + 1 FROM r, app.main.users u WHERE u.id = 1 AND n < 3) SELECT * FROM r"
+        ).fetchall()

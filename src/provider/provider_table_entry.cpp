@@ -42,15 +42,10 @@ static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(uintpt
                                                                           ArrowStreamParameters &parameters) {
 	auto *stream_data = reinterpret_cast<ProviderStreamData *>(factory_ptr);
 
-	auto wrapper = make_uniq<ArrowArrayStreamWrapper>();
 	if (stream_data->consumed) {
-		wrapper->arrow_array_stream.release = nullptr;
-		return wrapper;
+		throw InvalidInputException("virtual_catalog_provider: a provider table scan cannot be restarted");
 	}
-
-	if (!stream_data->source_db) {
-		throw IOException("virtual_catalog_provider: database instance unavailable");
-	}
+	auto wrapper = make_uniq<ArrowArrayStreamWrapper>();
 
 	auto &projected = parameters.projected_columns.columns;
 	auto &pk_cols = stream_data->include_pk_columns;
@@ -79,10 +74,6 @@ static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(uintpt
 	auto &scan_udf = stream_data->table_name;
 	auto &provider_table = stream_data->provider_table_name;
 	stream_data->source_conn = make_uniq<Connection>(*stream_data->source_db);
-	// Bound, never spliced: filters_json carries string constants straight out of the user's WHERE
-	// clause, so a single quote in a predicate value would close a literal and run as SQL on the
-	// SOURCE connection, past the permission map bounding what the target reaches. The column list
-	// rides as a LIST for the same reason -- a column name containing a comma splits on the Python side.
 	auto udf_stmt = stream_data->source_conn->Prepare(vcat::UdfCallWithParams(scan_udf, 3));
 	if (udf_stmt->HasError()) {
 		udf_stmt->GetErrorObject().Throw("virtual_catalog_provider: read UDF is unusable: ");
@@ -123,7 +114,7 @@ static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(uintpt
 struct ProviderScanGlobalState : public ArrowScanGlobalState {
 	idx_t pk_start_index = COLUMN_IDENTIFIER_ROW_ID;
 	idx_t pk_count = 0;
-	shared_ptr<BridgePKBuffer> pk_buffer;
+	shared_ptr<ProviderPKBuffer> pk_buffer;
 	vector<LogicalType> pk_types;
 	vector<string> pk_formats;
 };
@@ -134,10 +125,17 @@ static unique_ptr<GlobalTableFunctionState> ProviderScanInitGlobal(ClientContext
 	auto result = make_uniq<ProviderScanGlobalState>();
 
 	idx_t projected_count = 0;
+	bool wants_row_id = false;
 	for (auto &col_id : input.column_ids) {
 		if (col_id != COLUMN_IDENTIFIER_ROW_ID) {
 			projected_count++;
+		} else {
+			wants_row_id = true;
 		}
+	}
+	if (wants_row_id && projected_count > 0 && !bind_data.owned_stream_data->pk_buffer) {
+		throw BinderException("virtual_catalog_provider: rowid is not available on provider table '%s'",
+		                      bind_data.owned_stream_data->provider_table_name);
 	}
 
 	if (bind_data.owned_stream_data && !bind_data.owned_stream_data->include_pk_columns.empty()) {
@@ -277,13 +275,9 @@ static BindInfo ProviderScanGetBindInfo(const optional_ptr<FunctionData> bind_da
 }
 
 TableFunction ProviderTableCatalogEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
-	if (!table_info->provider) {
-		throw IOException("virtual_catalog_provider: provider table '%s' has no provider bound", name);
-	}
-
 	auto stream_data = make_uniq<ProviderStreamData>();
 
-	stream_data->source_db = table_info->db_instance;
+	stream_data->source_db = table_info->provider->db_instance;
 	stream_data->consumed = false;
 
 	for (auto &col : columns.Logical()) {

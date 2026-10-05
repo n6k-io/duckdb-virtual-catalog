@@ -8,6 +8,9 @@ directly, from a connection that never registered, never redeemed a token and ne
 halves are gone: the entry is a catalog entry, and the function does not exist.
 """
 
+import duckdb
+import pytest
+
 from conftest import new_connection
 
 CANARY = "attacker_should_not_see_this"
@@ -40,10 +43,15 @@ def test_a_stolen_bridge_id_buys_nothing(bridged):
 
     attacker = new_connection()
     try:
-        rows = attacker.execute(f"SELECT * FROM vcat_scan('{stolen_id}', 'customers')").fetchall()
-    except Exception:  # noqa: BLE001 -- a refusal is the pass
-        return
+        with pytest.raises(duckdb.Error):
+            attacker.execute(f"ATTACH '' AS stolen (TYPE virtual_catalog_bridge, ID '{stolen_id}', TOKEN 'guess')")
+        with pytest.raises(duckdb.Error):
+            attacker.execute("SELECT bridge_set_context(?, 'tenant', 1)", [stolen_id])
+        with pytest.raises(duckdb.Error):
+            attacker.execute("SELECT bridge_policy(?, 'main.customers', 'select', 'true')", [stolen_id])
+        with pytest.raises(duckdb.Error):
+            attacker.execute("SELECT bridge_finalize_context(?)", [stolen_id])
     finally:
         attacker.close()
 
-    raise AssertionError(f"a connection outside the bridge read the source -> {rows}")
+    assert target.execute("SELECT note FROM app.main.customers").fetchall() == [(CANARY,)]

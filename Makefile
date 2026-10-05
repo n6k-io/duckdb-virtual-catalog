@@ -16,7 +16,7 @@ check-no-sql:
 # does not need a prior `make release`.
 CPP_TEST_BUILD_DIR=${PROJ_DIR}build/release
 CPP_TEST_LOG=$(CPP_TEST_BUILD_DIR)/vcat_unittest_build.log
-JOBS ?= $(shell sysctl -n hw.ncpu)
+JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc)
 test-cpp:
 	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
 	@cmake "$(CPP_TEST_BUILD_DIR)" > "$(CPP_TEST_LOG)" 2>&1 || { cat "$(CPP_TEST_LOG)"; exit 1; }

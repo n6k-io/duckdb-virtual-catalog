@@ -13,7 +13,6 @@
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/sql_statement.hpp"
 #include "duckdb/parser/statement/select_statement.hpp"
-#include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/parser/tableref/emptytableref.hpp"
 
 namespace duckdb {
@@ -66,15 +65,6 @@ inline unique_ptr<SQLStatement> UdfCallWithConstants(const string &udf_name, con
 		children.push_back(make_uniq<ConstantExpression>(value));
 	}
 	return UdfCall(udf_name, std::move(children));
-}
-
-//! A three-part table name as a table reference, for a hand-built DML statement.
-inline unique_ptr<TableRef> BaseTable(const string &catalog, const string &schema, const string &table) {
-	auto ref = make_uniq<BaseTableRef>();
-	ref->catalog_name = catalog;
-	ref->schema_name = schema;
-	ref->table_name = table;
-	return std::move(ref);
 }
 
 } // namespace vcat

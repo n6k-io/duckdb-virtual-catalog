@@ -109,6 +109,40 @@ TEST_CASE("filter_json: an optional filter with an unrenderable child is skipped
 	REQUIRE(c.result.all_exact);
 }
 
+TEST_CASE("filter_json: an infinite value renders as a bare token", "[filter_json]") {
+	SerializeCase c;
+	c.column_names = {"d"};
+	c.filter_to_col[0] = 0;
+	c.filters.PushFilter(ColumnIndex(0), Constant(ExpressionType::COMPARE_GREATERTHAN,
+	                                              Value::DOUBLE(std::numeric_limits<double>::infinity())));
+
+	REQUIRE(c.Run() == R"([["d",">",Infinity]])");
+	REQUIRE(c.result.all_exact);
+}
+
+TEST_CASE("filter_json: a NaN comparison is unsupported", "[filter_json]") {
+	SerializeCase c;
+	c.column_names = {"d"};
+	c.filter_to_col[0] = 0;
+	c.filters.PushFilter(ColumnIndex(0), Constant(ExpressionType::COMPARE_LESSTHAN,
+	                                              Value::DOUBLE(std::numeric_limits<double>::quiet_NaN())));
+
+	REQUIRE(c.Run().empty());
+	REQUIRE_FALSE(c.result.all_exact);
+	REQUIRE(c.result.first_unsupported == "d");
+}
+
+TEST_CASE("filter_json: a NaN inside IN is unsupported", "[filter_json]") {
+	vector<Value> values {Value::DOUBLE(1.5), Value::DOUBLE(std::numeric_limits<double>::quiet_NaN())};
+	SerializeCase c;
+	c.column_names = {"d"};
+	c.filter_to_col[0] = 0;
+	c.filters.PushFilter(ColumnIndex(0), make_uniq<InFilter>(std::move(values)));
+
+	REQUIRE(c.Run().empty());
+	REQUIRE_FALSE(c.result.all_exact);
+}
+
 TEST_CASE("filter_json: ValueTypeTag", "[filter_json]") {
 	CHECK(ValueTypeTag(Value::INTEGER(1)) == nullptr);
 	CHECK(ValueTypeTag(Value("s")) == nullptr);

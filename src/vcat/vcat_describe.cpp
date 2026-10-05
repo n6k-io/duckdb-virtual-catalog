@@ -139,7 +139,6 @@ static unique_ptr<FunctionData> TableDescribeBind(ClientContext &context, TableF
 		DescribeTableColumns(entry->Cast<TableCatalogEntry>(), result->columns);
 	}
 
-	// Key and verbs reuse the vcat_table_permissions collectors, filtered to this table.
 	vector<TablePermissionRow> perms;
 	const string schema_filter = schema_name;
 	const string table_filter = args.table;

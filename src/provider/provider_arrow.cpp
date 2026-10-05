@@ -11,6 +11,7 @@
 #include "duckdb/main/connection.hpp"
 #include "nanoarrow.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <deque>
 
@@ -81,10 +82,6 @@ struct PreloadedStream {
 
 int PreloadedGetSchema(ArrowArrayStream *stream, ArrowSchema *out) {
 	auto *self = static_cast<PreloadedStream *>(stream->private_data);
-	if (!self->schema_owned) {
-		self->last_error = "virtual_catalog_provider: stream has no schema";
-		return EINVAL;
-	}
 	return ArrowSchemaDeepCopy(&self->schema, out) == NANOARROW_OK ? 0 : EIO;
 }
 
@@ -133,6 +130,11 @@ DecodedProviderSchema DecodeSchemaMessage(ClientContext &context, const string &
 		auto &child = *schema->children[i];
 		result.column_names.push_back(child.name ? string(child.name) : string());
 		result.column_types.push_back(ArrowType::GetArrowLogicalType(context, child)->GetDuckType(true));
+	}
+	for (auto &key : result.primary_keys) {
+		if (std::find(result.column_names.begin(), result.column_names.end(), key) == result.column_names.end()) {
+			throw IOException("%s: primary key column '%s' is not a column of the schema", what, key);
+		}
 	}
 	return result;
 }
@@ -280,7 +282,14 @@ int64_t CallWriteUdf(Connection &conn, const string &udf_name, const string &tab
 		return 0;
 	}
 	auto value = chunk->GetValue(0, 0);
-	return value.IsNull() ? 0 : value.GetValue<int64_t>();
+	if (value.IsNull()) {
+		return 0;
+	}
+	auto affected = value.GetValue<int64_t>();
+	if (affected < 0) {
+		throw IOException("%s function \"%s\" returned a negative row count (%lld)", what, udf_name, affected);
+	}
+	return affected;
 }
 
 } // namespace vcat_provider

@@ -67,7 +67,6 @@ class FakeProvider:
         self.calls: list[tuple] = []
         self._writeable = writeable
         self._editable = editable
-        self._registered = False
 
     # --- host side ------------------------------------------------------------------------------
 
@@ -85,7 +84,7 @@ class FakeProvider:
         c.create_function(f"{prefix}_schema", self._schema, [VARCHAR], BLOB)
         c.create_function(f"{prefix}_scan", self._scan, [VARCHAR, VARCHAR_LIST, VARCHAR], BLOB)
         c.create_function(f"{prefix}_insert", self._insert, [VARCHAR, BLOB], BIGINT)
-        c.create_function(f"{prefix}_update", self._update, [VARCHAR, BLOB, VARCHAR], BIGINT)
+        c.create_function(f"{prefix}_update", self._update, [VARCHAR, BLOB, VARCHAR_LIST], BIGINT)
         c.create_function(f"{prefix}_delete", self._delete, [VARCHAR, BLOB], BIGINT)
         c.create_function(f"{prefix}_alter", self._alter, [VARCHAR, VARCHAR, VARCHAR], VARCHAR)
         return {
@@ -113,21 +112,18 @@ class FakeProvider:
                 udfs["alter"],
             ],
         )
-        self._registered = True
 
     def attach(self, prefix="p"):
         """The other half of the same contract: the UDF set rides on ATTACH instead."""
         udfs = self.create_udfs(prefix)
         options = ", ".join(f"{verb} '{udf}'" for verb, udf in udfs.items() if udf)
         self.con.execute(f"ATTACH '' AS {self.catalog} (TYPE virtual_catalog_provider, {options})")
-        self._registered = True
 
     def invalidate(self):
         self.con.execute("SELECT provider_invalidate_tables(?)", [self.catalog])
 
     def unregister(self):
         self.con.execute("SELECT provider_unregister(?)", [self.catalog])
-        self._registered = False
 
     # --- UDFs -----------------------------------------------------------------------------------
 
@@ -180,12 +176,12 @@ class FakeProvider:
         self.tables[name] = pa.concat_tables([existing, incoming.rename_columns(existing.column_names)])
         return incoming.num_rows
 
-    def _update(self, name: str, payload: bytes, changed_columns: str) -> int:
+    def _update(self, name: str, payload: bytes, changed_columns) -> int:
         name = self._local(name)
         incoming = read_stream(payload)
-        self.calls.append(("update", name, changed_columns, incoming.num_rows))
+        self.calls.append(("update", name, list(changed_columns), incoming.num_rows))
         keys = self.primary_keys[name]
-        changed = [c for c in changed_columns.split(",") if c]
+        changed = list(changed_columns)
         # Read positionally, never by name: the payload is the key columns (their OLD values, from
         # the scan) followed by the changed columns, and an UPDATE that touches the key itself puts
         # the same column name in both halves. Matching by name would silently look up the row by

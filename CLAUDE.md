@@ -2,8 +2,9 @@
 
 The USER runs builds — never run them yourself.
 
-- User runs **`make release`** builds the extension into
-  `build/release/extension/virtual_catalog/virtual_catalog.duckdb_extension`.
+- User runs **`make release`** builds the extensions into
+  `build/release/extension/virtual_catalog_bridge/virtual_catalog_bridge.duckdb_extension` and
+  `build/release/extension/virtual_catalog_provider/virtual_catalog_provider.duckdb_extension`.
 - You may run **`make test`** runs the sqllogictests under `test/sql/`. (needs make release)
 - You may run **`make test-cpp`** run the c++ unit tests (does not need make release)
 - **`make check-no-sql`** runs `scripts/check_no_sql.py`, which forbids SQL text
@@ -11,7 +12,7 @@ The USER runs builds — never run them yourself.
 - **`uv run pytest test/python/`** runs the Python-side tests
 
 ## Submodules
-- `src/crossing` is the `duckdb-crossing` repo. Edit and commit crossing changes there, then bump the pointer here.
+- `third_party/crossing` is the `duckdb-crossing` repo. Edit and commit crossing changes there, then bump the pointer here.
 
 ## Shell rules
 - Always run `cd` in its own Bash command, never chained with `&&`.

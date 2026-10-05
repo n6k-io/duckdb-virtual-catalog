@@ -40,16 +40,8 @@ SinkFinalizeType ProviderTableDelete::Finalize(Pipeline &pipeline, Event &event,
 		return SinkFinalizeType::READY;
 	}
 
-	if (!table.table_info->db_instance) {
-		throw IOException("virtual_catalog_provider: database instance unavailable");
-	}
-
-	if (!table.table_info->provider) {
-		throw IOException("virtual_catalog_provider: provider table '%s' has no provider bound", table.name);
-	}
-
 	auto &pk_cols = table.table_info->primary_keys;
-	auto conn = make_uniq<Connection>(*table.table_info->db_instance);
+	auto conn = make_uniq<Connection>(*table.table_info->provider->db_instance);
 
 	vector<LogicalType> pk_types;
 	for (auto &pk_col : pk_cols) {
@@ -79,7 +71,7 @@ SinkFinalizeType ProviderTableDelete::Finalize(Pipeline &pipeline, Event &event,
 	    vcat_provider::CallWriteUdf(*conn, table.table_info->provider->delete_udf, table.table_info->table_name,
 	                                arrow_ipc, vector<Value>(), "virtual_catalog_provider: delete UDF"));
 	// The UDF has already run and nothing here can undo it: this reports, it does not prevent.
-	EnsureKeyIsUnique(affected, gstate.id_values.size(), table.table_info->table_name, pk_cols, "DELETE", false);
+	EnsureKeyIsUnique(affected, gstate.id_values.size(), table.table_info->table_name, pk_cols, "DELETE");
 	gstate.affected_rows = affected;
 
 	return SinkFinalizeType::READY;

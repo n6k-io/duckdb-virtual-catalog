@@ -14,11 +14,10 @@ from security.world import POLICY, SETUP
 @pytest.fixture
 def bridged():
     """A source and target pair, plus the handshake that joins them."""
-    connect, handshake = new_connection, bridge
-    source = connect()
-    target = connect()
+    source = new_connection()
+    target = new_connection()
     try:
-        yield source, target, handshake
+        yield source, target, bridge
     finally:
         source.close()
         target.close()

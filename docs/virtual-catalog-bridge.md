@@ -209,8 +209,8 @@ about the source's catalog shape. Discovery runs for every verb, so
 `update` and `delete` make an empty result an error, since only they resolve rows
 back to the source by key.
 
-Where discovery cannot find one — a view, a table function, or a scanner whose
-catalog entry declares no constraints — supply it:
+Where discovery cannot find one — a table whose catalog entry declares no
+constraints — supply it:
 
 ```sql
 SELECT bridge_primary_key('b1', 'main.events', ['tenant_id', 'event_id']);
@@ -322,7 +322,7 @@ Tables granted any write verb support the ones they were granted.
 
 **UPDATE** and **DELETE** are keyed on the primary key, not on any source rowid:
 
-1. The scan appends each row's primary-key values to a shared `BridgePKBuffer`
+1. The scan appends each row's primary-key values to a shared key buffer
    and emits the buffer index in the `rowid` slot
 2. Those indices are collected during the sink phase
 3. On finalize, prepared statements on the source match rows by the primary-key
@@ -344,19 +344,17 @@ disagree with the first.
 statements it accepts. It works on a `virtual_catalog_bridge` catalog and on a
 plain DuckDB catalog. Signature and columns: [`sql-api.md`](sql-api.md).
 
-`kind` is one of `native_table` · `native_view` · `bridge`. Capability by entry
+`kind` is one of `native_table` · `native_view` · `crossing`. Capability by entry
 kind:
 
 | `kind` | `verbs` | `primary_key` |
 |--------|---------|---------------|
 | `native_table` | all five | from table constraints |
 | `native_view` | `select` | empty |
-| `bridge` | the granted verbs (bridge `alter` is reported but not yet implemented, so it currently overstates what the target can do) | discovered from source |
+| `crossing` | the granted verbs (bridge `alter` is reported but not yet implemented, so it currently overstates what the target can do) | discovered from source |
 
-A `virtual_catalog_provider` catalog is a different extension's binary, so this
-function does not recognise it and falls back to the plain-catalog classifier.
-Use `provider_table_permissions` for those; it is the same function compiled
-into the provider.
+A `virtual_catalog_provider` catalog reports its own entries as `provider`;
+`provider_table_permissions` is the same function compiled into the provider.
 
 `verbs` is the single source of truth for capability. There is deliberately no
 coarse `writeable`/`editable` pair alongside it — those existed, duplicated a

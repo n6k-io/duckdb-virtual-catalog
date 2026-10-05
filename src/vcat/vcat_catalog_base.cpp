@@ -18,7 +18,7 @@ VirtualCatalogSchemaEntryBase &VirtualCatalogBase::GetOrCreateWrapper(SchemaCata
 	auto it = wrappers.find(target_schema.name);
 	if (it != wrappers.end()) {
 		// Match on address, not name: DROP SCHEMA s; CREATE SCHEMA s; yields a fresh DuckSchemaEntry,
-		// and the old wrapper's target_schema/target_catalog references now dangle.
+		// and the old wrapper's target_schema reference now dangles.
 		if (&it->second->TargetSchema() == &target_schema) {
 			return *it->second;
 		}

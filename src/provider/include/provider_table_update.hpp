@@ -20,7 +20,7 @@ public:
 	vector<unique_ptr<Expression>> update_expressions;
 	//! Per table column, indexed by PhysicalIndex; drives the VALUE_DEFAULT entries of update_expressions.
 	vector<unique_ptr<Expression>> bound_defaults;
-	shared_ptr<BridgePKBuffer> pk_buffer;
+	shared_ptr<ProviderPKBuffer> pk_buffer;
 
 public:
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;

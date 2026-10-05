@@ -11,7 +11,6 @@
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
-#include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 
 namespace duckdb {
@@ -52,11 +51,6 @@ void ProviderTableCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	throw BinderException("Dropping schemas in a provider-table catalog is not supported");
 }
 
-PhysicalOperator &ProviderTableCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                          LogicalCreateTable &op, PhysicalOperator &plan) {
-	throw BinderException("CREATE TABLE AS is not supported for provider tables");
-}
-
 PhysicalOperator &ProviderTableCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
                                                    LogicalInsert &op, optional_ptr<PhysicalOperator> plan) {
 	if (op.return_chunk) {
@@ -64,10 +58,6 @@ PhysicalOperator &ProviderTableCatalog::PlanInsert(ClientContext &context, Physi
 	}
 
 	auto &table = op.table.Cast<ProviderTableCatalogEntry>();
-	if (!table.table_info->provider) {
-		throw BinderException("Provider table '%s' has no provider bound", table.name);
-	}
-	// Empty UDF name means the host did not register a UDF for this op in provider_register.
 	if (table.table_info->provider->insert_udf.empty()) {
 		throw PermissionException("Provider table '%s' does not support INSERT", table.name);
 	}
@@ -91,9 +81,6 @@ PhysicalOperator &ProviderTableCatalog::PlanDelete(ClientContext &context, Physi
 	}
 
 	auto &table = op.table.Cast<ProviderTableCatalogEntry>();
-	if (!table.table_info->provider) {
-		throw BinderException("Provider table '%s' has no provider bound", table.name);
-	}
 	if (table.table_info->provider->delete_udf.empty()) {
 		throw PermissionException("Provider table '%s' does not support DELETE", table.name);
 	}
@@ -107,8 +94,7 @@ PhysicalOperator &ProviderTableCatalog::PlanDelete(ClientContext &context, Physi
 
 	auto pk_buffer = AttachPKBufferToTargetScans(plan, table.table_info->primary_keys, table);
 	if (!pk_buffer) {
-		throw InternalException("virtual_catalog_provider: could not locate a scan of '%s' for PK buffer injection",
-		                        table.name);
+		pk_buffer = make_shared_ptr<ProviderPKBuffer>();
 	}
 
 	auto &del_op = planner.Make<ProviderTableDelete>(table, row_id_index, vector<LogicalType> {LogicalType::BIGINT},
@@ -125,9 +111,6 @@ PhysicalOperator &ProviderTableCatalog::PlanUpdate(ClientContext &context, Physi
 	}
 
 	auto &table = op.table.Cast<ProviderTableCatalogEntry>();
-	if (!table.table_info->provider) {
-		throw BinderException("Provider table '%s' has no provider bound", table.name);
-	}
 	if (table.table_info->provider->update_udf.empty()) {
 		throw PermissionException("Provider table '%s' does not support UPDATE", table.name);
 	}
@@ -138,8 +121,7 @@ PhysicalOperator &ProviderTableCatalog::PlanUpdate(ClientContext &context, Physi
 
 	auto pk_buffer = AttachPKBufferToTargetScans(plan, table.table_info->primary_keys, table);
 	if (!pk_buffer) {
-		throw InternalException("virtual_catalog_provider: could not locate a scan of '%s' for PK buffer injection",
-		                        table.name);
+		pk_buffer = make_shared_ptr<ProviderPKBuffer>();
 	}
 
 	auto &upd_op =
