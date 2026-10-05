@@ -187,6 +187,15 @@ def test_primary_key_query_that_fails_at_runtime_is_an_error(source):
         ("SELECT bridge_primary_key_query(?, 'main.t1', x) FROM (VALUES (NULL::VARCHAR)) t(x)", None),
         ("SELECT bridge_primary_key_check(?, 'main.t1', x) FROM (VALUES (NULL::VARCHAR)) t(x)", None),
         ("SELECT bridge_finalize_context(x) FROM (VALUES (NULL::VARCHAR)) t(x)", []),
+        ("SELECT bridge_register_source(NULL, 'memory')", []),
+        ("SELECT bridge_register_source(NULL::VARCHAR, 'memory')", []),
+        ("SELECT bridge_register_source(?, 'memory', NULL)", None),
+        ("SELECT bridge_policy(?, NULL, 'select', 'true')", None),
+        ("SELECT bridge_policy(?, 'main.t1', 'insert', NULL, 'true')", None),
+        ("SELECT bridge_primary_key(?, NULL, ['id'])", None),
+        ("SELECT bridge_primary_key_query(?, 'main.t1', NULL)", None),
+        ("SELECT bridge_primary_key_check(?, 'main.t1', NULL)", None),
+        ("SELECT bridge_finalize_context(NULL)", []),
     ],
 )
 def test_a_null_setup_argument_is_refused(source, sql, params):

@@ -1533,10 +1533,12 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	ScalarFunction register_source({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                               RegisterSourceFunc);
 	register_source.stability = FunctionStability::VOLATILE;
+	register_source.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	register_source_set.AddFunction(register_source);
 	ScalarFunction register_source_token({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                     LogicalType::VARCHAR, RegisterSourceFunc);
 	register_source_token.stability = FunctionStability::VOLATILE;
+	register_source_token.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	register_source_set.AddFunction(register_source_token);
 	loader.RegisterFunction(register_source_set);
 
@@ -1545,11 +1547,13 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	    PolicyFunc);
 	policy_using.stability = FunctionStability::VOLATILE;
+	policy_using.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	policy_set.AddFunction(policy_using);
 	ScalarFunction policy_check(
 	    {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
 	    LogicalType::VARCHAR, PolicyFunc);
 	policy_check.stability = FunctionStability::VOLATILE;
+	policy_check.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	policy_set.AddFunction(policy_check);
 	loader.RegisterFunction(policy_set);
 
@@ -1557,18 +1561,21 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	                           {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)},
 	                           LogicalType::VARCHAR, PrimaryKeyFunc);
 	primary_key.stability = FunctionStability::VOLATILE;
+	primary_key.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(primary_key);
 
 	ScalarFunction primary_key_query("bridge_primary_key_query",
 	                                 {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                 LogicalType::VARCHAR, PrimaryKeyQueryFunc);
 	primary_key_query.stability = FunctionStability::VOLATILE;
+	primary_key_query.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(primary_key_query);
 
 	ScalarFunction primary_key_check("bridge_primary_key_check",
 	                                 {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                 LogicalType::VARCHAR, PrimaryKeyCheckFunc);
 	primary_key_check.stability = FunctionStability::VOLATILE;
+	primary_key_check.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(primary_key_check);
 
 	ScalarFunction set_context("bridge_set_context", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
@@ -1580,6 +1587,7 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	ScalarFunction finalize_context("bridge_finalize_context", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                                FinalizeContextFunc);
 	finalize_context.stability = FunctionStability::VOLATILE;
+	finalize_context.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(finalize_context);
 }
 
