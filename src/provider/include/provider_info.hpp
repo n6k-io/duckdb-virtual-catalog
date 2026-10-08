@@ -9,7 +9,8 @@ namespace duckdb {
 // `schema.table`, and every other UDF is called with that same qualified name.
 struct ProviderInfo {
 	string catalog_name;
-	shared_ptr<DatabaseInstance> db_instance;
+	// Weak: the catalog owns this info, and a strong ref would keep the database alive forever.
+	weak_ptr<DatabaseInstance> db_instance;
 
 	string list_udf;
 	string schema_udf;
@@ -25,12 +26,15 @@ struct ProviderInfo {
 
 	// Set as ParentCatalog() on provider entries to route DML to the insert/update/delete UDFs.
 	shared_ptr<Catalog> phantom_catalog;
-};
 
-shared_ptr<ProviderInfo> GetProvider(const string &catalog);
-void RegisterProvider(const shared_ptr<ProviderInfo> &info);
-bool UnregisterProvider(const string &catalog);
-bool BumpProviderVersion(const string &catalog);
+	shared_ptr<DatabaseInstance> Database() const {
+		auto db = db_instance.lock();
+		if (!db) {
+			throw InvalidInputException("virtual_catalog_provider: database for catalog '%s' is closed", catalog_name);
+		}
+		return db;
+	}
+};
 
 void RegisterProviderFunctions(ExtensionLoader &loader);
 

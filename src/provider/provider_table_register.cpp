@@ -1,5 +1,4 @@
 #include "provider_virtual_catalog.hpp"
-#include "shared_registry.hpp"
 #include "provider_info.hpp"
 #include "provider_table_catalog.hpp"
 #include "duckdb/catalog/catalog_transaction.hpp"
@@ -9,36 +8,6 @@
 #include "duckdb/main/database.hpp"
 
 namespace duckdb {
-
-// Process-wide ProviderInfo registry; the catalog entries themselves live on the
-// VirtualCatalogProvider and its schema wrappers.
-static vcat::SharedRegistry<ProviderInfo> &ProviderRegistry() {
-	static vcat::SharedRegistry<ProviderInfo> instance;
-	return instance;
-}
-
-shared_ptr<ProviderInfo> GetProvider(const string &catalog) {
-	return ProviderRegistry().Get(catalog);
-}
-
-// Put, not Insert: re-registering the same catalog is how a host swaps its UDF set. The bridge
-// registry uses Insert, where a duplicate id means two callers wanted the same name.
-void RegisterProvider(const shared_ptr<ProviderInfo> &info) {
-	ProviderRegistry().Put(info->catalog_name, info);
-}
-
-bool UnregisterProvider(const string &catalog) {
-	return ProviderRegistry().Erase(catalog);
-}
-
-bool BumpProviderVersion(const string &catalog) {
-	auto info = GetProvider(catalog);
-	if (!info) {
-		return false;
-	}
-	info->version.fetch_add(1, std::memory_order_release);
-	return true;
-}
 
 static VirtualCatalogProvider &LookupProviderCatalogOrThrow(ClientContext &context, const string &catalog_name) {
 	auto catalog_entry = Catalog::GetCatalogEntry(context, catalog_name);
@@ -93,7 +62,6 @@ static void AttachProviderToCatalogAndRegister(DataChunk &args, ExpressionState 
 		info->phantom_catalog = make_shared_ptr<ProviderTableCatalog>(vcat.GetAttached());
 
 		vcat.SetProvider(info);
-		RegisterProvider(info);
 
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
@@ -110,19 +78,16 @@ static void DetachProviderFromCatalogAndUnregister(DataChunk &args, ExpressionSt
 	for (idx_t i = 0; i < count; i++) {
 		auto target_catalog_name = catalogs[i].GetString();
 		auto &vcat = LookupProviderCatalogOrThrow(context, target_catalog_name);
-		if (!GetProvider(target_catalog_name)) {
+		if (!vcat.GetProvider()) {
 			throw CatalogException("virtual_catalog_provider: no provider registered for %s", target_catalog_name);
 		}
-
-		// Detach from the catalog before dropping the registry entry so racing plan compilation stops
-		// routing here.
 		vcat.SetProvider(nullptr);
-		UnregisterProvider(target_catalog_name);
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
 }
 
 static void BumpProviderVersionOrThrow(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &context = state.GetContext();
 	auto count = args.size();
 	args.data[0].Flatten(count);
 
@@ -131,9 +96,11 @@ static void BumpProviderVersionOrThrow(DataChunk &args, ExpressionState &state, 
 
 	for (idx_t i = 0; i < count; i++) {
 		auto catalog = catalogs[i].GetString();
-		if (!BumpProviderVersion(catalog)) {
+		auto info = LookupProviderCatalogOrThrow(context, catalog).GetProvider();
+		if (!info) {
 			throw CatalogException("virtual_catalog_provider: no provider registered for %s", catalog);
 		}
+		info->version.fetch_add(1, std::memory_order_release);
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
 }

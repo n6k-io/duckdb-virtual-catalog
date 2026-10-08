@@ -277,7 +277,7 @@ static BindInfo ProviderScanGetBindInfo(const optional_ptr<FunctionData> bind_da
 TableFunction ProviderTableCatalogEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
 	auto stream_data = make_uniq<ProviderStreamData>();
 
-	stream_data->source_db = table_info->provider->db_instance;
+	stream_data->source_db = table_info->provider->Database();
 	stream_data->consumed = false;
 
 	for (auto &col : columns.Logical()) {

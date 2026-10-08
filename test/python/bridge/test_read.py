@@ -150,6 +150,25 @@ def test_source_tables_outside_the_default_catalog_reach_via_source_args(source,
     assert target.execute("SELECT item FROM app.main.orders").fetchall() == [("widget",)]
 
 
+def test_a_source_view_is_bridged(source, target):
+    source.execute(SETUP)
+    source.execute("CREATE TABLE teams(user_id INTEGER, team VARCHAR)")
+    source.execute("INSERT INTO teams VALUES (1, 'red'), (2, 'blue'), (5, 'red')")
+    source.execute("CREATE VIEW roster AS SELECT u.id, u.name, t.team FROM users u JOIN teams t ON t.user_id = u.id")
+    bridge(source, target, {"roster": {"select": "team = 'red'"}})
+    assert (
+        target.execute("SELECT * FROM app.main.roster ORDER BY id").fetchall()
+        == source.execute("SELECT * FROM roster WHERE team = 'red' ORDER BY id").fetchall()
+    )
+
+
+def test_a_source_view_cannot_be_granted_a_write(source, target):
+    source.execute(SETUP)
+    source.execute("CREATE VIEW v AS SELECT * FROM users")
+    with pytest.raises(duckdb.IOException, match="a view can only be granted 'select', not 'update'"):
+        bridge(source, target, {"v": ["select", "update"]})
+
+
 def test_tables_outside_the_permission_map_are_invisible(bridged):
     source, target = bridged
     source.execute("CREATE TABLE secret(id INTEGER PRIMARY KEY)")

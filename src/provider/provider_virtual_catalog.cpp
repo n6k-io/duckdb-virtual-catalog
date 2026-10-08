@@ -91,15 +91,6 @@ shared_ptr<ProviderInfo> ProviderFromAttachOptions(ClientContext &context, Attac
 
 VirtualCatalogProvider::VirtualCatalogProvider(AttachedDatabase &db, shared_ptr<ProviderInfo> attached_provider)
     : VirtualCatalogBase(db), provider(std::move(attached_provider)) {
-	if (provider) {
-		RegisterProvider(provider);
-	}
-}
-
-VirtualCatalogProvider::~VirtualCatalogProvider() {
-	if (provider && GetProvider(provider->catalog_name) == provider) {
-		UnregisterProvider(provider->catalog_name);
-	}
 }
 
 shared_ptr<StorageExtension> VirtualCatalogProvider::CreateStorageExtension() {
@@ -123,6 +114,11 @@ shared_ptr<StorageExtension> VirtualCatalogProvider::CreateStorageExtension() {
 unique_ptr<VirtualCatalogSchemaEntryBase>
 VirtualCatalogProvider::CreateSchemaWrapper(SchemaCatalogEntry &target_schema) {
 	return make_uniq<VirtualCatalogProviderSchemaEntry>(*this, target_schema);
+}
+
+shared_ptr<ProviderInfo> VirtualCatalogProvider::GetProvider() {
+	lock_guard<mutex> lock(provider_lock);
+	return provider;
 }
 
 void VirtualCatalogProvider::SetProvider(shared_ptr<ProviderInfo> new_provider) {
@@ -155,7 +151,7 @@ void VirtualCatalogProvider::RefreshProviderNames() {
 	ListingGuard guard;
 
 	vector<string> qualified;
-	Connection conn(*snapshot->db_instance);
+	Connection conn(*snapshot->Database());
 	auto result = conn.Query(vcat::UdfCallWithConstants(snapshot->list_udf, {}));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("virtual_catalog_provider: list UDF failed: ");
@@ -300,7 +296,7 @@ VirtualCatalogProviderSchemaEntry::GetOrQueryProviderEntry(const VirtualCatalogP
 
 	auto &info = *tables.provider;
 	auto qualified = QualifiedName(entry_name);
-	Connection conn(*info.db_instance);
+	Connection conn(*info.Database());
 	auto result = conn.Query(vcat::UdfCallWithConstants(info.schema_udf, {Value(qualified)}));
 	if (result->HasError()) {
 		result->GetErrorObject().Throw("virtual_catalog_provider: schema UDF failed: ");
@@ -444,7 +440,7 @@ bool VirtualCatalogProviderSchemaEntry::TryAlterExtensionEntry(CatalogTransactio
 	}
 	auto details_json = vcat::SerializeJsonDocAndFree(doc);
 
-	Connection udf_conn(*owning->db_instance);
+	Connection udf_conn(*owning->Database());
 	auto udf_result = udf_conn.Query(vcat::UdfCallWithConstants(
 	    owning->alter_udf, {Value(QualifiedName(alter.name)), Value(kind), Value(details_json)}));
 	if (udf_result->HasError()) {

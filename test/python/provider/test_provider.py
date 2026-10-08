@@ -9,7 +9,7 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-from conftest import BLOB, VARCHAR, VARCHAR_LIST, schema_message, stream_bytes
+from conftest import BLOB, VARCHAR, VARCHAR_LIST, new_connection, schema_message, stream_bytes
 from provider_stub import FakeProvider
 
 USERS = pa.table(
@@ -393,3 +393,41 @@ def test_a_provider_scan_inside_a_recursive_cte_is_refused(con, provider):
             "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL "
             "SELECT n + 1 FROM r, app.main.users u WHERE u.id = 1 AND n < 3) SELECT * FROM r"
         ).fetchall()
+
+
+def _registered_in_own_database(users):
+    con = new_connection(bridge=False, provider=True)
+    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    p = FakeProvider(con)
+    p.add_table("users", users, primary_key=["id"])
+    p.register()
+    return con, p
+
+
+def _provider_tables(con):
+    return sorted(
+        r[0] for r in con.execute("SELECT name FROM provider_table_permissions('app', schema := 'main')").fetchall()
+    )
+
+
+def test_same_catalog_name_in_two_databases_stays_separate():
+    a_con, a = _registered_in_own_database(USERS)
+    b_con, b = _registered_in_own_database(USERS.slice(0, 1))
+    try:
+        assert a_con.execute("SELECT count(*) FROM app.main.users").fetchone() == (3,)
+        assert b_con.execute("SELECT count(*) FROM app.main.users").fetchone() == (1,)
+
+        a.add_table("extra", USERS, primary_key=["id"])
+        b.invalidate()
+        assert _provider_tables(a_con) == ["users"]
+        a.invalidate()
+        assert _provider_tables(a_con) == ["extra", "users"]
+
+        b.unregister()
+        assert a_con.execute("SELECT count(*) FROM app.main.users").fetchone() == (3,)
+        a.invalidate()
+        with pytest.raises(Exception, match="no provider registered"):
+            b.invalidate()
+    finally:
+        a_con.close()
+        b_con.close()
