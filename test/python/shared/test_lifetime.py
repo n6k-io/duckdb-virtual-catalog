@@ -153,6 +153,35 @@ def test_process_exits_cleanly_with_a_provider_still_registered():
     assert result.stdout.strip() == "1"
 
 
+def test_closing_a_connection_with_a_provider_registered_frees_its_database(tmp_path):
+    """The catalog owns its ProviderInfo; a strong ref back to the DatabaseInstance would pin it for
+    the life of the process, and reopening the same file then blocks."""
+    result = run_script(
+        f"""
+        import gc
+        import pyarrow as pa
+        VARCHAR = duckdb.sqltype("VARCHAR")
+        BLOB = duckdb.sqltype("BLOB")
+        path = {str(tmp_path / "host.duckdb")!r}
+        con = duckdb.connect(path, **con_kwargs)
+        con.execute("LOAD '{PROVIDER_EXTENSION}'")
+        con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+        schema = pa.schema([pa.field("id", pa.int32())])
+        con.create_function("l", lambda: "main.t", [], VARCHAR)
+        con.create_function("s", lambda n: schema.serialize().to_pybytes(), [VARCHAR], BLOB)
+        con.execute("SELECT provider_register('app', 'l', 's', 'sc', '', '', '', '')").fetchall()
+        con.execute("SELECT count(*) FROM provider_table_permissions('app', schema := 'main')").fetchall()
+        con.close()
+        del con
+        gc.collect()
+        reopened = duckdb.connect(path, **con_kwargs)
+        print(reopened.execute("SELECT count(*) FROM duckdb_databases() WHERE database_name = 'app'").fetchone()[0])
+    """
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0"
+
+
 def test_many_bridges_set_up_and_torn_down():
     """Attach churn: the pending registration must actually be released, not just unbound."""
     source = new_connection()

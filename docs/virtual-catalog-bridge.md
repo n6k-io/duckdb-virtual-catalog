@@ -106,6 +106,11 @@ nothing below it asks again.
 | `delete` | `DELETE` |
 | `alter` | reported in `verbs`; bridge `ALTER TABLE` is not yet implemented |
 
+A grant may name a source **view** as well as a table. A view takes `select`
+only — any other verb is refused by `bridge_policy` — and its policy is compiled
+against the view's columns. On the target it is a `crossing` table entry with
+`verbs` `[select]` and no primary key.
+
 `update` and `delete` also require `select` on the same table, and the `ATTACH`
 refuses a grant set that breaks this. Both are driven by a
 scan: the plan reads the table to resolve the `WHERE`, and the row identities the

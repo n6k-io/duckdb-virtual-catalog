@@ -79,7 +79,7 @@ SinkFinalizeType ProviderTableUpdate::Finalize(Pipeline &pipeline, Event &event,
 	auto &pk_cols = table.table_info->primary_keys;
 	auto &all_columns = table.GetColumns();
 
-	auto conn = make_uniq<Connection>(*table.table_info->provider->db_instance);
+	auto conn = make_uniq<Connection>(*table.table_info->provider->Database());
 
 	// The row layout the provider is handed: every key column, then only the changed ones.
 	// `changed_col_names` names that second half so the provider knows where the keys stop.

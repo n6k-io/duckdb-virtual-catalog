@@ -23,7 +23,6 @@ static constexpr const char *VIRTUAL_CATALOG_PROVIDER_TYPE = "virtual_catalog_pr
 class VirtualCatalogProvider : public VirtualCatalogBase {
 public:
 	explicit VirtualCatalogProvider(AttachedDatabase &db, shared_ptr<ProviderInfo> attached_provider = nullptr);
-	~VirtualCatalogProvider() override;
 
 	string GetCatalogType() override {
 		return VIRTUAL_CATALOG_PROVIDER_TYPE;
@@ -33,6 +32,7 @@ public:
 
 	//! Attach (or, with null, detach) the provider serving this catalog.
 	void SetProvider(shared_ptr<ProviderInfo> new_provider);
+	shared_ptr<ProviderInfo> GetProvider();
 
 	//! One schema's slice of the provider's table list, tagged with the epoch it was listed at.
 	//! `names` is shared, not copied: this is read on every catalog entry lookup.

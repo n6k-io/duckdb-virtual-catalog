@@ -41,7 +41,7 @@ SinkFinalizeType ProviderTableInsert::Finalize(Pipeline &pipeline, Event &event,
 		return SinkFinalizeType::READY;
 	}
 
-	auto conn = make_uniq<Connection>(*table.table_info->provider->db_instance);
+	auto conn = make_uniq<Connection>(*table.table_info->provider->Database());
 
 	vector<LogicalType> types;
 	vector<string> names;

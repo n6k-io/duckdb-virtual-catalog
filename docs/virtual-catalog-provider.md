@@ -59,9 +59,9 @@ SELECT provider_unregister('app');
 ```
 
 It errors when no provider is registered for that catalog — including on a
-second call. The catalog is detached from the provider before the registry entry
-is dropped, so plan compilation racing the call stops routing there rather than
-reaching a half-freed provider. `DETACH` does the same on its way out.
+second call. The provider lives on the attached catalog, not in a process-wide
+registry: the same catalog name in two databases never collides, and closing a
+database (or `DETACH`) releases its provider without an explicit unregister.
 
 ## The UDF contract
 

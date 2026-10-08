@@ -41,7 +41,7 @@ SinkFinalizeType ProviderTableDelete::Finalize(Pipeline &pipeline, Event &event,
 	}
 
 	auto &pk_cols = table.table_info->primary_keys;
-	auto conn = make_uniq<Connection>(*table.table_info->provider->db_instance);
+	auto conn = make_uniq<Connection>(*table.table_info->provider->Database());
 
 	vector<LogicalType> pk_types;
 	for (auto &pk_col : pk_cols) {

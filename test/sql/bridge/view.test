@@ -1,0 +1,130 @@
+# name: test/sql/bridge/view.test
+# description: a source view is bridged read-only, under its select policy like a table.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
+
+statement ok
+INSERT INTO memory.main.orders VALUES (1,'ada',50,7),(2,'grace',150,7),(3,'alan',250,9),(4,'edsger',350,7);
+
+statement ok
+CREATE VIEW memory.main.big_orders(order_id, who, amount, tenant) AS
+SELECT id, upper(name), amt::BIGINT, tenant FROM memory.main.orders WHERE amt > 100;
+
+statement ok
+CREATE VIEW memory.main.by_tenant AS
+SELECT tenant, sum(amt) AS total FROM memory.main.orders GROUP BY tenant ORDER BY tenant;
+
+statement ok
+SELECT bridge_register_source('v2_view', 'memory', 'tok_view');
+
+statement ok
+SELECT bridge_set_context('v2_view', 'tenant', 7);
+
+statement error
+SELECT bridge_policy('v2_view', 'main.big_orders', 'insert', 'true', 'true');
+----
+a view can only be granted 'select', not 'insert'
+
+statement error
+SELECT bridge_policy('v2_view', 'main.big_orders', 'update', 'true');
+----
+a view can only be granted 'select', not 'update'
+
+statement error
+SELECT bridge_policy('v2_view', 'main.big_orders', 'delete', 'true');
+----
+a view can only be granted 'select', not 'delete'
+
+statement error
+SELECT bridge_policy('v2_view', 'main.big_orders', 'alter', 'true');
+----
+a view can only be granted 'select', not 'alter'
+
+# The policy is checked against the view's columns, not the table's.
+statement error
+SELECT bridge_policy('v2_view', 'main.big_orders', 'select', 'amt > 0');
+----
+is not a valid WHERE clause on the source
+
+statement ok
+SELECT bridge_policy('v2_view', 'main.big_orders', 'select', 'tenant = $tenant');
+
+statement ok
+SELECT bridge_policy('v2_view', 'main.by_tenant', 'select', 'true');
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_view', TOKEN 'tok_view');
+
+query II
+SELECT column_name, data_type FROM duckdb_columns()
+WHERE database_name = 'b' AND table_name = 'big_orders' ORDER BY column_index;
+----
+order_id	INTEGER
+who	VARCHAR
+amount	BIGINT
+tenant	INTEGER
+
+query IIII
+SELECT name, kind, verbs, primary_key FROM bridge_table_permissions('b') ORDER BY name;
+----
+big_orders	crossing	[select]	[]
+by_tenant	crossing	[select]	[]
+
+query IIII
+SELECT * FROM b.main.big_orders ORDER BY order_id;
+----
+2	GRACE	150	7
+4	EDSGER	350	7
+
+query I
+SELECT who FROM b.main.big_orders WHERE amount > 200;
+----
+EDSGER
+
+query I
+SELECT count(*) FROM b.main.big_orders WHERE tenant = 9;
+----
+0
+
+# A view whose own plan is an aggregate with an ORDER BY.
+query II
+SELECT * FROM b.main.by_tenant ORDER BY tenant;
+----
+7	550
+9	250
+
+# The context stays live after the attach, for a view as for a table.
+statement ok
+SELECT bridge_set_context('v2_view', 'tenant', 9);
+
+query IIII
+SELECT * FROM b.main.big_orders ORDER BY order_id;
+----
+3	ALAN	250	9
+
+statement error
+INSERT INTO b.main.big_orders VALUES (9, 'x', 1, 7);
+----
+does not have 'insert' permission
+
+statement error
+UPDATE b.main.big_orders SET who = 'x';
+----
+does not have 'update' permission
+
+statement error
+DELETE FROM b.main.big_orders;
+----
+does not have 'delete' permission
+
+statement error
+DROP TABLE b.main.big_orders;
+----
+does not have 'drop' permission
+
+statement ok
+DETACH b;

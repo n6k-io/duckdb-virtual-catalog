@@ -2,6 +2,7 @@
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/catalog/entry_lookup_info.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -11,6 +12,7 @@
 #include "duckdb/main/pending_query_result.hpp"
 #include "duckdb/main/query_parameters.hpp"
 #include "duckdb/main/relation.hpp"
+#include "duckdb/main/relation/view_relation.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
@@ -34,6 +36,7 @@
 #include "duckdb/parser/statement/create_statement.hpp"
 #include "duckdb/parser/statement/drop_statement.hpp"
 #include "duckdb/parser/statement/select_statement.hpp"
+#include "duckdb/planner/bind_context.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/common/enums/database_modification_type.hpp"
@@ -205,6 +208,23 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		result_data[i] = StringVector::AddString(result, pending.token);
 		PendingSources()[bridge_id] = std::move(pending);
 	}
+}
+
+bool IsGrantable(optional_ptr<CatalogEntry> entry) {
+	return entry && (entry->type == CatalogType::TABLE_ENTRY || entry->type == CatalogType::VIEW_ENTRY);
+}
+
+//! Connection::View drops the catalog, so a view is named through a BaseTableRef instead.
+shared_ptr<Relation> SourceRelation(Connection &conn, const CatalogEntry &entry, const string &catalog,
+                                    const string &schema, const string &name) {
+	if (entry.type == CatalogType::TABLE_ENTRY) {
+		return conn.Table(catalog, schema, name);
+	}
+	auto ref = make_uniq<BaseTableRef>();
+	ref->catalog_name = catalog;
+	ref->schema_name = schema;
+	ref->table_name = name;
+	return make_shared_ptr<ViewRelation>(conn.context, std::move(ref), name);
 }
 
 void ClearQueryLocations(ParsedExpression &expr) {
@@ -532,12 +552,18 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 			EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table);
 			auto entry = Catalog::GetEntry(*source_conn.context, pending.source_catalog, schema, lookup,
 			                               OnEntryNotFound::RETURN_NULL);
-			if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
+			if (!IsGrantable(entry)) {
 				throw CatalogException("virtual_catalog_bridge: '%s.%s' not found in catalog '%s' on source", schema,
 				                       table, pending.source_catalog);
 			}
+			auto is_view = entry->type == CatalogType::VIEW_ENTRY;
+			if (is_view && verb != CrossingVerb::SELECT) {
+				throw IOException(
+				    "virtual_catalog_bridge: '%s.%s' is a view; a view can only be granted 'select', not '%s'", schema,
+				    table, CrossingVerbName(verb));
+			}
 
-			auto source_table = source_conn.Table(pending.source_catalog, schema, table);
+			auto source_table = SourceRelation(source_conn, *entry, pending.source_catalog, schema, table);
 
 			auto values = ContextSnapshot(*pending.context);
 			auto using_predicate = ParseAndValidatePredicate(source_table, using_text, "USING", values);
@@ -560,7 +586,7 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 				                  CrossingVerbName(verb), schema, table);
 			}
 			grant.Allow(verb);
-			if (grant.key.empty()) {
+			if (grant.key.empty() && !is_view) {
 				grant.key = DiscoverKeyColumns(entry->Cast<TableCatalogEntry>());
 			}
 			grant.using_predicates[static_cast<idx_t>(verb)] = std::move(using_predicate);
@@ -876,10 +902,11 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 					EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, dependent.table);
 					auto entry = Catalog::GetEntry(*source_conn.context, target.source_catalog, dependent.schema,
 					                               lookup, OnEntryNotFound::RETURN_NULL);
-					if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
+					if (!IsGrantable(entry)) {
 						continue;
 					}
-					auto source_table = source_conn.Table(target.source_catalog, dependent.schema, dependent.table);
+					auto source_table =
+					    SourceRelation(source_conn, *entry, target.source_catalog, dependent.schema, dependent.table);
 					ProbePredicate(source_table, *dependent.predicate, values, dependent.predicate->ToString(),
 					               dependent.clause);
 				}
@@ -1064,8 +1091,18 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 	const auto describe = [&](ClientContext &context) {
 		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, name);
 		auto entry = Catalog::GetEntry(context, source_catalog, schema, lookup, OnEntryNotFound::RETURN_NULL);
-		if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
+		if (!IsGrantable(entry)) {
 			throw CatalogException("virtual_catalog_bridge: '%s.%s' is no longer on the source", schema, name);
+		}
+		if (entry->type == CatalogType::VIEW_ENTRY) {
+			auto &view = entry->Cast<ViewCatalogEntry>();
+			view.BindView(context);
+			auto columns = view.GetColumnInfo();
+			auto names = BindContext::AliasColumnNames(name, columns->names, view.aliases);
+			for (idx_t i = 0; i < names.size(); i++) {
+				table.Column(names[i], columns->types[i]);
+			}
+			return;
 		}
 		auto &source_table = entry->Cast<TableCatalogEntry>();
 		for (auto &column : source_table.GetColumns().Logical()) {
