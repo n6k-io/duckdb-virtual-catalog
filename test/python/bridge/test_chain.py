@@ -144,3 +144,18 @@ def test_chain_within_one_instance():
     assert con.execute("SELECT id, name FROM c1.main.users ORDER BY id").fetchall() == [(1, "ADA"), (2, "grace")]
     assert con.execute("SELECT name FROM users WHERE id = 1").fetchone() == ("ADA",)
     con.close()
+
+
+def test_two_hop_read_streams(hops):
+    """Rows past the first five million raise, so a hop that materializes its result fails; one that
+    streams hands back the first rows long before reaching them."""
+    a, b, c = hops
+    for con in (a, b, c):
+        con.execute("SET threads = 1")
+    a.execute(
+        "CREATE VIEW v AS SELECT i, CASE WHEN i < 5000000 THEN i ELSE error('materialized')::BIGINT END AS x "
+        "FROM range(10000000) t(i)"
+    )
+    assert len(a.execute("SELECT i, x FROM v").fetchmany(10)) == 10
+    chain(a, b, c, {"v": READ}, {"v": READ})
+    assert len(c.execute("SELECT i, x FROM app.main.v").fetchmany(10)) == 10

@@ -7,6 +7,7 @@
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/main/client_context_state.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -67,6 +68,18 @@ struct LiveBridge {
 };
 
 constexpr int64_t PENDING_SOURCE_TTL_SECONDS = 30;
+
+//! Marks a connection a bridge opened for one autocommit read. A bridge whose source is another bridge
+//! begins its session on that connection, which is inside a transaction only because the read needs
+//! one; the marker lets it read in autocommit too, streaming instead of materializing its result.
+class StreamingReadMarker : public ClientContextState {};
+
+const string &StreamingReadMarkerKey() {
+	static const int anchor = 0;
+	static const string key =
+	    "virtual_catalog_bridge/streaming_read/" + std::to_string(reinterpret_cast<uintptr_t>(&anchor));
+	return key;
+}
 
 const string &LoadNonce() {
 	static const string nonce = UUID::ToString(UUID::GenerateRandomUUID());
@@ -1279,7 +1292,9 @@ void DuckDBSession::Rollback() {
 }
 
 unique_ptr<DuckDBSession> DuckDBSource::Begin(ClientContext &context) {
-	return make_uniq<DuckDBSession>(Database(), source, grants, context.transaction.IsAutoCommit());
+	auto autocommit = context.transaction.IsAutoCommit() ||
+	                  context.registered_state->Get<StreamingReadMarker>(StreamingReadMarkerKey()) != nullptr;
+	return make_uniq<DuckDBSession>(Database(), source, grants, autocommit);
 }
 
 shared_ptr<Connection> DuckDBSource::PlanningConnection() {
@@ -1620,6 +1635,7 @@ CrossingScan ScanOf(const shared_ptr<Connection> &conn, unique_ptr<QueryResult> 
 CrossingScan DuckDBSession::Read(ClientContext &, const CrossingQuery &query) {
 	if (autocommit) {
 		auto read_conn = make_shared_ptr<Connection>(*source_db);
+		read_conn->context->registered_state->Insert(StreamingReadMarkerKey(), make_shared_ptr<StreamingReadMarker>());
 		read_conn->BeginTransaction();
 		auto catalog = source.Use(*read_conn->context);
 		return ScanOf(read_conn, RunRead(*read_conn, query, true, PolicyResolver(grants, catalog), catalog));

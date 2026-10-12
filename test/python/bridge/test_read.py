@@ -247,3 +247,13 @@ def test_string_columns_survive_the_source_connection(big):
     rows = target.execute("SELECT DISTINCT name FROM app.main.big ORDER BY name LIMIT 5").fetchall()
     assert rows == source.execute("SELECT DISTINCT name FROM big ORDER BY name LIMIT 5").fetchall()
     assert all(r[0].startswith("name_") for r in rows)
+
+
+def test_a_values_row_calling_a_function_only_the_target_has(bridged):
+    _, target = bridged
+    varchar = duckdb.sqltype("VARCHAR")
+    target.create_function("only_on_target", lambda name: name.upper(), [varchar], varchar)
+    assert target.execute(
+        "SELECT users.name, staged.n FROM app.main.users, (VALUES (2, only_on_target('z'))) staged(id, n) "
+        "WHERE users.id = staged.id"
+    ).fetchall() == [("bo", "Z")]
