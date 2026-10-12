@@ -54,14 +54,11 @@ public:
 	SourcePin() = default;
 	SourcePin(AttachedDatabase &attached, string registered_name);
 
-	void ThrowIfDetached(DatabaseInstance &db) const;
 	//! Binds the pinned database into the transaction of `source_context`, so every lookup of its name there
 	//! resolves to it. Returns that name, which a rename may have changed.
 	string Use(ClientContext &source_context) const;
 
 private:
-	shared_ptr<AttachedDatabase> Live(DatabaseInstance &db) const;
-
 	weak_ptr<AttachedDatabase> attached;
 	string registered_name;
 };

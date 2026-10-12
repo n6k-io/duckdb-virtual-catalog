@@ -114,17 +114,29 @@ def test_bridge_swap_under_concurrent_binds_does_not_free_live_entries():
 # --- 2. cyclic bridge ---------------------------------------------------------------------------
 
 
-def test_register_source_refuses_a_virtual_catalog_source():
-    """A virtual_catalog as its own source recurses without bound on the first read."""
-    con = new_connection()
-    con.execute("CREATE TABLE t(id INTEGER PRIMARY KEY)")
-    host = unique_id()
-    token = con.execute("SELECT bridge_register_source(?, 'memory')", [host]).fetchone()[0]
-    con.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [host])
-    con.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{host}', TOKEN '{token}')")
-    with pytest.raises(Exception, match="virtual_catalog"):
-        con.execute("SELECT bridge_register_source(?, 'app')", [unique_id()])
-    con.close()
+def test_a_bridge_attached_over_its_own_source_name_does_not_recurse():
+    """The self-loop: a bridge attached under the name of the catalog it was registered on. The pin
+    still names the detached original, so the read fails instead of reading itself."""
+    out = run_probe(
+        """
+        from conftest import new_connection, unique_id
+
+        con = new_connection()
+        con.execute("ATTACH ':memory:' AS app")
+        con.execute("CREATE TABLE app.main.t(id INTEGER PRIMARY KEY)")
+        loop = unique_id()
+        token = con.execute("SELECT bridge_register_source(?, 'app')", [loop]).fetchone()[0]
+        con.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [loop])
+        con.execute("DETACH app")
+        try:
+            con.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{loop}', TOKEN '{token}')")
+            con.execute("SELECT * FROM app.main.t").fetchall()
+        except Exception as e:
+            assert "was detached" in str(e), e
+            print("ok")
+        """
+    )
+    assert "ok" in out
 
 
 def test_policy_refuses_a_source_catalog_detached_after_registration():
@@ -148,8 +160,9 @@ def test_policy_refuses_a_source_catalog_detached_after_registration():
 
 
 def test_cyclic_bridge_never_installs():
-    """The full three-hop cycle from faults.md #2. Whichever call is refused, the process must
-    survive and the final read must not recurse."""
+    """The full three-hop cycle from faults.md #2. Each step is allowed, but re-attaching `app` over a
+    chain that reads from it leaves every hop pinned to the detached original, so the reads fail
+    instead of recursing."""
     out = run_probe(
         """
         from conftest import new_connection, unique_id
@@ -164,13 +177,7 @@ def test_cyclic_bridge_never_installs():
         assert b.execute("SELECT * FROM app.main.t1").fetchall() == [(1, 'x')]
 
         i2 = unique_id()
-        try:
-            tk2 = b.execute("SELECT bridge_register_source(?, 'app')", [i2]).fetchone()[0]
-        except Exception as e:
-            assert "virtual_catalog" in str(e), e
-            print("ok")
-            raise SystemExit(0)
-
+        tk2 = b.execute("SELECT bridge_register_source(?, 'app')", [i2]).fetchone()[0]
         b.execute("SELECT bridge_policy(?,'main.t1','select','true')", [i2])
         b.execute("ATTACH '' AS app2 (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (i2, tk2))
 
@@ -179,8 +186,67 @@ def test_cyclic_bridge_never_installs():
         b.execute("SELECT bridge_policy(?,'main.t1','select','true')", [i3])
         b.execute("DETACH app")
         b.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (i3, tk3))
-        raise AssertionError("the cycle installed; the read below would recurse without bound")
+        for catalog in ("app", "app2"):
+            try:
+                b.execute("SELECT * FROM %s.main.t1" % catalog).fetchall()
+                raise AssertionError("%s read through a detached hop" % catalog)
+            except AssertionError:
+                raise
+            except Exception as e:
+                assert "was detached" in str(e), e
+        print("ok")
         """
+    )
+    assert "ok" in out
+
+
+def test_detaching_a_bridge_source_while_it_is_granted_does_not_deadlock():
+    """A grant on a bridge source binds that bridge into its transaction. When a concurrent DETACH
+    leaves the grant holding the last reference, the bridge is torn down as the grant ends."""
+    out = run_probe(
+        """
+        import threading
+        from conftest import new_connection, unique_id
+
+        a = new_connection(); b = new_connection()
+        a.execute("CREATE TABLE t(id INTEGER PRIMARY KEY)")
+
+        def attach_inner(con):
+            inner = unique_id()
+            tk = a.execute("SELECT bridge_register_source(?, 'memory')", [inner]).fetchone()[0]
+            a.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [inner])
+            con.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (inner, tk))
+
+        attach_inner(b)
+        stop = threading.Event()
+
+        def churn():
+            con = b.cursor()
+            while not stop.is_set():
+                con.execute("DETACH app")
+                attach_inner(con)
+
+        def grant():
+            con = b.cursor()
+            for _ in range(300):
+                try:
+                    outer = unique_id()
+                    con.execute("SELECT bridge_register_source(?, 'app')", [outer])
+                    con.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [outer])
+                except Exception as e:
+                    message = str(e)
+                    assert "was detached" in message or "does not exist" in message, message
+
+        churner = threading.Thread(target=churn)
+        churner.start()
+        try:
+            grant()
+        finally:
+            stop.set()
+            churner.join()
+        print("ok")
+        """,
+        timeout=60,
     )
     assert "ok" in out
 

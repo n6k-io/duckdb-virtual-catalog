@@ -137,7 +137,6 @@ PendingSource &LookupPendingForGrant(const string &bridge_id, ClientContext &con
 		throw PermissionException("virtual_catalog_bridge: bridge '%s' was registered by a different source connection",
 		                          bridge_id);
 	}
-	it->second.source.ThrowIfDetached(*context.db);
 	it->second.last_touched = std::chrono::steady_clock::now();
 	return it->second;
 }
@@ -175,11 +174,6 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		auto entry = Catalog::GetCatalogEntry(context, source_catalog);
 		if (!entry) {
 			throw CatalogException("virtual_catalog_bridge: source catalog '%s' does not exist", source_catalog);
-		}
-		if (entry->GetCatalogType() == VIRTUAL_CATALOG_BRIDGE_TYPE) {
-			throw CatalogException("virtual_catalog_bridge: source catalog '%s' is itself a bridge; name the "
-			                       "catalog holding the real tables",
-			                       source_catalog);
 		}
 		if (entry->IsTemporaryCatalog() || entry->IsSystemCatalog()) {
 			throw CatalogException("virtual_catalog_bridge: source catalog '%s' is a temporary or system catalog",
@@ -525,76 +519,99 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 			SplitGrantName(table_names[i].GetString(), schema, table);
 		}
 
+		shared_ptr<DatabaseInstance> source_db;
+		SourcePin source;
+		case_insensitive_map_t<Value> values;
+		{
+			lock_guard<mutex> lock(PendingMutex());
+			auto &pending = LookupPendingForGrant(bridge_id, context);
+			source_db = pending.source_db;
+			source = pending.source;
+			values = ContextSnapshot(*pending.context);
+		}
+
+		// Outside PendingMutex: a bridge source's transaction can hold the last reference to a detached
+		// bridge, whose teardown takes PendingMutex.
+		auto is_view = false;
+		vector<string> discovered_key;
+		unique_ptr<ParsedExpression> using_predicate;
+		unique_ptr<ParsedExpression> check_predicate;
+		{
+			Connection source_conn(*source_db);
+			source_conn.BeginTransaction();
+			try {
+				auto catalog = source.Use(*source_conn.context);
+				if (verb == CrossingVerb::CREATE) {
+					EntryLookupInfo lookup(CatalogType::SCHEMA_ENTRY, schema);
+					auto entry =
+					    Catalog::GetSchema(*source_conn.context, catalog, lookup, OnEntryNotFound::RETURN_NULL);
+					if (!entry) {
+						throw CatalogException(
+						    "virtual_catalog_bridge: schema '%s' not found in catalog '%s' on source", schema, catalog);
+					}
+				} else {
+					EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table);
+					auto entry =
+					    Catalog::GetEntry(*source_conn.context, catalog, schema, lookup, OnEntryNotFound::RETURN_NULL);
+					if (!IsGrantable(entry)) {
+						throw CatalogException("virtual_catalog_bridge: '%s.%s' not found in catalog '%s' on source",
+						                       schema, table, catalog);
+					}
+					is_view = entry->type == CatalogType::VIEW_ENTRY;
+					if (is_view && verb != CrossingVerb::SELECT) {
+						throw IOException(
+						    "virtual_catalog_bridge: '%s.%s' is a view; a view can only be granted 'select', not '%s'",
+						    schema, table, CrossingVerbName(verb));
+					}
+
+					auto source_table = SourceRelation(source_conn, *entry, catalog, schema, table);
+					using_predicate = ParseAndValidatePredicate(source_table, using_text, "USING", values);
+					if (has_check) {
+						auto checks = FlatVector::GetData<string_t>(args.data[4]);
+						check_predicate =
+						    ParseAndValidatePredicate(source_table, checks[i].GetString(), "WITH CHECK", values);
+					} else if (verb == CrossingVerb::INSERT) {
+						throw IOException(
+						    "virtual_catalog_bridge: an 'insert' grant must state a WITH CHECK predicate");
+					} else if (verb == CrossingVerb::UPDATE) {
+						check_predicate = using_predicate->Copy();
+					}
+					if (IsDdlVerb(verb)) {
+						using_predicate.reset();
+					}
+					if (!is_view) {
+						discovered_key = DiscoverKeyColumns(entry->Cast<TableCatalogEntry>());
+					}
+				}
+			} catch (...) {
+				source_conn.Rollback();
+				throw;
+			}
+			source_conn.Rollback();
+		}
+
 		lock_guard<mutex> lock(PendingMutex());
 		auto &pending = LookupPendingForGrant(bridge_id, context);
-
-		Connection source_conn(*pending.source_db);
-		source_conn.BeginTransaction();
-		try {
-			auto catalog = pending.source.Use(*source_conn.context);
-			if (verb == CrossingVerb::CREATE) {
-				EntryLookupInfo lookup(CatalogType::SCHEMA_ENTRY, schema);
-				auto entry = Catalog::GetSchema(*source_conn.context, catalog, lookup, OnEntryNotFound::RETURN_NULL);
-				if (!entry) {
-					throw CatalogException("virtual_catalog_bridge: schema '%s' not found in catalog '%s' on source",
-					                       schema, catalog);
-				}
-				if (pending.create_schemas.count(schema)) {
-					throw IOException("virtual_catalog_bridge: a 'create' policy is already defined for schema '%s'",
-					                  schema);
-				}
-				pending.create_schemas.insert(schema);
-				source_conn.Rollback();
-				result_data[i] = StringVector::AddString(result, "ok");
-				continue;
+		if (verb == CrossingVerb::CREATE) {
+			if (pending.create_schemas.count(schema)) {
+				throw IOException("virtual_catalog_bridge: a 'create' policy is already defined for schema '%s'",
+				                  schema);
 			}
-
-			EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table);
-			auto entry = Catalog::GetEntry(*source_conn.context, catalog, schema, lookup, OnEntryNotFound::RETURN_NULL);
-			if (!IsGrantable(entry)) {
-				throw CatalogException("virtual_catalog_bridge: '%s.%s' not found in catalog '%s' on source", schema,
-				                       table, catalog);
-			}
-			auto is_view = entry->type == CatalogType::VIEW_ENTRY;
-			if (is_view && verb != CrossingVerb::SELECT) {
-				throw IOException(
-				    "virtual_catalog_bridge: '%s.%s' is a view; a view can only be granted 'select', not '%s'", schema,
-				    table, CrossingVerbName(verb));
-			}
-
-			auto source_table = SourceRelation(source_conn, *entry, catalog, schema, table);
-
-			auto values = ContextSnapshot(*pending.context);
-			auto using_predicate = ParseAndValidatePredicate(source_table, using_text, "USING", values);
-			unique_ptr<ParsedExpression> check_predicate;
-			if (has_check) {
-				auto checks = FlatVector::GetData<string_t>(args.data[4]);
-				check_predicate = ParseAndValidatePredicate(source_table, checks[i].GetString(), "WITH CHECK", values);
-			} else if (verb == CrossingVerb::INSERT) {
-				throw IOException("virtual_catalog_bridge: an 'insert' grant must state a WITH CHECK predicate");
-			} else if (verb == CrossingVerb::UPDATE) {
-				check_predicate = using_predicate->Copy();
-			}
-			if (IsDdlVerb(verb)) {
-				using_predicate.reset();
-			}
-
-			auto &grant = pending.schemas[schema][table];
-			if (grant.Has(verb)) {
-				throw IOException("virtual_catalog_bridge: a '%s' policy is already defined for '%s.%s'",
-				                  CrossingVerbName(verb), schema, table);
-			}
-			grant.Allow(verb);
-			if (grant.key.empty() && !is_view) {
-				grant.key = DiscoverKeyColumns(entry->Cast<TableCatalogEntry>());
-			}
-			grant.using_predicates[static_cast<idx_t>(verb)] = std::move(using_predicate);
-			grant.check_predicates[static_cast<idx_t>(verb)] = std::move(check_predicate);
-		} catch (...) {
-			source_conn.Rollback();
-			throw;
+			pending.create_schemas.insert(schema);
+			result_data[i] = StringVector::AddString(result, "ok");
+			continue;
 		}
-		source_conn.Rollback();
+		auto &grant = pending.schemas[schema][table];
+		if (grant.Has(verb)) {
+			throw IOException("virtual_catalog_bridge: a '%s' policy is already defined for '%s.%s'",
+			                  CrossingVerbName(verb), schema, table);
+		}
+		grant.Allow(verb);
+		if (grant.key.empty() && !is_view) {
+			grant.key = std::move(discovered_key);
+		}
+		grant.using_predicates[static_cast<idx_t>(verb)] = std::move(using_predicate);
+		grant.check_predicates[static_cast<idx_t>(verb)] = std::move(check_predicate);
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
 }
@@ -643,32 +660,43 @@ void PrimaryKeyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 			throw IOException("virtual_catalog_bridge: the key column list cannot be empty");
 		}
 
+		shared_ptr<DatabaseInstance> source_db;
+		SourcePin source;
+		{
+			lock_guard<mutex> lock(PendingMutex());
+			auto &pending = LookupPendingForGrant(bridge_id, context);
+			source_db = pending.source_db;
+			source = pending.source;
+		}
+
+		{
+			Connection source_conn(*source_db);
+			source_conn.BeginTransaction();
+			try {
+				auto catalog = source.Use(*source_conn.context);
+				EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table);
+				auto entry =
+				    Catalog::GetEntry(*source_conn.context, catalog, schema, lookup, OnEntryNotFound::RETURN_NULL);
+				if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
+					throw CatalogException("virtual_catalog_bridge: '%s.%s' not found in catalog '%s' on source",
+					                       schema, table, catalog);
+				}
+				auto &columns = entry->Cast<TableCatalogEntry>().GetColumns();
+				for (auto &key_column : key) {
+					if (!columns.ColumnExists(key_column)) {
+						throw IOException("virtual_catalog_bridge: '%s' is not a column of '%s.%s'", key_column, schema,
+						                  table);
+					}
+				}
+			} catch (...) {
+				source_conn.Rollback();
+				throw;
+			}
+			source_conn.Rollback();
+		}
+
 		lock_guard<mutex> lock(PendingMutex());
 		auto &pending = LookupPendingForGrant(bridge_id, context);
-
-		Connection source_conn(*pending.source_db);
-		source_conn.BeginTransaction();
-		try {
-			auto catalog = pending.source.Use(*source_conn.context);
-			EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table);
-			auto entry = Catalog::GetEntry(*source_conn.context, catalog, schema, lookup, OnEntryNotFound::RETURN_NULL);
-			if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
-				throw CatalogException("virtual_catalog_bridge: '%s.%s' not found in catalog '%s' on source", schema,
-				                       table, catalog);
-			}
-			auto &columns = entry->Cast<TableCatalogEntry>().GetColumns();
-			for (auto &key_column : key) {
-				if (!columns.ColumnExists(key_column)) {
-					throw IOException("virtual_catalog_bridge: '%s' is not a column of '%s.%s'", key_column, schema,
-					                  table);
-				}
-			}
-		} catch (...) {
-			source_conn.Rollback();
-			throw;
-		}
-		source_conn.Rollback();
-
 		auto &grant = pending.schemas[schema][table];
 		grant.key = std::move(key);
 		grant.key_verified = false;
@@ -886,8 +914,11 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		if (value.IsNull()) {
 			throw IOException("virtual_catalog_bridge: context '%s' cannot be NULL", name);
 		}
-		lock_guard<mutex> lock(PendingMutex());
-		auto target = LookupContext(bridge_id, context, name);
+		ContextTarget target;
+		{
+			lock_guard<mutex> lock(PendingMutex());
+			target = LookupContext(bridge_id, context, name);
+		}
 		auto values = ContextSnapshot(*target.context);
 		if (target.context->finalized) {
 			throw PermissionException("virtual_catalog_bridge: the context of bridge '%s' is finalized", bridge_id);
@@ -916,6 +947,9 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 			source_conn.Rollback();
 		}
 		lock_guard<mutex> guard(target.context->lock);
+		if (target.context->finalized) {
+			throw PermissionException("virtual_catalog_bridge: the context of bridge '%s' is finalized", bridge_id);
+		}
 		target.context->values[name] = std::move(value);
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
@@ -1008,20 +1042,11 @@ SourcePin::SourcePin(AttachedDatabase &attached_p, string registered_name_p)
     : attached(attached_p.shared_from_this()), registered_name(std::move(registered_name_p)) {
 }
 
-shared_ptr<AttachedDatabase> SourcePin::Live(DatabaseInstance &db) const {
+string SourcePin::Use(ClientContext &source_context) const {
 	auto pinned = attached.lock();
-	if (!pinned || DatabaseManager::Get(db).GetDatabase(pinned->GetName()) != pinned) {
+	if (!pinned || DatabaseManager::Get(source_context).GetDatabase(pinned->GetName()) != pinned) {
 		throw CatalogException("virtual_catalog_bridge: source catalog '%s' was detached", registered_name);
 	}
-	return pinned;
-}
-
-void SourcePin::ThrowIfDetached(DatabaseInstance &db) const {
-	Live(db);
-}
-
-string SourcePin::Use(ClientContext &source_context) const {
-	auto pinned = Live(*source_context.db);
 	auto name = pinned->GetName();
 	auto &transaction = MetaTransaction::Get(source_context);
 	auto referenced = transaction.GetReferencedDatabase(name);

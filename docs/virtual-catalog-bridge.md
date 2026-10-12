@@ -65,13 +65,20 @@ SELECT bridge_register_source('b1', 'source_catalog', 'my-secret');
 ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'my-secret');
 ```
 
-The source catalog may not itself be a `virtual_catalog_bridge` — bridges do not
-chain. Nor may it be `temp` or `system`.
+The source catalog may be another `virtual_catalog_bridge`, so bridges chain:
+each hop applies its own policies and context, and a write or DDL passes through
+every hop. A key declared with `bridge_primary_key` on one hop is not seen by the
+next; declare it again there (a native primary key is). Until each hop streams,
+a read through a chain holds the inner hop's whole result in memory. The source
+may not be `temp` or `system`.
 
 The source catalog is pinned at registration by identity, not by name. A rename
 (`ALTER DATABASE ... SET ALIAS TO ...`) is followed; after a `DETACH` of the source catalog
 every use of the bridge fails with `source catalog '...' was detached`, even if
-another database is later attached under the same name.
+another database is later attached under the same name. This is also why the
+registered sources cannot form a cycle: a bridge can only be registered on a
+catalog that already exists, and never re-points. A source view, macro or
+`bridge_primary_key_query` that names a bridge is not covered by this.
 
 ## Teardown
 
