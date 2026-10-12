@@ -1,7 +1,7 @@
 """Lifetime and teardown -- the failure modes the docs warn about loudest.
 
-The attached catalog holds a reference to the source DatabaseInstance, which is what makes DETACH
-the thing that releases it. Same-instance tests cannot observe any of this.
+Across instances the attached catalog holds a reference to the source DatabaseInstance, which is
+what makes DETACH the thing that releases it. Within one instance it holds none.
 """
 
 import subprocess
@@ -32,13 +32,13 @@ def connect():
 """
 
 
-def run_script(body):
+def run_script(body, timeout=60):
     script = PRELUDE + textwrap.dedent(body)
     return subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=timeout,
         cwd=REPO_ROOT,
     )
 
@@ -177,6 +177,32 @@ def test_closing_a_connection_with_a_provider_registered_frees_its_database(tmp_
         reopened = duckdb.connect(path, **con_kwargs)
         print(reopened.execute("SELECT count(*) FROM duckdb_databases() WHERE database_name = 'app'").fetchone()[0])
     """
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0"
+
+
+def test_closing_a_connection_with_a_same_instance_bridge_frees_its_database(tmp_path):
+    """Without DETACH. A strong ref from the bridge to its own instance would pin it, and reopening
+    the same file then blocks."""
+    result = run_script(
+        f"""
+        import gc
+        path = {str(tmp_path / "host.duckdb")!r}
+        con = duckdb.connect(path, **con_kwargs)
+        con.execute("LOAD '{BRIDGE_EXTENSION}'")
+        con.execute("CREATE TABLE users(id INTEGER PRIMARY KEY); INSERT INTO users VALUES (1)")
+        token = con.execute("SELECT bridge_register_source('b1', 'host')").fetchone()[0]
+        con.execute("SELECT bridge_policy('b1', 'main.users', 'select', 'true')").fetchall()
+        con.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'b1', TOKEN '{{token}}')")
+        assert con.execute("SELECT count(*) FROM app.main.users").fetchone() == (1,)
+        con.close()
+        del con
+        gc.collect()
+        reopened = duckdb.connect(path, **con_kwargs)
+        print(reopened.execute("SELECT count(*) FROM duckdb_databases() WHERE database_name = 'app'").fetchone()[0])
+    """,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "0"

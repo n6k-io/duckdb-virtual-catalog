@@ -22,19 +22,9 @@ uv run pytest
 ```
 
 Needs `make release` first; the tests load
-`build/release/extension/virtual_catalog/virtual_catalog.duckdb_extension` into the `duckdb` PyPI
-package, whose version must match the pinned DuckDB (`duckdb==1.5.4`).
-
-Covers what one instance and one language cannot:
-
-| file | reaches |
-|---|---|
-| `test_bridge_read.py` | filter and projection pushdown across two `DatabaseInstance`s, checked against the source's own answer |
-| `test_bridge_write.py` | INSERT/UPDATE/DELETE landing on the source, rowid path, composite and overridden keys |
-| `test_provider.py` | the Arrow IPC round trip, provider DML, ALTER, cache invalidation |
-| `test_stream_functions.py` | the open/next/close generator protocol actually executed |
-| `test_lifetime.py` | source-instance pinning, registry churn, and clean process exit (subprocess) |
-| `test_parity.py` | every probe in `parity.py` run against native, bridge and provider |
+`build/release/extension/virtual_catalog_bridge/virtual_catalog_bridge.duckdb_extension` and
+`build/release/extension/virtual_catalog_provider/virtual_catalog_provider.duckdb_extension` into
+the `duckdb` PyPI package, whose version must match the pinned DuckDB (`duckdb==1.5.4`).
 
 ## Parity
 
@@ -61,5 +51,5 @@ pushed into an Arrow scan, so a provider that ignores them silently returns wron
 - Register `open` and `next` with `null_handling="special"`. `open` is always called with a NULL
   fourth argument, and `next` returns NULL to signal exhaustion; under DuckDB's default NULL
   handling neither works.
-- Fetch the result of the setup calls. `con.execute("SELECT vcat_create_stream_function(...)")`
+- Fetch the result of the setup calls. `con.execute("SELECT provider_create_stream_function(...)")`
   without a `.fetchall()` never runs the function, so the registration silently does not happen.

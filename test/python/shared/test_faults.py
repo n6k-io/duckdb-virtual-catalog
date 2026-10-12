@@ -127,9 +127,8 @@ def test_register_source_refuses_a_virtual_catalog_source():
     con.close()
 
 
-def test_policy_refuses_a_source_catalog_that_became_virtual_after_registration():
-    """The catalog is named at registration but not read until the first grant, so the check has
-    to be repeated there."""
+def test_policy_refuses_a_source_catalog_detached_after_registration():
+    """The source is pinned at registration; a bridge attached under its name later is not adopted."""
     con = new_connection()
     bridge_id = unique_id()
     con.execute("ATTACH ':memory:' AS app")
@@ -143,7 +142,7 @@ def test_policy_refuses_a_source_catalog_that_became_virtual_after_registration(
     con.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [host])
     con.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{host}', TOKEN '{token}')")
 
-    with pytest.raises(Exception, match="virtual_catalog"):
+    with pytest.raises(Exception, match="was detached"):
         con.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [bridge_id])
     con.close()
 

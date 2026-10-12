@@ -66,7 +66,12 @@ ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'my-secret')
 ```
 
 The source catalog may not itself be a `virtual_catalog_bridge` — bridges do not
-chain.
+chain. Nor may it be `temp` or `system`.
+
+The source catalog is pinned at registration by identity, not by name. A rename
+(`ALTER DATABASE ... SET ALIAS TO ...`) is followed; after a `DETACH` of the source catalog
+every use of the bridge fails with `source catalog '...' was detached`, even if
+another database is later attached under the same name.
 
 ## Teardown
 
@@ -75,8 +80,12 @@ chain.
 DETACH my_bridge;
 ```
 
-Not optional in a long-lived process. The catalog holds a reference to the
-**source** `DatabaseInstance`, so until the detach it is never released.
+Not optional in a long-lived process when source and target are separate
+instances. The catalog then holds a reference to the **source**
+`DatabaseInstance`, so until the detach it is never released. When both are one
+instance the catalog holds none, and closing the instance is enough. A source
+registered but never attached holds its instance until a later bridge call
+expires it.
 Everything the catalog held goes with it, including any native entries created
 alongside the bridged ones.
 
@@ -458,5 +467,3 @@ Identical code works from Node (duckdb-node), Rust (duckdb-rs), C++, Java, etc.
 ## See also
 
 - [`sql-api.md`](sql-api.md) — every registered function, its arguments and columns.
-- [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — catalog architecture, write path,
-  registries, and thread safety.

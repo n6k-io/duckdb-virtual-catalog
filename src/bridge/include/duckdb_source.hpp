@@ -3,6 +3,7 @@
 #include "duckdb.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/mutex.hpp"
+#include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 
@@ -46,6 +47,25 @@ struct BridgeContext {
 	bool finalized = false;
 };
 
+//! The source catalog, held by identity: a DETACH, or another database attached under its name, does not
+//! re-point the bridge.
+class SourcePin {
+public:
+	SourcePin() = default;
+	SourcePin(AttachedDatabase &attached, string registered_name);
+
+	void ThrowIfDetached(DatabaseInstance &db) const;
+	//! Binds the pinned database into the transaction of `source_context`, so every lookup of its name there
+	//! resolves to it. Returns that name, which a rename may have changed.
+	string Use(ClientContext &source_context) const;
+
+private:
+	shared_ptr<AttachedDatabase> Live(DatabaseInstance &db) const;
+
+	weak_ptr<AttachedDatabase> attached;
+	string registered_name;
+};
+
 struct GrantBook {
 	mutex lock;
 	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> tables;
@@ -56,7 +76,7 @@ struct GrantBook {
 
 class DuckDBSession {
 public:
-	DuckDBSession(shared_ptr<DatabaseInstance> source_db, string source_catalog, shared_ptr<GrantBook> grants,
+	DuckDBSession(shared_ptr<DatabaseInstance> source_db, SourcePin source, shared_ptr<GrantBook> grants,
 	              bool autocommit);
 
 	CrossingScan Read(ClientContext &context, const CrossingQuery &query);
@@ -67,14 +87,14 @@ public:
 
 private:
 	shared_ptr<Connection> Shared();
-	bool CreateWouldCreate(Connection &source_conn, const CrossingDdl &ddl);
+	bool CreateWouldCreate(Connection &source_conn, const string &catalog, const CrossingDdl &ddl);
 	void ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl);
-	void RecordDdl(const shared_ptr<Connection> &source_conn, const CrossingDdl &ddl);
+	void RecordDdl(const shared_ptr<Connection> &source_conn, const string &catalog, const CrossingDdl &ddl);
 	void UndoGrants();
 	void ForgetShaping();
 
 	shared_ptr<DatabaseInstance> source_db;
-	string source_catalog;
+	SourcePin source;
 	shared_ptr<GrantBook> grants;
 	bool autocommit;
 	mutex lock;
@@ -86,8 +106,8 @@ class DuckDBSource {
 public:
 	using Session = DuckDBSession;
 
-	DuckDBSource(string bridge_id, shared_ptr<DatabaseInstance> source_db, string source_catalog,
-	             shared_ptr<GrantBook> grants);
+	DuckDBSource(string bridge_id, const shared_ptr<DatabaseInstance> &source_db, DatabaseInstance &target_db,
+	             SourcePin source, shared_ptr<GrantBook> grants);
 	~DuckDBSource();
 
 	vector<string> Schemas();
@@ -101,12 +121,16 @@ public:
 
 private:
 	shared_ptr<Connection> PlanningConnection();
+	shared_ptr<DatabaseInstance> Database() const;
 
 	bool SourceHasFunction(const string &function_name);
 
 	string bridge_id;
-	shared_ptr<DatabaseInstance> source_db;
-	string source_catalog;
+	weak_ptr<DatabaseInstance> source_db;
+	//! Null when source and target are one instance: the target's catalog would otherwise keep its own
+	//! instance alive.
+	shared_ptr<DatabaseInstance> source_db_hold;
+	SourcePin source;
 	shared_ptr<GrantBook> grants;
 	mutex functions_lock;
 	case_insensitive_map_t<bool> functions_known;
@@ -114,7 +138,7 @@ private:
 
 bool TryParseCrossingVerb(const string &text, CrossingVerb &out);
 
-unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info);
+unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db);
 
 void RegisterBridgeFunctions(ExtensionLoader &loader);
 
