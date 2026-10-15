@@ -68,6 +68,31 @@ def test_update_matching_nothing_changes_nothing(bridged):
     assert source_users(source) == [(1, 'ana', 10), (2, 'bo', 20), (3, 'cy', 30)]
 
 
+@pytest.mark.parametrize(
+    "rows",
+    [
+        "staged",
+        "(SELECT 2 AS id, 'zed' AS name) staged",
+        "(VALUES (2, 'zed')) staged(id, name)",
+    ],
+)
+def test_update_from_target_rows_sets_their_values(bridged, rows):
+    source, target = bridged
+    target.execute("CREATE TABLE staged(id INTEGER, name VARCHAR); INSERT INTO staged VALUES (2, 'zed')")
+    target.execute(f"UPDATE app.main.users SET name = staged.name FROM {rows} WHERE users.id = staged.id")
+    assert source_users(source) == [(1, 'ana', 10), (2, 'zed', 20), (3, 'cy', 30)]
+
+
+def test_a_join_the_source_runs_under_a_function_only_the_target_has(bridged):
+    _, target = bridged
+    varchar = duckdb.sqltype("VARCHAR")
+    target.create_function("only_on_target", lambda name: name.upper(), [varchar], varchar)
+    assert target.execute(
+        "SELECT only_on_target(staged.name), users.score FROM app.main.users, (VALUES (2, 'zed')) staged(id, name) "
+        "WHERE users.id = staged.id"
+    ).fetchall() == [("ZED", 20)]
+
+
 def test_delete_lands_on_the_source(bridged):
     source, target = bridged
     target.execute("DELETE FROM app.main.users WHERE id = 2")
