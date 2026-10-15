@@ -25,7 +25,7 @@ def chain(a, b, c, inner, outer, pk_overrides=None):
 
 
 def handshake(source, target, source_catalog, context, grants):
-    """Register, set context, grant and attach; `grants` is a list of (table, verb, using)."""
+    """`grants` is a list of (table, verb, using)."""
     bridge_id = unique_id()
     token = source.execute("SELECT bridge_register_source(?, ?)", [bridge_id, source_catalog]).fetchone()[0]
     for name, value in context.items():

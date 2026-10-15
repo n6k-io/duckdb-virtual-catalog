@@ -86,6 +86,8 @@ const string &LoadNonce() {
 	return nonce;
 }
 
+//! Never held while a source transaction ends: that transaction can hold the last reference to a detached
+//! bridge, whose ~DuckDBSource takes this mutex.
 mutex &PendingMutex() {
 	static auto *lock = new mutex();
 	return *lock;
@@ -543,8 +545,6 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 			values = ContextSnapshot(*pending.context);
 		}
 
-		// Outside PendingMutex: a bridge source's transaction can hold the last reference to a detached
-		// bridge, whose teardown takes PendingMutex.
 		auto is_view = false;
 		vector<string> discovered_key;
 		unique_ptr<ParsedExpression> using_predicate;

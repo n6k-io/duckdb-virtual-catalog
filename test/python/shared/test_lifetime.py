@@ -1,7 +1,6 @@
 """Lifetime and teardown -- the failure modes the docs warn about loudest.
 
-Across instances the attached catalog holds a reference to the source DatabaseInstance, which is
-what makes DETACH the thing that releases it. Within one instance it holds none.
+Which instance the attached catalog keeps alive is set by DuckDBSource::source_db_hold.
 """
 
 import subprocess

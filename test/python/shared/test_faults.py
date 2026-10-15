@@ -1,4 +1,4 @@
-"""Regression tests for faults 1-4 of faults.md.
+"""Regression tests for faults 1-4.
 
 Three of the four kill the process, so they run in a subprocess: a SIGSEGV inside pytest takes
 the whole session with it and reports nothing. `run_probe` asserts on the child's exit code, so
@@ -160,7 +160,7 @@ def test_policy_refuses_a_source_catalog_detached_after_registration():
 
 
 def test_cyclic_bridge_never_installs():
-    """The full three-hop cycle from faults.md #2. Each step is allowed, but re-attaching `app` over a
+    """The full three-hop cycle. Each step is allowed, but re-attaching `app` over a
     chain that reads from it leaves every hop pinned to the detached original, so the reads fail
     instead of recursing."""
     out = run_probe(

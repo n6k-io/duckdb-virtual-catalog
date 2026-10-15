@@ -55,7 +55,9 @@ public:
 	SourcePin(AttachedDatabase &attached, string registered_name);
 
 	//! Binds the pinned database into the transaction of `source_context`, so every lookup of its name there
-	//! resolves to it. Returns that name, which a rename may have changed.
+	//! resolves to it. Returns that name, which a rename may have changed. Throws CatalogException "was
+	//! detached" when the pinned database is gone, its name now resolves to another database, or the
+	//! transaction already references another database under that name.
 	string Use(ClientContext &source_context) const;
 
 private:

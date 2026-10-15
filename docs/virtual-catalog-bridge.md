@@ -68,18 +68,22 @@ ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'my-secret')
 The source catalog may be another `virtual_catalog_bridge`, so bridges chain:
 each hop applies its own policies and context, and a write or DDL passes through
 every hop. A key declared with `bridge_primary_key` on one hop is not seen by the
-next; declare it again there (a native primary key is). A read through a chain
-streams through every hop, except inside an explicit transaction on the outer
-bridge: there the inner hop holds its whole result in memory. The source may not
-be `temp` or `system`.
+next; declare it again there (a native primary key is). The source may not be
+`temp` or `system`.
+
+A read streams through every hop when the statement runs in autocommit. Inside an
+explicit transaction every hop, a single bridge included, holds its whole result
+in memory: the transaction's reads share one source connection, and a second
+query on it would close a streaming one.
 
 The source catalog is pinned at registration by identity, not by name. A rename
 (`ALTER DATABASE ... SET ALIAS TO ...`) is followed; after a `DETACH` of the source catalog
-every use of the bridge fails with `source catalog '...' was detached`, even if
-another database is later attached under the same name. This is also why the
-registered sources cannot form a cycle: a bridge can only be registered on a
-catalog that already exists, and never re-points. A source view, macro or
-`bridge_primary_key_query` that names a bridge is not covered by this.
+every read, write, DDL or grant through the bridge fails with
+`source catalog '...' was detached`, even if another database is later attached
+under the same name. This is also why the registered sources cannot form a
+cycle: a bridge can only be registered on a catalog that already exists, and
+never re-points. A source view, macro, `bridge_primary_key_query` or
+`bridge_primary_key_check` that names a bridge is not covered by this.
 
 ## Teardown
 
@@ -92,8 +96,8 @@ Not optional in a long-lived process when source and target are separate
 instances. The catalog then holds a reference to the **source**
 `DatabaseInstance`, so until the detach it is never released. When both are one
 instance the catalog holds none, and closing the instance is enough. A source
-registered but never attached holds its instance until a later bridge call
-expires it.
+registered but never attached holds its instance until it expires after a
+timeout.
 Everything the catalog held goes with it, including any native entries created
 alongside the bridged ones.
 
