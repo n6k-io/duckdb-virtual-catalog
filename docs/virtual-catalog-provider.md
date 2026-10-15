@@ -265,5 +265,3 @@ separate catalog from a separate extension.
 
 - [`sql-api.md`](sql-api.md) — every registered function, its arguments and columns.
 - [`virtual-catalog-bridge.md`](virtual-catalog-bridge.md) — the sibling extension.
-- [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — catalog architecture, write path,
-  registries, and thread safety.

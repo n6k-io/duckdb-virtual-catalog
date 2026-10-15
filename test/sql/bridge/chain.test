@@ -1,0 +1,61 @@
+# name: test/sql/bridge/chain.test
+# description: A bridge whose source catalog is itself a bridge, within one instance.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
+
+statement ok
+INSERT INTO memory.main.users VALUES (1, 'ada'), (2, 'grace'), (3, 'alan');
+
+statement ok
+SELECT bridge_register_source('chain_inner', 'memory', 'tok_chain_inner');
+
+statement ok
+SELECT bridge_policy('chain_inner', 'main.users', 'select', 'id <= 2');
+
+statement ok
+SELECT bridge_policy('chain_inner', 'main.users', 'update', 'true');
+
+statement ok
+ATTACH '' AS inner_hop (TYPE virtual_catalog_bridge, ID 'chain_inner', TOKEN 'tok_chain_inner');
+
+statement ok
+SELECT bridge_register_source('chain_outer', 'inner_hop', 'tok_chain_outer');
+
+statement ok
+SELECT bridge_policy('chain_outer', 'main.users', 'select', 'true');
+
+statement ok
+SELECT bridge_policy('chain_outer', 'main.users', 'update', 'true');
+
+statement ok
+ATTACH '' AS outer_hop (TYPE virtual_catalog_bridge, ID 'chain_outer', TOKEN 'tok_chain_outer');
+
+# The inner hop's policy holds through the outer one.
+query IT
+SELECT id, name FROM outer_hop.main.users ORDER BY id;
+----
+1	ada
+2	grace
+
+statement ok
+UPDATE outer_hop.main.users SET name = 'ADA' WHERE id = 1;
+
+query T
+SELECT name FROM memory.main.users WHERE id = 1;
+----
+ADA
+
+statement ok
+DETACH inner_hop;
+
+statement error
+SELECT * FROM outer_hop.main.users;
+----
+source catalog 'inner_hop' was detached
+
+statement ok
+DETACH outer_hop;
