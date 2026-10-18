@@ -5,8 +5,7 @@
 
 namespace duckdb {
 
-// A catalog of virtual tables backed by UDFs that call into the host. list_udf names them
-// `schema.table`, and every other UDF is called with that same qualified name.
+// Virtual tables backed by host UDFs.
 struct ProviderInfo {
 	string catalog_name;
 	// Weak: the catalog owns this info, and a strong ref would keep the database alive forever.
@@ -20,8 +19,6 @@ struct ProviderInfo {
 	string delete_udf;
 	string alter_udf;
 
-	// Bumped by provider_invalidate_tables; read only by VirtualCatalogProvider::RefreshProviderNames.
-	// No SQL exposes it.
 	atomic<uint64_t> version {0};
 
 	// Set as ParentCatalog() on provider entries to route DML to the insert/update/delete UDFs.

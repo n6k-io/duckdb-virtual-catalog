@@ -97,11 +97,9 @@ SELECT id FROM b.main.orders ORDER BY id;
 statement ok
 PREPARE all_ids AS SELECT id FROM b.main.orders ORDER BY id;
 
-# Grants are frozen at attach; context is not.
-statement error
+# Grants stay open after attach.
+statement ok
 SELECT bridge_policy('ctx', 'main.orders', 'alter', 'true');
-----
-no registered source for bridge
 
 statement ok
 SELECT bridge_set_context('ctx', 'tenant', 9);
@@ -230,7 +228,7 @@ SELECT bridge_set_context('ctx', 'tenant', 9);
 ----
 no registered source for bridge
 
-# Finalized before attach: the context is locked, the grants are still open until attach.
+# Finalized before attach: the context is locked, the grants are still open.
 statement ok
 SELECT bridge_register_source('ctx2', 'memory', 'tok_ctx2');
 

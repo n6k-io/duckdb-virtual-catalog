@@ -21,10 +21,8 @@ reach the capability bits but not the Arrow payloads.
 uv run pytest
 ```
 
-Needs `make release` first; the tests load
-`build/release/extension/virtual_catalog_bridge/virtual_catalog_bridge.duckdb_extension` and
-`build/release/extension/virtual_catalog_provider/virtual_catalog_provider.duckdb_extension` into
-the `duckdb` PyPI package, whose version must match the pinned DuckDB (`duckdb==1.5.4`).
+Needs `make release` first; the tests load the built extensions (paths in `conftest.py`) into the
+`duckdb` PyPI package, whose version must match the DuckDB pinned in `pyproject.toml`.
 
 ## Parity
 

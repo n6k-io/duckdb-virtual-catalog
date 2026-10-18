@@ -22,6 +22,9 @@ public:
 
 	using DuckCatalog::Initialize;
 	void Initialize(optional_ptr<ClientContext> context, bool load_builtin) override;
+	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
+	                                              OnEntryNotFound if_not_found) override;
+	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
 	void OnDetach(ClientContext &context) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
 	                                    PhysicalOperator &plan) override;
@@ -35,6 +38,8 @@ protected:
 	void ThrowIfSchemaStillServed(const string &schema_name) override;
 
 private:
+	void CreateServedSchemas();
+
 	CrossingAttach attach;
 };
 

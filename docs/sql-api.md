@@ -19,6 +19,10 @@ constants at bind time.
 Table names are `'schema.table'`, resolved in `source_catalog`. Each granted source
 schema lands in the target schema of the same name.
 
+`bridge_policy` and the `bridge_primary_key*` functions work before and after
+`ATTACH`, until `bridge_finalize_policy`; the target's next statement sees the
+change. After `ATTACH` a key can only be set on a granted table.
+
 | Function | Arguments |
 |---|---|
 | `bridge_register_source` | `bridge_id, source_catalog[, token]` → token. With two arguments the token is generated as `NONCE:UUID`; with three the source names it |
@@ -28,6 +32,7 @@ schema lands in the target schema of the same name.
 | `bridge_primary_key_query` | `bridge_id, 'schema.table', sql` — runs `sql` on the source; column 0 of every row is a key column, in key order |
 | `bridge_primary_key_check` | `bridge_id, 'schema.table', sql` — runs `sql` on the source; zero rows accepts the declared key, any row rejects it |
 | `bridge_finalize_context` | `bridge_id` — optional; freezes the context, before or after `ATTACH` |
+| `bridge_finalize_policy` | `bridge_id` — optional; freezes the grants and keys, before or after `ATTACH`. Every later `bridge_policy` and `bridge_primary_key*` is refused |
 
 ## Providers
 

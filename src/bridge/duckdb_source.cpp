@@ -1,5 +1,7 @@
 #include "duckdb_source.hpp"
 
+#include "crossing_attach.hpp"
+
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -59,6 +61,7 @@ struct PendingSource {
 	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> schemas;
 	case_insensitive_set_t create_schemas;
 	shared_ptr<BridgeContext> context = make_shared_ptr<BridgeContext>();
+	bool policy_finalized = false;
 };
 
 struct LiveBridge {
@@ -154,6 +157,116 @@ PendingSource &LookupPendingForGrant(const string &bridge_id, ClientContext &con
 	}
 	it->second.last_touched = std::chrono::steady_clock::now();
 	return it->second;
+}
+
+//! Caller holds PendingMutex.
+shared_ptr<GrantBook> LookupLive(const string &bridge_id, ClientContext &context, SourcePin &source) {
+	auto it = LiveBridges().find(bridge_id);
+	shared_ptr<GrantBook> grants;
+	if (it != LiveBridges().end()) {
+		grants = it->second.grants.lock();
+	}
+	if (!grants) {
+		throw PermissionException("virtual_catalog_bridge: no registered source for bridge '%s'", bridge_id);
+	}
+	if (it->second.source_db != context.db.get()) {
+		throw PermissionException("virtual_catalog_bridge: bridge '%s' was registered by a different source connection",
+		                          bridge_id);
+	}
+	source = it->second.source;
+	return grants;
+}
+
+using GrantTables = case_insensitive_map_t<case_insensitive_map_t<SourceGrant>>;
+
+//! A bridge's grants: the pending entry's before ATTACH, the live GrantBook's after. Valid while the caller
+//! holds PendingMutex.
+struct GrantTarget {
+	shared_ptr<DatabaseInstance> source_db;
+	SourcePin source;
+	shared_ptr<BridgeContext> context;
+	optional_ptr<PendingSource> pending;
+	shared_ptr<GrantBook> live;
+	bool *policy_finalized = nullptr;
+};
+
+//! Caller holds PendingMutex.
+GrantTarget LookupGrantTarget(const string &bridge_id, ClientContext &context) {
+	GrantTarget target;
+	PurgeExpiredPendingSources();
+	if (PendingSources().count(bridge_id)) {
+		auto &pending = LookupPendingForGrant(bridge_id, context);
+		target.source_db = pending.source_db;
+		target.source = pending.source;
+		target.context = pending.context;
+		target.pending = &pending;
+		target.policy_finalized = &pending.policy_finalized;
+		return target;
+	}
+	target.live = LookupLive(bridge_id, context, target.source);
+	target.source_db = context.db;
+	target.context = target.live->context;
+	target.policy_finalized = &target.live->policy_finalized;
+	return target;
+}
+
+//! Caller holds PendingMutex.
+GrantTarget LookupOpenGrants(const string &bridge_id, ClientContext &context) {
+	auto target = LookupGrantTarget(bridge_id, context);
+	if (*target.policy_finalized) {
+		throw PermissionException("virtual_catalog_bridge: the policies of bridge '%s' are finalized", bridge_id);
+	}
+	return target;
+}
+
+//! Runs `f(tables, create_schemas, live)` under the lock that guards the bridge's grants. With `refresh`, an
+//! attached target is refreshed so its next statement sees the change.
+template <class F>
+void WithOpenGrants(const string &bridge_id, ClientContext &context, bool refresh, F &&f) {
+	lock_guard<mutex> lock(PendingMutex());
+	auto target = LookupOpenGrants(bridge_id, context);
+	if (target.pending) {
+		f(target.pending->schemas, target.pending->create_schemas, false);
+		return;
+	}
+	lock_guard<mutex> guard(target.live->lock);
+	f(target.live->tables, target.live->create_schemas, true);
+	if (refresh && target.live->target) {
+		target.live->target->Refresh();
+	}
+}
+
+template <class F>
+void ReadGrants(const string &bridge_id, ClientContext &context, F &&read) {
+	WithOpenGrants(bridge_id, context, false, std::forward<F>(read));
+}
+
+template <class F>
+void WriteGrants(const string &bridge_id, ClientContext &context, F &&write) {
+	WithOpenGrants(bridge_id, context, true, std::forward<F>(write));
+}
+
+optional_ptr<SourceGrant> FindGrant(GrantTables &tables, const string &schema, const string &table) {
+	auto schema_it = tables.find(schema);
+	if (schema_it == tables.end()) {
+		return nullptr;
+	}
+	auto table_it = schema_it->second.find(table);
+	return table_it == schema_it->second.end() ? nullptr : &table_it->second;
+}
+
+//! A key set after ATTACH must name a granted table: an entry without verbs would be served as one.
+SourceGrant &GrantForKey(GrantTables &tables, const string &schema, const string &table, bool live,
+                         const string &bridge_id) {
+	if (!live) {
+		return tables[schema][table];
+	}
+	auto grant = FindGrant(tables, schema, table);
+	if (!grant) {
+		throw CatalogException("virtual_catalog_bridge: '%s.%s' is not granted in bridge '%s'", schema, table,
+		                       bridge_id);
+	}
+	return *grant;
 }
 
 void ThrowIfAnyNull(DataChunk &args, idx_t columns, const char *function) {
@@ -539,10 +652,10 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		case_insensitive_map_t<Value> values;
 		{
 			lock_guard<mutex> lock(PendingMutex());
-			auto &pending = LookupPendingForGrant(bridge_id, context);
-			source_db = pending.source_db;
-			source = pending.source;
-			values = ContextSnapshot(*pending.context);
+			auto target = LookupOpenGrants(bridge_id, context);
+			source_db = target.source_db;
+			source = target.source;
+			values = ContextSnapshot(*target.context);
 		}
 
 		auto is_view = false;
@@ -603,28 +716,36 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 			source_conn.Rollback();
 		}
 
-		lock_guard<mutex> lock(PendingMutex());
-		auto &pending = LookupPendingForGrant(bridge_id, context);
-		if (verb == CrossingVerb::CREATE) {
-			if (pending.create_schemas.count(schema)) {
-				throw IOException("virtual_catalog_bridge: a 'create' policy is already defined for schema '%s'",
-				                  schema);
+		WriteGrants(bridge_id, context, [&](GrantTables &tables, case_insensitive_set_t &create_schemas, bool live) {
+			if (verb == CrossingVerb::CREATE) {
+				if (create_schemas.count(schema)) {
+					throw IOException("virtual_catalog_bridge: a 'create' policy is already defined for schema '%s'",
+					                  schema);
+				}
+				create_schemas.insert(schema);
+				return;
 			}
-			pending.create_schemas.insert(schema);
-			result_data[i] = StringVector::AddString(result, "ok");
-			continue;
-		}
-		auto &grant = pending.schemas[schema][table];
-		if (grant.Has(verb)) {
-			throw IOException("virtual_catalog_bridge: a '%s' policy is already defined for '%s.%s'",
-			                  CrossingVerbName(verb), schema, table);
-		}
-		grant.Allow(verb);
-		if (grant.key.empty() && !is_view) {
-			grant.key = std::move(discovered_key);
-		}
-		grant.using_predicates[static_cast<idx_t>(verb)] = std::move(using_predicate);
-		grant.check_predicates[static_cast<idx_t>(verb)] = std::move(check_predicate);
+			auto existing = FindGrant(tables, schema, table);
+			if (existing && existing->Has(verb)) {
+				throw IOException("virtual_catalog_bridge: a '%s' policy is already defined for '%s.%s'",
+				                  CrossingVerbName(verb), schema, table);
+			}
+			// Before ATTACH, RedeemBridgeAttach checks this once the grant set is complete.
+			if (live && (verb == CrossingVerb::UPDATE || verb == CrossingVerb::DELETE_) &&
+			    !(existing && existing->Has(CrossingVerb::SELECT))) {
+				throw PermissionException(
+				    "virtual_catalog_bridge: table '%s.%s' in bridge '%s' grants '%s' without 'select'; UPDATE and "
+				    "DELETE are driven by a scan of the table and cannot be granted alone",
+				    schema, table, bridge_id, CrossingVerbName(verb));
+			}
+			auto &grant = tables[schema][table];
+			grant.Allow(verb);
+			if (grant.key.empty() && !is_view) {
+				grant.key = std::move(discovered_key);
+			}
+			grant.using_predicates[static_cast<idx_t>(verb)] = std::move(using_predicate);
+			grant.check_predicates[static_cast<idx_t>(verb)] = std::move(check_predicate);
+		});
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
 }
@@ -677,9 +798,9 @@ void PrimaryKeyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		SourcePin source;
 		{
 			lock_guard<mutex> lock(PendingMutex());
-			auto &pending = LookupPendingForGrant(bridge_id, context);
-			source_db = pending.source_db;
-			source = pending.source;
+			auto target = LookupOpenGrants(bridge_id, context);
+			source_db = target.source_db;
+			source = target.source;
 		}
 
 		{
@@ -708,11 +829,11 @@ void PrimaryKeyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 			source_conn.Rollback();
 		}
 
-		lock_guard<mutex> lock(PendingMutex());
-		auto &pending = LookupPendingForGrant(bridge_id, context);
-		auto &grant = pending.schemas[schema][table];
-		grant.key = std::move(key);
-		grant.key_verified = false;
+		WriteGrants(bridge_id, context, [&](GrantTables &grant_tables, case_insensitive_set_t &, bool live) {
+			auto &grant = GrantForKey(grant_tables, schema, table, live, bridge_id);
+			grant.key = std::move(key);
+			grant.key_verified = false;
+		});
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
 }
@@ -737,7 +858,7 @@ void PrimaryKeyQueryFunc(DataChunk &args, ExpressionState &state, Vector &result
 		SplitGrantName(qualified, schema, table);
 		{
 			lock_guard<mutex> lock(PendingMutex());
-			LookupPendingForGrant(bridge_id, context);
+			LookupOpenGrants(bridge_id, context);
 		}
 
 		Connection source_conn(*context.db);
@@ -772,11 +893,11 @@ void PrimaryKeyQueryFunc(DataChunk &args, ExpressionState &state, Vector &result
 			                  qualified);
 		}
 
-		lock_guard<mutex> lock(PendingMutex());
-		auto &pending = LookupPendingForGrant(bridge_id, context);
-		auto &grant = pending.schemas[schema][table];
-		grant.key = std::move(key);
-		grant.key_verified = false;
+		WriteGrants(bridge_id, context, [&](GrantTables &grant_tables, case_insensitive_set_t &, bool live) {
+			auto &grant = GrantForKey(grant_tables, schema, table, live, bridge_id);
+			grant.key = std::move(key);
+			grant.key_verified = false;
+		});
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
 }
@@ -799,15 +920,13 @@ void PrimaryKeyCheckFunc(DataChunk &args, ExpressionState &state, Vector &result
 		string schema;
 		string table;
 		SplitGrantName(qualified, schema, table);
-		{
-			lock_guard<mutex> lock(PendingMutex());
-			auto &pending = LookupPendingForGrant(bridge_id, context);
-			if (pending.schemas[schema][table].key.empty()) {
+		ReadGrants(bridge_id, context, [&](GrantTables &grant_tables, case_insensitive_set_t &, bool live) {
+			if (GrantForKey(grant_tables, schema, table, live, bridge_id).key.empty()) {
 				throw IOException("virtual_catalog_bridge: no primary key is set for '%s' in bridge '%s'; call "
 				                  "bridge_primary_key or bridge_primary_key_query first",
 				                  qualified, bridge_id);
 			}
-		}
+		});
 
 		Connection source_conn(*context.db);
 		auto check_result = source_conn.SendQuery(queries[i].GetString());
@@ -826,9 +945,9 @@ void PrimaryKeyCheckFunc(DataChunk &args, ExpressionState &state, Vector &result
 			                          qualified);
 		}
 
-		lock_guard<mutex> lock(PendingMutex());
-		auto &pending = LookupPendingForGrant(bridge_id, context);
-		pending.schemas[schema][table].key_verified = true;
+		WriteGrants(bridge_id, context, [&](GrantTables &grant_tables, case_insensitive_set_t &, bool live) {
+			GrantForKey(grant_tables, schema, table, live, bridge_id).key_verified = true;
+		});
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
 }
@@ -886,20 +1005,8 @@ ContextTarget LookupContext(const string &bridge_id, ClientContext &context, con
 		}
 		return target;
 	}
-	auto it = LiveBridges().find(bridge_id);
-	shared_ptr<GrantBook> grants;
-	if (it != LiveBridges().end()) {
-		grants = it->second.grants.lock();
-	}
-	if (!grants) {
-		throw PermissionException("virtual_catalog_bridge: no registered source for bridge '%s'", bridge_id);
-	}
-	if (it->second.source_db != context.db.get()) {
-		throw PermissionException("virtual_catalog_bridge: bridge '%s' was registered by a different source connection",
-		                          bridge_id);
-	}
+	auto grants = LookupLive(bridge_id, context, target.source);
 	target.context = grants->context;
-	target.source = it->second.source;
 	if (!name.empty()) {
 		lock_guard<mutex> guard(grants->lock);
 		CollectDependents(grants->tables, name, target.dependents);
@@ -990,6 +1097,27 @@ void FinalizeContextFunc(DataChunk &args, ExpressionState &state, Vector &result
 	}
 }
 
+void FinalizePolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &context = state.GetContext();
+	auto count = args.size();
+	args.data[0].Flatten(count);
+	ThrowIfAnyNull(args, 1, "bridge_finalize_policy");
+	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
+	auto result_data = FlatVector::GetData<string_t>(result);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto bridge_id = bridge_ids[i].GetString();
+		lock_guard<mutex> lock(PendingMutex());
+		auto target = LookupGrantTarget(bridge_id, context);
+		if (*target.policy_finalized) {
+			throw PermissionException("virtual_catalog_bridge: the policies of bridge '%s' are already finalized",
+			                          bridge_id);
+		}
+		*target.policy_finalized = true;
+		result_data[i] = StringVector::AddString(result, "ok");
+	}
+}
+
 } // namespace
 
 unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db) {
@@ -1045,6 +1173,7 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &
 		grants->tables = std::move(it->second.schemas);
 		grants->create_schemas = std::move(it->second.create_schemas);
 		grants->context = std::move(it->second.context);
+		grants->policy_finalized = it->second.policy_finalized;
 		PendingSources().erase(it);
 		LiveBridges()[bridge_id] = LiveBridge {source_db.get(), source, grants};
 	}
@@ -1101,6 +1230,11 @@ DuckDBSource::~DuckDBSource() {
 	if (it != LiveBridges().end() && it->second.grants.lock() == grants) {
 		LiveBridges().erase(it);
 	}
+}
+
+void DuckDBSource::SetTarget(optional_ptr<CrossingAttach> target) {
+	lock_guard<mutex> guard(grants->lock);
+	grants->target = target;
 }
 
 vector<string> DuckDBSource::Schemas() {
@@ -1707,6 +1841,12 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	finalize_context.stability = FunctionStability::VOLATILE;
 	finalize_context.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(finalize_context);
+
+	ScalarFunction finalize_policy("bridge_finalize_policy", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                               FinalizePolicyFunc);
+	finalize_policy.stability = FunctionStability::VOLATILE;
+	finalize_policy.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	loader.RegisterFunction(finalize_policy);
 }
 
 } // namespace duckdb

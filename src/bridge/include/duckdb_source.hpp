@@ -11,6 +11,7 @@
 
 namespace duckdb {
 
+class CrossingAttach;
 class ExtensionLoader;
 
 static constexpr const char *VIRTUAL_CATALOG_BRIDGE_TYPE = "virtual_catalog_bridge";
@@ -55,9 +56,9 @@ public:
 	SourcePin(AttachedDatabase &attached, string registered_name);
 
 	//! Binds the pinned database into the transaction of `source_context`, so every lookup of its name there
-	//! resolves to it. Returns that name, which a rename may have changed. Throws CatalogException "was
-	//! detached" when the pinned database is gone, its name now resolves to another database, or the
-	//! transaction already references another database under that name.
+	//! resolves to it. Returns that name, which a rename may have changed. Throws CatalogException when the
+	//! pinned database is no longer attached under its name, or the transaction already references another
+	//! database under that name.
 	string Use(ClientContext &source_context) const;
 
 private:
@@ -71,6 +72,10 @@ struct GrantBook {
 	case_insensitive_set_t create_schemas;
 	case_insensitive_map_t<shared_ptr<Connection>> shaping;
 	shared_ptr<BridgeContext> context;
+	//! The target's attach, refreshed when a grant changes after ATTACH. Null once the target catalog is gone.
+	optional_ptr<CrossingAttach> target;
+	//! Guarded by the bridge registry's mutex, not `lock`.
+	bool policy_finalized = false;
 };
 
 class DuckDBSession {
@@ -117,6 +122,9 @@ public:
 	CrossingVerdict AcceptsCall(const Expression &expr);
 	CrossingVerdict AcceptsType(const LogicalType &type);
 	unique_ptr<DuckDBSession> Begin(ClientContext &context);
+	void SetTarget(optional_ptr<CrossingAttach> target);
+	// No Group(): PolicyResolver and GrantBook key on schema.table in this source's catalog, so a floor
+	// naming another catalog would bind the wrong table under the wrong policy.
 
 private:
 	shared_ptr<Connection> PlanningConnection();

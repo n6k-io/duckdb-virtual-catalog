@@ -1,6 +1,6 @@
-"""Regression tests for faults 1-4.
+"""Fault regression tests.
 
-Three of the four kill the process, so they run in a subprocess: a SIGSEGV inside pytest takes
+Some kill the process, so they run in a subprocess: a SIGSEGV inside pytest takes
 the whole session with it and reports nothing. `run_probe` asserts on the child's exit code, so
 rc 139 (SIGSEGV) / 138 (SIGBUS) is a test failure with the script's own output attached.
 """
@@ -111,7 +111,7 @@ def test_bridge_swap_under_concurrent_binds_does_not_free_live_entries():
     assert "ok" in out
 
 
-# --- 2. cyclic bridge ---------------------------------------------------------------------------
+# --- 2. bridge source pinning -------------------------------------------------------------------
 
 
 def test_a_bridge_attached_over_its_own_source_name_does_not_recurse():
@@ -159,9 +159,9 @@ def test_policy_refuses_a_source_catalog_detached_after_registration():
     con.close()
 
 
-def test_cyclic_bridge_never_installs():
-    """The full three-hop cycle. Each step is allowed, but re-attaching `app` over a
-    chain that reads from it leaves every hop pinned to the detached original, so the reads fail
+def test_cyclic_bridge_reads_fail_instead_of_recursing():
+    """The three-hop cycle. Each step is allowed, but re-attaching `app` over a
+    chain that reads from it leaves both of b's hops pinned to the detached original, so the reads fail
     instead of recursing."""
     out = run_probe(
         """
@@ -202,7 +202,8 @@ def test_cyclic_bridge_never_installs():
 
 def test_detaching_a_bridge_source_while_it_is_granted_does_not_deadlock():
     """A grant on a bridge source binds that bridge into its transaction. When a concurrent DETACH
-    leaves the grant holding the last reference, the bridge is torn down as the grant ends."""
+    leaves the grant holding the last reference, the bridge is torn down as the grant ends; see
+    PendingMutex in duckdb_source.cpp."""
     out = run_probe(
         """
         import threading
