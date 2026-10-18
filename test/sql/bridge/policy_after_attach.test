@@ -76,7 +76,7 @@ SELECT bridge_policy('pa', 'main.extra', 'insert', 'true', 'true');
 ----
 already defined
 
-# A policy added later narrows the rows of a granted table.
+# A new verb with a restricting predicate on a granted table.
 statement ok
 SELECT bridge_policy('pa', 'main.extra', 'update', 'id = 1');
 
@@ -193,12 +193,16 @@ SELECT bridge_finalize_policy('pa');
 ----
 no registered source for bridge
 
-# Finalized before ATTACH: today's frozen grant set.
+# Finalized before ATTACH: the grant set is fixed at finalize.
 statement ok
 SELECT bridge_register_source('pb', 'memory', 'tok_pb');
 
 statement ok
 SELECT bridge_policy('pb', 'main.users', 'select', 'true');
+
+# A key on a table no policy grants is dropped at ATTACH.
+statement ok
+SELECT bridge_primary_key('pb', 'main.extra', ['id']);
 
 statement ok
 SELECT bridge_finalize_policy('pb');
@@ -220,6 +224,11 @@ query I
 SELECT count(*) FROM b2.main.users;
 ----
 2
+
+statement error
+SELECT * FROM b2.main.extra;
+----
+does not exist
 
 statement ok
 DETACH b2;

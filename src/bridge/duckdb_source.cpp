@@ -255,7 +255,8 @@ optional_ptr<SourceGrant> FindGrant(GrantTables &tables, const string &schema, c
 	return table_it == schema_it->second.end() ? nullptr : &table_it->second;
 }
 
-//! A key set after ATTACH must name a granted table: an entry without verbs would be served as one.
+//! After ATTACH a key must name a granted table: an entry without verbs would be served as one.
+//! RedeemBridgeAttach drops the pending ones.
 SourceGrant &GrantForKey(GrantTables &tables, const string &schema, const string &table, bool live,
                          const string &bridge_id) {
 	if (!live) {
@@ -1146,9 +1147,11 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &
 		}
 		idx_t table_count = it->second.create_schemas.size();
 		for (auto &schema_entry : it->second.schemas) {
-			table_count += schema_entry.second.size();
 			for (auto &table_entry : schema_entry.second) {
 				auto &grant = table_entry.second;
+				if (grant.verbs != 0) {
+					table_count++;
+				}
 				if (grant.Has(CrossingVerb::SELECT)) {
 					continue;
 				}
@@ -1167,6 +1170,15 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &
 			throw PermissionException("virtual_catalog_bridge: bridge '%s' has no policies; call "
 			                          "bridge_policy(...) on the source connection before attaching",
 			                          bridge_id);
+		}
+		// A key may precede its policy, so a key on a table no policy reached leaves an entry without verbs,
+		// which the target would serve as a table.
+		for (auto schema_it = it->second.schemas.begin(); schema_it != it->second.schemas.end();) {
+			auto &schema_tables = schema_it->second;
+			for (auto table_it = schema_tables.begin(); table_it != schema_tables.end();) {
+				table_it = table_it->second.verbs == 0 ? schema_tables.erase(table_it) : std::next(table_it);
+			}
+			schema_it = schema_tables.empty() ? it->second.schemas.erase(schema_it) : std::next(schema_it);
 		}
 		source_db = it->second.source_db;
 		source = it->second.source;

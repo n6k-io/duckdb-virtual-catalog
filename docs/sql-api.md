@@ -20,8 +20,8 @@ Table names are `'schema.table'`, resolved in `source_catalog`. Each granted sou
 schema lands in the target schema of the same name.
 
 `bridge_policy` and the `bridge_primary_key*` functions work before and after
-`ATTACH`, until `bridge_finalize_policy`; the target's next statement sees the
-change. After `ATTACH` a key can only be set on a granted table.
+`ATTACH`, until `bridge_finalize_policy`; see
+[setup flow](virtual-catalog-bridge.md#setup-flow).
 
 | Function | Arguments |
 |---|---|

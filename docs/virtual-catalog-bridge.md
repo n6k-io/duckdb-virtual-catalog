@@ -51,16 +51,19 @@ The token contains a nonce unique to the loaded extension binary — mismatched
 extension versions are rejected. Tokens expire after **30 seconds** if not
 consumed — the clock measures inactivity, so it covers the whole grant script
 rather than the first call alone. Grants are declared by the source (trusted
-side) and cannot be modified by the target: `bridge_policy`, `bridge_set_context`
-and `bridge_finalize_context` refuse any connection whose `DatabaseInstance` is
-not the one that called `bridge_register_source` — so any connection on the
-source instance may add grants, but no connection outside it can. Once the token
-is redeemed the grants stay open, like the [context](#context-values):
-`bridge_policy` and `bridge_primary_key*` still work, and the target's next
-statement — inside an open transaction too — sees the change. The exception is a
-target transaction that ran DDL through the bridge: it keeps the table list it
-had until it ends. `bridge_finalize_policy(bridge_id)` freezes the grants, before
-or after `ATTACH`; called before, the grant set is fixed at attach.
+side) and cannot be modified by the target: every grant and context function
+refuses any connection whose `DatabaseInstance` is not the one that called
+`bridge_register_source` — so any connection on the source instance may add
+grants, but no connection outside it can. Once the token is redeemed the grants
+stay open, like the [context](#context-values): `bridge_policy` and
+`bridge_primary_key*` still work, and the target's next statement — inside an
+open transaction too — sees the change. The exception is a target transaction
+that ran DDL through the bridge: for the schemas it ran DDL in, it keeps the
+tables, verbs and keys it had until it ends. `bridge_finalize_policy(bridge_id)`
+freezes the grants from that call on, before or after `ATTACH`.
+
+A key may be set before the policy that grants its table. A key on a table no
+policy grants is dropped at `ATTACH`; after `ATTACH` it is refused.
 
 A source that already holds a secret can name the token itself, with the 3-arg
 form. This is also what lets a test hardcode one:
@@ -136,8 +139,10 @@ only — any other verb is refused by `bridge_policy` — and its policy is comp
 against the view's columns. On the target it is a `crossing` table entry with
 `verbs` `[select]` and no primary key.
 
-`update` and `delete` also require `select` on the same table, and the `ATTACH`
-refuses a grant set that breaks this. Both are driven by a
+`update` and `delete` also require `select` on the same table. Before `ATTACH`
+the grants may come in any order and `ATTACH` refuses a set that breaks this;
+after it, `bridge_policy` refuses an `update` or `delete` on a table without
+`select`. Both are driven by a
 scan: the plan reads the table to resolve the `WHERE`, and the row identities the
 write path uses are buffered by that scan.
 
@@ -360,8 +365,9 @@ Tables granted any write verb support the ones they were granted.
 
 The grant is checked once, when the write fence is built at bind time. The fence
 carries the proof, along with the key its seam is named from, so physical
-planning and execution read it rather than consulting the grant map again —
-a grant added after it reaches the next statement, not one already bound.
+planning and execution read it rather than consulting the grant map again:
+grants can change after bind, and a second lookup could disagree with the
+first.
 
 **Not yet supported:** `CREATE TABLE` in a *bridge* schema (it works in a plain
 `virtual_catalog_bridge` schema, as a native entry), `ON CONFLICT`, and the
