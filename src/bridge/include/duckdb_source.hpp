@@ -92,6 +92,10 @@ public:
 private:
 	shared_ptr<Connection> Shared();
 	bool CreateWouldCreate(Connection &source_conn, const string &catalog, const CrossingDdl &ddl);
+	//! Throws unless both the alter grant and the select policy fold to true under the current context: an ALTER
+	//! runs over every row on the source, including rows the select policy would hide from this target.
+	void ThrowUnlessAlterGrantedOverFullTable(ClientContext &source_context, const string &catalog,
+	                                          const CrossingDdl &ddl);
 	void ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl);
 	void RecordDdl(const shared_ptr<Connection> &source_conn, const string &catalog, const CrossingDdl &ddl);
 	void UndoGrants();

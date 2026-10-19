@@ -1,6 +1,7 @@
 #include "duckdb_source.hpp"
 
 #include "crossing_attach.hpp"
+#include "predicate_fold.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -400,6 +401,16 @@ bool IsUnrestricted(const string &text) {
 	return StringUtil::CIEquals(text.substr(first, last - first + 1), "true");
 }
 
+bool MentionsColumn(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+		return true;
+	}
+	bool found = false;
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { found = found || MentionsColumn(child); });
+	return found;
+}
+
 void ContextNames(const ParsedExpression &expr, case_insensitive_set_t &names) {
 	if (expr.GetExpressionClass() == ExpressionClass::PARAMETER) {
 		names.insert(expr.Cast<ParameterExpression>().identifier);
@@ -671,7 +682,8 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 			                  CrossingVerbName(verb));
 		}
 		auto using_text = usings[i].GetString();
-		if ((IsDdlVerb(verb) || verb == CrossingVerb::INSERT) && !IsUnrestricted(using_text)) {
+		if (((IsDdlVerb(verb) && verb != CrossingVerb::ALTER) || verb == CrossingVerb::INSERT) &&
+		    !IsUnrestricted(using_text)) {
 			throw IOException("virtual_catalog_bridge: the USING predicate for '%s' must be literally 'true'",
 			                  CrossingVerbName(verb));
 		}
@@ -739,7 +751,12 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 					} else if (verb == CrossingVerb::UPDATE) {
 						check_predicate = using_predicate->Copy();
 					}
-					if (IsDdlVerb(verb)) {
+					if (verb == CrossingVerb::ALTER && MentionsColumn(*using_predicate)) {
+						throw IOException("virtual_catalog_bridge: the USING predicate for 'alter' '%s' may only use "
+						                  "context ($name), not a column",
+						                  using_text);
+					}
+					if (IsDdlVerb(verb) && verb != CrossingVerb::ALTER) {
 						using_predicate.reset();
 					}
 					if (!is_view) {
@@ -1601,6 +1618,7 @@ void DuckDBSession::Ddl(ClientContext &, const CrossingDdl &ddl) {
 
 	auto creates = ddl.verb != CrossingVerb::CREATE || CreateWouldCreate(source_conn, catalog, ddl);
 	if (ddl.verb == CrossingVerb::ALTER) {
+		ThrowUnlessAlterGrantedOverFullTable(*source_conn.context, catalog, ddl);
 		ThrowIfAlterOrphansPolicy(ddl);
 	}
 	auto &attached = Catalog::GetCatalog(*source_conn.context, catalog).GetAttached();
@@ -1640,6 +1658,46 @@ bool DuckDBSession::CreateWouldCreate(Connection &source_conn, const string &cat
 	}
 	default:
 		return true;
+	}
+}
+
+void DuckDBSession::ThrowUnlessAlterGrantedOverFullTable(ClientContext &source_context, const string &catalog,
+                                                         const CrossingDdl &ddl) {
+	bool alter_granted = false;
+	bool select_granted = false;
+	unique_ptr<ParsedExpression> alter_using;
+	unique_ptr<ParsedExpression> select_using;
+	{
+		lock_guard<mutex> guard(grants->lock);
+		auto schema_it = grants->tables.find(ddl.schema);
+		if (schema_it != grants->tables.end()) {
+			auto table_it = schema_it->second.find(ddl.table);
+			if (table_it != schema_it->second.end()) {
+				auto &grant = table_it->second;
+				alter_granted = grant.Has(CrossingVerb::ALTER);
+				select_granted = grant.Has(CrossingVerb::SELECT);
+				alter_using = grant.CopyUsing(CrossingVerb::ALTER);
+				select_using = grant.CopyUsing(CrossingVerb::SELECT);
+			}
+		}
+	}
+	auto values = ContextSnapshot(*grants->context);
+	// A granted verb without a predicate is unrestricted.
+	const auto holds = [&](bool granted, unique_ptr<ParsedExpression> &predicate) {
+		if (!granted || !predicate) {
+			return granted;
+		}
+		FillContext(predicate, values);
+		return PredicateFoldsToTrue(source_context, catalog, ddl.schema, ddl.table, *predicate);
+	};
+	if (!holds(alter_granted, alter_using)) {
+		throw PermissionException("virtual_catalog_bridge: '%s' does not have '%s' permission", ddl.table,
+		                          CrossingVerbName(CrossingVerb::ALTER));
+	}
+	if (!holds(select_granted, select_using)) {
+		throw PermissionException("virtual_catalog_bridge: the select policy on '%s.%s' hides rows, so the target "
+		                          "cannot see the full table and cannot alter it",
+		                          ddl.schema, ddl.table);
 	}
 }
 

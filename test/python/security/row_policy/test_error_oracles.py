@@ -161,11 +161,6 @@ def nullable_setup(hidden_n):
     """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="accepted: one bit over the hidden rows as a whole (some hidden row is NULL), "
-    "never a value or a chosen row",
-)
 @pytest.mark.parametrize("grants", [{"select": POLICY, "alter": "true"}, {"alter": "true"}], ids=["select", "alter"])
 def test_set_not_null_is_not_a_null_oracle(world, grants):
     results = []
@@ -174,3 +169,30 @@ def test_set_not_null_is_not_a_null_oracle(world, grants):
         results.append(outcome(target, "ALTER TABLE app.main.users ALTER COLUMN n SET NOT NULL"))
     null, filled = results
     assert null == filled, f"a hidden NULL changed the outcome\n  null   {null}\n  filled {filled}"
+
+
+# --- G7: CREATE in a create-granted schema reveals ungranted table names --------------------------
+
+NAME_PROBES = {
+    "create": "CREATE TABLE app.main.secret(x INTEGER)",
+    "create_or_replace": "CREATE OR REPLACE TABLE app.main.secret(x INTEGER)",
+    "rename": "CREATE TABLE app.main.tmp(x INTEGER); ALTER TABLE app.main.tmp RENAME TO secret",
+}
+
+
+@pytest.mark.xfail(strict=True, reason="accepted: fixing it needs target-created tables in their own namespace")
+@pytest.mark.parametrize("sql", NAME_PROBES.values(), ids=NAME_PROBES.keys())
+def test_create_is_not_an_ungranted_name_oracle(sql):
+    results = []
+    for setup in (f"CREATE TABLE secret(id INTEGER); {SETUP}", SETUP):
+        source, target = new_connection(), new_connection()
+        try:
+            source.execute(setup)
+            bridge_id = bridge(source, target, {"users": {"select": POLICY}})
+            source.execute("SELECT bridge_policy(?, 'main', 'create', 'true')", [bridge_id])
+            results.append(outcome(target, sql))
+        finally:
+            source.close()
+            target.close()
+    present, absent = results
+    assert present == absent, f"an ungranted name changed the outcome\n  present {present}\n  absent  {absent}"

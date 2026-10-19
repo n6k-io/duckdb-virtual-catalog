@@ -29,7 +29,10 @@ statement ok
 SELECT bridge_policy('bnd', 'main', 'create', 'true');
 
 statement ok
-SELECT bridge_policy('bnd', 'main.served', 'select', 'tenant = 7');
+SELECT bridge_set_context('bnd', 'role', 'admin');
+
+statement ok
+SELECT bridge_policy('bnd', 'main.served', 'select', '$role = ''admin'' OR tenant = 7');
 
 statement ok
 SELECT bridge_policy('bnd', 'main.served', v, 'true') FROM (VALUES ('alter'), ('drop')) _(v);
@@ -129,3 +132,15 @@ query II
 SELECT id, memo FROM b.main.served;
 ----
 1	NULL
+
+# ---------------------------------------------------------------------------
+# An alter is refused once the select policy hides rows from this target.
+# ---------------------------------------------------------------------------
+
+statement ok
+SELECT bridge_set_context('bnd', 'role', 'user');
+
+statement error
+ALTER TABLE b.main.served ADD COLUMN other VARCHAR;
+----
+cannot see the full table

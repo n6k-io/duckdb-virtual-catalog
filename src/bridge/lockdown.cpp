@@ -19,6 +19,21 @@ void SetGlobal(DatabaseInstance &db, const char *name, const Value &value) {
 	config.SetOption(&db, *option, value);
 }
 
+//! DuckDB reads '-<anything>', 'none' and 'null' as no limit at all.
+void ThrowUnlessFiniteMemoryLimit(const string &text) {
+	idx_t bytes = NumericLimits<idx_t>::Maximum();
+	if (!text.empty()) {
+		try {
+			bytes = DBConfig::ParseMemoryLimit(text);
+		} catch (const ParserException &) {
+		}
+	}
+	if (bytes == NumericLimits<idx_t>::Maximum()) {
+		throw InvalidInputException("virtual_catalog_lockdown: memory_limit '%s' must be a finite size, e.g. '512MB'",
+		                            text);
+	}
+}
+
 void LockdownFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &db = DatabaseInstance::GetDatabase(state.GetContext());
 	auto count = args.size();
@@ -36,6 +51,7 @@ void LockdownFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	if (Settings::Get<LockConfigurationSetting>(DBConfig::GetConfig(db))) {
 		throw PermissionException("virtual_catalog_lockdown: the configuration is already locked");
 	}
+	ThrowUnlessFiniteMemoryLimit(memory_limit.ToString());
 
 	// temp_directory refuses changes once external access is off, so it goes first.
 	SetGlobal(db, "temp_directory", Value(""));
