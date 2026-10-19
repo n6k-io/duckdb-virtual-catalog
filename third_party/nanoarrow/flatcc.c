@@ -2419,7 +2419,8 @@ const char *flatcc_verify_error_string(int err)
  */
 #define verify_runtime(cond, reason) verify(cond, reason)
 
-#define check_result(x) if (x) { return (x); }
+/* Evaluate once: re-running a failed nested verify doubles the work at every level. */
+#define check_result(x) do { int r = (x); if (r) { return r; } } while(0)
 
 #define check_field(td, id, required, base) do {                            \
     int ret = get_offset_field(td, id, required, &base);                    \
@@ -2623,7 +2624,7 @@ static inline int verify_table(const void *buf, uoffset_t end, uoffset_t base, u
     uoffset_t vbase, vend;
     flatcc_table_verifier_descriptor_t td;
 
-    verify((td.ttl = ttl - 1), flatcc_verify_error_max_nesting_level_reached);
+    verify((td.ttl = ttl - 1) > 0, flatcc_verify_error_max_nesting_level_reached);
     verify(check_header(end, base, offset), flatcc_verify_error_table_header_out_of_range_or_unaligned);
     td.table = base + offset;
     /* Read vtable offset - it is signed, but we want it unsigned, assuming 2's complement works. */

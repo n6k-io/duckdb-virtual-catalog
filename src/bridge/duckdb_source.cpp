@@ -62,6 +62,7 @@ struct PendingSource {
 	case_insensitive_set_t create_schemas;
 	shared_ptr<BridgeContext> context = make_shared_ptr<BridgeContext>();
 	bool policy_finalized = false;
+	idx_t token_failures = 0;
 };
 
 struct LiveBridge {
@@ -71,6 +72,8 @@ struct LiveBridge {
 };
 
 constexpr int64_t PENDING_SOURCE_TTL_SECONDS = 30;
+//! Wrong tokens a pending entry absorbs before it is dropped.
+constexpr idx_t MAX_TOKEN_FAILURES = 5;
 
 //! Marks a connection a bridge opened for one autocommit read. A bridge whose source is another bridge
 //! begins its session on that connection, which is inside a transaction only because the read needs
@@ -106,12 +109,46 @@ unordered_map<string, LiveBridge> &LiveBridges() {
 	return *live;
 }
 
-void PurgeExpiredPendingSources() {
+//! Holds PendingMutex. An erased PendingSource may hold the last reference to a DatabaseInstance whose
+//! ~DuckDBSource takes PendingMutex, so erased entries park in `dropped`, which is destroyed after the
+//! mutex is released.
+struct PendingLock {
+	vector<PendingSource> dropped;
+	lock_guard<mutex> guard {PendingMutex()};
+
+	void Drop(unordered_map<string, PendingSource>::iterator it) {
+		dropped.push_back(std::move(it->second));
+		PendingSources().erase(it);
+	}
+};
+
+//! Caller holds PendingMutex.
+bool IsLiveBridge(const string &bridge_id) {
+	auto it = LiveBridges().find(bridge_id);
+	return it != LiveBridges().end() && !it->second.grants.expired();
+}
+
+bool ConstantTimeEquals(const string &a, const string &b) {
+	if (a.size() != b.size()) {
+		return false;
+	}
+	unsigned char diff = 0;
+	for (idx_t i = 0; i < a.size(); i++) {
+		diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+	}
+	return diff == 0;
+}
+
+void PurgeExpiredPendingSources(PendingLock &lock) {
 	auto now = std::chrono::steady_clock::now();
 	auto &pending = PendingSources();
 	for (auto it = pending.begin(); it != pending.end();) {
 		auto idle = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.last_touched).count();
-		it = idle > PENDING_SOURCE_TTL_SECONDS ? pending.erase(it) : std::next(it);
+		auto next = std::next(it);
+		if (idle > PENDING_SOURCE_TTL_SECONDS) {
+			lock.Drop(it);
+		}
+		it = next;
 	}
 }
 
@@ -144,7 +181,6 @@ void SplitGrantName(const string &qualified, string &schema, string &table) {
 }
 
 PendingSource &LookupPendingForGrant(const string &bridge_id, ClientContext &context) {
-	PurgeExpiredPendingSources();
 	auto it = PendingSources().find(bridge_id);
 	if (it == PendingSources().end()) {
 		throw PermissionException("virtual_catalog_bridge: no registered source for bridge '%s'. "
@@ -191,9 +227,9 @@ struct GrantTarget {
 };
 
 //! Caller holds PendingMutex.
-GrantTarget LookupGrantTarget(const string &bridge_id, ClientContext &context) {
+GrantTarget LookupGrantTarget(PendingLock &lock, const string &bridge_id, ClientContext &context) {
 	GrantTarget target;
-	PurgeExpiredPendingSources();
+	PurgeExpiredPendingSources(lock);
 	if (PendingSources().count(bridge_id)) {
 		auto &pending = LookupPendingForGrant(bridge_id, context);
 		target.source_db = pending.source_db;
@@ -211,8 +247,8 @@ GrantTarget LookupGrantTarget(const string &bridge_id, ClientContext &context) {
 }
 
 //! Caller holds PendingMutex.
-GrantTarget LookupOpenGrants(const string &bridge_id, ClientContext &context) {
-	auto target = LookupGrantTarget(bridge_id, context);
+GrantTarget LookupOpenGrants(PendingLock &lock, const string &bridge_id, ClientContext &context) {
+	auto target = LookupGrantTarget(lock, bridge_id, context);
 	if (*target.policy_finalized) {
 		throw PermissionException("virtual_catalog_bridge: the policies of bridge '%s' are finalized", bridge_id);
 	}
@@ -223,8 +259,8 @@ GrantTarget LookupOpenGrants(const string &bridge_id, ClientContext &context) {
 //! attached target is refreshed so its next statement sees the change.
 template <class F>
 void WithOpenGrants(const string &bridge_id, ClientContext &context, bool refresh, F &&f) {
-	lock_guard<mutex> lock(PendingMutex());
-	auto target = LookupOpenGrants(bridge_id, context);
+	PendingLock lock;
+	auto target = LookupOpenGrants(lock, bridge_id, context);
 	if (target.pending) {
 		f(target.pending->schemas, target.pending->create_schemas, false);
 		return;
@@ -323,9 +359,9 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		pending.source = SourcePin(entry->GetAttached(), source_catalog);
 		pending.last_touched = std::chrono::steady_clock::now();
 
-		lock_guard<mutex> lock(PendingMutex());
-		PurgeExpiredPendingSources();
-		if (PendingSources().find(bridge_id) != PendingSources().end()) {
+		PendingLock lock;
+		PurgeExpiredPendingSources(lock);
+		if (PendingSources().find(bridge_id) != PendingSources().end() || IsLiveBridge(bridge_id)) {
 			throw IOException("virtual_catalog_bridge: a source is already registered for bridge '%s'", bridge_id);
 		}
 		result_data[i] = StringVector::AddString(result, pending.token);
@@ -652,8 +688,8 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		SourcePin source;
 		case_insensitive_map_t<Value> values;
 		{
-			lock_guard<mutex> lock(PendingMutex());
-			auto target = LookupOpenGrants(bridge_id, context);
+			PendingLock lock;
+			auto target = LookupOpenGrants(lock, bridge_id, context);
 			source_db = target.source_db;
 			source = target.source;
 			values = ContextSnapshot(*target.context);
@@ -798,8 +834,8 @@ void PrimaryKeyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		shared_ptr<DatabaseInstance> source_db;
 		SourcePin source;
 		{
-			lock_guard<mutex> lock(PendingMutex());
-			auto target = LookupOpenGrants(bridge_id, context);
+			PendingLock lock;
+			auto target = LookupOpenGrants(lock, bridge_id, context);
 			source_db = target.source_db;
 			source = target.source;
 		}
@@ -858,8 +894,8 @@ void PrimaryKeyQueryFunc(DataChunk &args, ExpressionState &state, Vector &result
 		string table;
 		SplitGrantName(qualified, schema, table);
 		{
-			lock_guard<mutex> lock(PendingMutex());
-			LookupOpenGrants(bridge_id, context);
+			PendingLock lock;
+			LookupOpenGrants(lock, bridge_id, context);
 		}
 
 		Connection source_conn(*context.db);
@@ -994,9 +1030,9 @@ void CollectDependents(const case_insensitive_map_t<case_insensitive_map_t<Sourc
 
 //! Caller holds PendingMutex. A bridge's context outlives its pending entry: once attached it is found
 //! through LiveBridges until the DuckDBSource is destroyed.
-ContextTarget LookupContext(const string &bridge_id, ClientContext &context, const string &name) {
+ContextTarget LookupContext(PendingLock &lock, const string &bridge_id, ClientContext &context, const string &name) {
 	ContextTarget target;
-	PurgeExpiredPendingSources();
+	PurgeExpiredPendingSources(lock);
 	if (PendingSources().count(bridge_id)) {
 		auto &pending = LookupPendingForGrant(bridge_id, context);
 		target.context = pending.context;
@@ -1037,8 +1073,8 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		}
 		ContextTarget target;
 		{
-			lock_guard<mutex> lock(PendingMutex());
-			target = LookupContext(bridge_id, context, name);
+			PendingLock lock;
+			target = LookupContext(lock, bridge_id, context, name);
 		}
 		auto values = ContextSnapshot(*target.context);
 		if (target.context->finalized) {
@@ -1086,8 +1122,8 @@ void FinalizeContextFunc(DataChunk &args, ExpressionState &state, Vector &result
 
 	for (idx_t i = 0; i < count; i++) {
 		auto bridge_id = bridge_ids[i].GetString();
-		lock_guard<mutex> lock(PendingMutex());
-		auto target = LookupContext(bridge_id, context, string());
+		PendingLock lock;
+		auto target = LookupContext(lock, bridge_id, context, string());
 		lock_guard<mutex> guard(target.context->lock);
 		if (target.context->finalized) {
 			throw PermissionException("virtual_catalog_bridge: the context of bridge '%s' is already finalized",
@@ -1108,8 +1144,8 @@ void FinalizePolicyFunc(DataChunk &args, ExpressionState &state, Vector &result)
 
 	for (idx_t i = 0; i < count; i++) {
 		auto bridge_id = bridge_ids[i].GetString();
-		lock_guard<mutex> lock(PendingMutex());
-		auto target = LookupGrantTarget(bridge_id, context);
+		PendingLock lock;
+		auto target = LookupGrantTarget(lock, bridge_id, context);
 		if (*target.policy_finalized) {
 			throw PermissionException("virtual_catalog_bridge: the policies of bridge '%s' are already finalized",
 			                          bridge_id);
@@ -1136,14 +1172,20 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &
 	SourcePin source;
 	auto grants = make_shared_ptr<GrantBook>();
 	{
-		lock_guard<mutex> lock(PendingMutex());
-		PurgeExpiredPendingSources();
+		PendingLock lock;
+		PurgeExpiredPendingSources(lock);
 		auto it = PendingSources().find(bridge_id);
 		if (it == PendingSources().end()) {
 			throw PermissionException("virtual_catalog_bridge: no registered source for bridge '%s'", bridge_id);
 		}
-		if (it->second.token != token) {
+		if (!ConstantTimeEquals(it->second.token, token)) {
+			if (++it->second.token_failures >= MAX_TOKEN_FAILURES) {
+				lock.Drop(it);
+			}
 			throw PermissionException("virtual_catalog_bridge: invalid setup token for bridge '%s'", bridge_id);
+		}
+		if (IsLiveBridge(bridge_id)) {
+			throw PermissionException("virtual_catalog_bridge: bridge '%s' is already attached", bridge_id);
 		}
 		idx_t table_count = it->second.create_schemas.size();
 		for (auto &schema_entry : it->second.schemas) {
