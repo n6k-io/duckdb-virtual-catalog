@@ -10,6 +10,7 @@ any cast or error() evaluated on a hidden row shows up in the outcome.
 import pytest
 
 from conftest import bridge, new_connection
+from security.world import outcome
 
 POLICY = "tenant = 1"
 
@@ -37,13 +38,6 @@ def world():
     yield make
     for con in opened:
         con.close()
-
-
-def outcome(con, sql):
-    try:
-        return ("ok", con.execute(sql).fetchall())
-    except Exception as e:  # noqa: BLE001 -- the outcome itself is what is compared
-        return ("error", type(e).__name__, str(e))
 
 
 def assert_no_hidden_value(result):

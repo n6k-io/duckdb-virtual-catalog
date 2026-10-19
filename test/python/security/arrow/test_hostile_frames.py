@@ -9,12 +9,12 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-from conftest import BIGINT, BLOB, VARCHAR, VARCHAR_LIST, schema_message, stream_bytes
+from conftest import BIGINT, BLOB, VARCHAR, VARCHAR_LIST, read_stream, schema_message, stream_bytes
 from provider_stub import PRIMARY_KEY_METADATA_KEY
 from shared.test_faults import run_probe
 
 
-def serve(con, schema_bytes, scan=lambda columns: b""):
+def serve(con, schema_bytes, scan=lambda columns: b"", delete=lambda payload: 0):
     """Attach `app` with a single table `main.t` whose wire bytes the test controls."""
 
     def h_list():
@@ -27,7 +27,7 @@ def serve(con, schema_bytes, scan=lambda columns: b""):
         return scan(list(columns))
 
     def h_delete(name, payload):
-        return 0
+        return delete(payload)
 
     con.create_function("h_list", h_list, [], VARCHAR)
     con.create_function("h_schema", h_schema, [VARCHAR], BLOB)
@@ -102,6 +102,25 @@ def test_key_with_foreign_layout_is_refused(con, key, refusal):
     # DELETE reads the trailing key block, which is where the key reader runs.
     with pytest.raises(duckdb.Error, match=refusal):
         con.execute("DELETE FROM app.main.t").fetchall()
+
+
+# --- A10: a trailing key column narrower than the declared key type -----------------------------
+
+
+def test_key_narrower_than_declared_type_is_refused(con):
+    declared = pa.schema([pa.field("k", pa.int64())]).with_metadata({PRIMARY_KEY_METADATA_KEY: b"k"})
+    narrow = pa.table([pa.array([0x11111111] * 2000, pa.time32("s"))], names=["k"])
+    deleted = []
+
+    def delete(payload):
+        deleted.append(read_stream(payload).column(0).to_pylist())
+        return len(deleted[-1])
+
+    serve(con, schema_message(declared), lambda columns: stream_bytes(narrow), delete)
+    with pytest.raises(duckdb.Error):
+        con.execute("DELETE FROM app.main.t").fetchall()
+
+    assert deleted == [], f"keys read past the Arrow buffer reached delete(): {deleted[0][:4]}"
 
 
 # --- A4: a negative bodyLength must not stall the decoder ---------------------------------------

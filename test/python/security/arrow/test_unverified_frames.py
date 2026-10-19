@@ -5,17 +5,13 @@ PASS    a clean duckdb.Error
 Each probe runs in a child process: a crash inside pytest takes the session with it.
 """
 
-import signal
 import struct
-import subprocess
-import sys
 
 import pyarrow as pa
 import pytest
 
-from conftest import REPO_ROOT, schema_message, stream_bytes
-
-TEST_DIR = REPO_ROOT / "test" / "python"
+from conftest import schema_message, stream_bytes
+from shared.test_faults import run_probe
 
 
 def corrupt_root_offset():
@@ -56,42 +52,42 @@ def out_of_range_dictionary_index():
     return schema_message(schema), bytes(raw)
 
 
+def extension_on_narrow_storage():
+    """A11: int8 storage tagged arrow.uuid. DuckDB matches the extension by name alone and reads
+    16 bytes per row from a 1-byte-per-row buffer."""
+    field = pa.field("c0", pa.int8(), metadata={"ARROW:extension:name": "arrow.uuid"})
+    schema = pa.schema([field])
+    table = pa.table([pa.array([0x41] * 64, pa.int8())], schema=schema)
+    return schema_message(schema), stream_bytes(table)
+
+
 FRAMES = {
     "A1_root_offset": (corrupt_root_offset, "DESCRIBE app.main.t"),
     "A3_deep_schema": (deep_schema, "DESCRIBE app.main.t"),
     "A5_offsets": (non_monotonic_offsets, "SELECT c0 FROM app.main.t"),
     "A6_dictionary_index": (out_of_range_dictionary_index, "SELECT c0 FROM app.main.t"),
+    "A11_extension_storage": (extension_on_narrow_storage, "SELECT c0 FROM app.main.t"),
 }
-
-PROBE = """
-import sys
-sys.path.insert(0, {test_dir!r})
-import duckdb
-from conftest import new_connection
-from security.arrow.test_hostile_frames import serve
-from security.arrow.test_unverified_frames import FRAMES
-
-build, sql = FRAMES[{name!r}]
-schema_bytes, scan_bytes = build()
-con = new_connection(bridge=True, provider=True)
-serve(con, schema_bytes, lambda columns: scan_bytes)
-try:
-    print("ACCEPTED", con.execute(sql).fetchall())
-except duckdb.Error as e:
-    print("REFUSED", type(e).__name__, e)
-"""
 
 
 @pytest.mark.parametrize("name", FRAMES, ids=FRAMES.keys())
 def test_hostile_frame_is_refused_cleanly(name):
-    proc = subprocess.run(
-        [sys.executable, "-u", "-c", PROBE.format(test_dir=str(TEST_DIR), name=name)],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
+    out = run_probe(
+        f"""
+        import duckdb
+        from conftest import new_connection
+        from security.arrow.test_hostile_frames import serve
+        from security.arrow.test_unverified_frames import FRAMES
+
+        build, sql = FRAMES[{name!r}]
+        schema_bytes, scan_bytes = build()
+        con = new_connection(bridge=True, provider=True)
+        serve(con, schema_bytes, lambda columns: scan_bytes)
+        try:
+            print("ACCEPTED", con.execute(sql).fetchall())
+        except duckdb.Error as e:
+            print("REFUSED", type(e).__name__, e)
+        """,
         timeout=30,
     )
-    killed = f" ({signal.Signals(-proc.returncode).name})" if proc.returncode < 0 else ""
-    detail = f"exit {proc.returncode}{killed}\n--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr[-2000:]}"
-    assert proc.returncode == 0, detail
-    assert proc.stdout.startswith("REFUSED"), detail
+    assert out.startswith("REFUSED"), out

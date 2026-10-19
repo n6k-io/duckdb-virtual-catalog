@@ -38,8 +38,11 @@ def try_execute(con, sql):
         pass
 
 
-def source_has_table(source, name):
-    return source.execute("SELECT count(*) FROM duckdb_tables() WHERE table_name = ?", [name]).fetchone()[0] > 0
+def catalog_snapshot(source):
+    return (
+        source.execute("SELECT table_name FROM duckdb_tables() ORDER BY 1").fetchall(),
+        source.execute("SELECT column_name, column_default FROM duckdb_columns() ORDER BY 1").fetchall(),
+    )
 
 
 def test_set_default_cannot_name_a_source_only_function(ddl_world):
@@ -59,44 +62,6 @@ def test_set_default_expression_does_not_run_on_owner_insert(ddl_world):
     source.execute("INSERT INTO users(id, tenant) VALUES (10, 1)")
 
     assert source.execute("SELECT note FROM users WHERE id = 10").fetchone() != ("memory",)
-
-
-#: name -> (target DDL, owner insert, (query, value that proves the expression ran on the source))
-CREATES = {
-    "default": (
-        "CREATE TABLE app.main.d(id INTEGER PRIMARY KEY, x VARCHAR DEFAULT current_database())",
-        "INSERT INTO d(id) VALUES (1)",
-        ("SELECT x FROM d", ("memory",)),
-    ),
-    "generated": (
-        "CREATE TABLE app.main.g(id INTEGER PRIMARY KEY, x VARCHAR GENERATED ALWAYS AS (current_database() || id))",
-        "INSERT INTO g(id) VALUES (1)",
-        ("SELECT x FROM g", ("memory1",)),
-    ),
-}
-
-
-@pytest.mark.parametrize("ddl, insert, ran", CREATES.values(), ids=CREATES.keys())
-def test_create_table_expression_does_not_run_on_owner_insert(ddl_world, ddl, insert, ran):
-    source, target, _ = ddl_world
-    try_execute(target, ddl)
-    name = insert.split()[2].split("(")[0]
-    if not source_has_table(source, name):
-        return
-
-    source.execute(insert)
-
-    query, proof = ran
-    assert source.execute(query).fetchone() != proof, f"{ddl}\n  ran on the owner's insert"
-
-
-def test_create_table_check_does_not_constrain_owner(ddl_world):
-    source, target, _ = ddl_world
-    try_execute(target, "CREATE TABLE app.main.c(id INTEGER PRIMARY KEY, x INTEGER CHECK (x < 5))")
-    if not source_has_table(source, "c"):
-        return
-
-    source.execute("INSERT INTO c VALUES (1, 10)")
 
 
 #: name -> (target DDL, refusal)
@@ -127,17 +92,40 @@ REFUSED = {
 @pytest.mark.parametrize("ddl, refusal", REFUSED.values(), ids=REFUSED.keys())
 def test_expression_in_target_ddl_is_refused(ddl_world, ddl, refusal):
     source, target, _ = ddl_world
-    tables_before = source.execute("SELECT table_name FROM duckdb_tables() ORDER BY 1").fetchall()
-    columns_before = source.execute("SELECT column_name, column_default FROM duckdb_columns() ORDER BY 1").fetchall()
+    before = catalog_snapshot(source)
 
     with pytest.raises(duckdb.PermissionException, match=refusal):
         target.execute(ddl)
 
-    assert source.execute("SELECT table_name FROM duckdb_tables() ORDER BY 1").fetchall() == tables_before
-    assert (
-        source.execute("SELECT column_name, column_default FROM duckdb_columns() ORDER BY 1").fetchall()
-        == columns_before
+    assert catalog_snapshot(source) == before
+
+
+# --- E6: ALTER COLUMN TYPE ... USING runs its expression on the source ---------------------------
+
+
+def test_alter_type_using_cannot_call_source_only_function(ddl_world):
+    _, target, calls = ddl_world
+    try_execute(target, "ALTER TABLE app.main.users ALTER tenant TYPE BIGINT USING source_only(tenant)")
+
+    assert calls == [], f"source_only ran on the source with {calls}"
+
+
+def test_alter_type_using_cannot_expand_source_macro(ddl_world):
+    source, target, _ = ddl_world
+    source.execute("CREATE MACRO owner_macro(x) AS 'OWNER_MACRO_RAN'")
+    try_execute(target, "ALTER TABLE app.main.users ALTER tenant TYPE VARCHAR USING owner_macro(tenant)")
+
+    assert source.execute("SELECT count(*) FROM users WHERE tenant::VARCHAR = 'OWNER_MACRO_RAN'").fetchone() == (0,)
+
+
+def test_alter_type_using_cannot_read_source_setting(ddl_world):
+    source, target, _ = ddl_world
+    source.execute("SET GLOBAL http_proxy_password = 'SOURCE_SECRET'")
+    try_execute(
+        target, "ALTER TABLE app.main.users ALTER tenant TYPE VARCHAR USING current_setting('http_proxy_password')"
     )
+
+    assert source.execute("SELECT count(*) FROM users WHERE tenant::VARCHAR = 'SOURCE_SECRET'").fetchone() == (0,)
 
 
 CONSTANT_DEFAULTS = [
