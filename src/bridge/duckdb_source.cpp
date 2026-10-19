@@ -22,6 +22,7 @@
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/parser/expression/case_expression.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/parameter_expression.hpp"
@@ -34,6 +35,7 @@
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/parser/parsed_data/create_info.hpp"
+#include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/parser.hpp"
@@ -1172,6 +1174,35 @@ void FinalizePolicyFunc(DataChunk &args, ExpressionState &state, Vector &result)
 	}
 }
 
+bool IsConstant(const ParsedExpression &expr) {
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::CONSTANT:
+		return true;
+	case ExpressionClass::CAST:
+		return IsConstant(*expr.Cast<CastExpression>().child);
+	default:
+		return false;
+	}
+}
+
+void ThrowUnlessConstantDefault(const ParsedExpression &expr) {
+	if (!IsConstant(expr)) {
+		throw PermissionException("virtual_catalog_bridge: a default from the target must be a constant, not '%s'",
+		                          expr.ToString());
+	}
+}
+
+void ThrowIfColumnRunsOnSource(const ColumnDefinition &column) {
+	if (column.Generated()) {
+		throw PermissionException("virtual_catalog_bridge: a table from the target cannot declare a generated "
+		                          "column ('%s')",
+		                          column.GetName());
+	}
+	if (column.HasDefaultValue()) {
+		ThrowUnlessConstantDefault(column.DefaultValue());
+	}
+}
+
 } // namespace
 
 unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db) {
@@ -1589,6 +1620,8 @@ void DuckDBSession::Ddl(ClientContext &, const CrossingDdl &ddl) {
 	idx_t modification;
 	switch (ddl.verb) {
 	case CrossingVerb::CREATE: {
+		ThrowIfCreateDeclaresForeignKey(ddl);
+		ThrowIfDdlCarriesExpression(ddl);
 		auto create = make_uniq<CreateStatement>();
 		create->info = ddl.create->Copy();
 		create->info->catalog = catalog;
@@ -1597,6 +1630,7 @@ void DuckDBSession::Ddl(ClientContext &, const CrossingDdl &ddl) {
 		break;
 	}
 	case CrossingVerb::ALTER: {
+		ThrowIfDdlCarriesExpression(ddl);
 		auto alter = make_uniq<AlterStatement>();
 		alter->info = ddl.alter->Copy();
 		alter->info->catalog = catalog;
@@ -1698,6 +1732,48 @@ void DuckDBSession::ThrowUnlessAlterGrantedOverFullTable(ClientContext &source_c
 		throw PermissionException("virtual_catalog_bridge: the select policy on '%s.%s' hides rows, so the target "
 		                          "cannot see the full table and cannot alter it",
 		                          ddl.schema, ddl.table);
+	}
+}
+
+void DuckDBSession::ThrowIfCreateDeclaresForeignKey(const CrossingDdl &ddl) {
+	if (ddl.create->type != CatalogType::TABLE_ENTRY) {
+		return;
+	}
+	for (auto &constraint : ddl.create->Cast<CreateTableInfo>().constraints) {
+		if (constraint->type == ConstraintType::FOREIGN_KEY) {
+			throw PermissionException(
+			    "virtual_catalog_bridge: a table created from the target cannot declare a foreign key");
+		}
+	}
+}
+
+void DuckDBSession::ThrowIfDdlCarriesExpression(const CrossingDdl &ddl) {
+	if (ddl.create && ddl.create->type == CatalogType::TABLE_ENTRY) {
+		auto &create = ddl.create->Cast<CreateTableInfo>();
+		for (auto &column : create.columns.Logical()) {
+			ThrowIfColumnRunsOnSource(column);
+		}
+		for (auto &constraint : create.constraints) {
+			if (constraint->type == ConstraintType::CHECK) {
+				throw PermissionException(
+				    "virtual_catalog_bridge: a table created from the target cannot declare a CHECK constraint");
+			}
+		}
+		return;
+	}
+	if (!ddl.alter || ddl.alter->type != AlterType::ALTER_TABLE) {
+		return;
+	}
+	auto &alter = ddl.alter->Cast<AlterTableInfo>();
+	switch (alter.alter_table_type) {
+	case AlterTableType::ADD_COLUMN:
+		ThrowIfColumnRunsOnSource(alter.Cast<AddColumnInfo>().new_column);
+		break;
+	case AlterTableType::SET_DEFAULT:
+		ThrowUnlessConstantDefault(*alter.Cast<SetDefaultInfo>().expression);
+		break;
+	default:
+		break;
 	}
 }
 

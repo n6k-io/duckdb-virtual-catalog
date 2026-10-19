@@ -1,6 +1,7 @@
 #include "lockdown.hpp"
 
 #include "duckdb.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -21,12 +22,15 @@ void SetGlobal(DatabaseInstance &db, const char *name, const Value &value) {
 
 //! DuckDB reads '-<anything>', 'none' and 'null' as no limit at all.
 void ThrowUnlessFiniteMemoryLimit(const string &text) {
-	idx_t bytes = NumericLimits<idx_t>::Maximum();
-	if (!text.empty()) {
-		try {
-			bytes = DBConfig::ParseMemoryLimit(text);
-		} catch (const ParserException &) {
-		}
+	if (text.empty()) {
+		throw InvalidInputException("virtual_catalog_lockdown: memory_limit must not be empty");
+	}
+	idx_t bytes;
+	try {
+		bytes = DBConfig::ParseMemoryLimit(text);
+	} catch (const std::exception &ex) {
+		throw InvalidInputException("virtual_catalog_lockdown: memory_limit '%s' is not a size: %s", text,
+		                            ErrorData(ex).RawMessage());
 	}
 	if (bytes == NumericLimits<idx_t>::Maximum()) {
 		throw InvalidInputException("virtual_catalog_lockdown: memory_limit '%s' must be a finite size, e.g. '512MB'",

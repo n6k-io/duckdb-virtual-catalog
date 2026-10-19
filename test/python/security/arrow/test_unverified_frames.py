@@ -13,7 +13,7 @@ import sys
 import pyarrow as pa
 import pytest
 
-from conftest import REPO_ROOT, schema_message
+from conftest import REPO_ROOT, schema_message, stream_bytes
 
 TEST_DIR = REPO_ROOT / "test" / "python"
 
@@ -45,10 +45,22 @@ def non_monotonic_offsets():
     return schema_message(schema), schema_message(schema) + bytes(raw)
 
 
+def out_of_range_dictionary_index():
+    """A6: index 1,000,000 into a 2-entry dictionary. FULL validation does not range-check indices."""
+    schema = pa.schema([pa.field("c0", pa.dictionary(pa.int32(), pa.utf8()))])
+    array = pa.DictionaryArray.from_arrays(pa.array([0, 1, 0], pa.int32()), pa.array(["x", "y"]))
+    raw = bytearray(stream_bytes(pa.table([array], schema=schema)))
+    at = raw.find(struct.pack("<3i", 0, 1, 0))
+    assert at != -1
+    struct.pack_into("<i", raw, at + 4, 1_000_000)
+    return schema_message(schema), bytes(raw)
+
+
 FRAMES = {
     "A1_root_offset": (corrupt_root_offset, "DESCRIBE app.main.t"),
     "A3_deep_schema": (deep_schema, "DESCRIBE app.main.t"),
     "A5_offsets": (non_monotonic_offsets, "SELECT c0 FROM app.main.t"),
+    "A6_dictionary_index": (out_of_range_dictionary_index, "SELECT c0 FROM app.main.t"),
 }
 
 PROBE = """

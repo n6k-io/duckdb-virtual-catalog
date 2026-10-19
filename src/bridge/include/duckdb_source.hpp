@@ -97,6 +97,10 @@ private:
 	void ThrowUnlessAlterGrantedOverFullTable(ClientContext &source_context, const string &catalog,
 	                                          const CrossingDdl &ddl);
 	void ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl);
+	//! The source checks a foreign key over every referenced row, hidden ones included.
+	void ThrowIfCreateDeclaresForeignKey(const CrossingDdl &ddl);
+	//! Defaults, CHECKs and generated columns are stored on the source and run on the owner's later inserts.
+	void ThrowIfDdlCarriesExpression(const CrossingDdl &ddl);
 	void RecordDdl(const shared_ptr<Connection> &source_conn, const string &catalog, const CrossingDdl &ddl);
 	void UndoGrants();
 	void ForgetShaping();

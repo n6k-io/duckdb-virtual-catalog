@@ -11,3 +11,5 @@ scratch/
 .idit/
 *.pyc
 .allonomic/
+.vscode/
+security-issues/
