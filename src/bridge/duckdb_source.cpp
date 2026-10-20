@@ -1192,6 +1192,20 @@ void ThrowUnlessConstantDefault(const ParsedExpression &expr) {
 	}
 }
 
+void ThrowIfTypeChangeHasUsing(const ChangeColumnTypeInfo &change) {
+	auto &expr = *change.expression;
+	if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+		auto &child = *expr.Cast<CastExpression>().child;
+		if (child.GetExpressionClass() == ExpressionClass::COLUMN_REF &&
+		    StringUtil::CIEquals(child.Cast<ColumnRefExpression>().GetColumnName(), change.column_name)) {
+			return;
+		}
+	}
+	throw PermissionException("virtual_catalog_bridge: a type change from the target cannot take a USING "
+	                          "expression, not '%s'",
+	                          expr.ToString());
+}
+
 void ThrowIfColumnRunsOnSource(const ColumnDefinition &column) {
 	if (column.Generated()) {
 		throw PermissionException("virtual_catalog_bridge: a table from the target cannot declare a generated "
@@ -1771,6 +1785,9 @@ void DuckDBSession::ThrowIfDdlCarriesExpression(const CrossingDdl &ddl) {
 		break;
 	case AlterTableType::SET_DEFAULT:
 		ThrowUnlessConstantDefault(*alter.Cast<SetDefaultInfo>().expression);
+		break;
+	case AlterTableType::ALTER_COLUMN_TYPE:
+		ThrowIfTypeChangeHasUsing(alter.Cast<ChangeColumnTypeInfo>());
 		break;
 	default:
 		break;

@@ -96,6 +96,7 @@ def test_child_foreign_key_is_not_an_ungranted_row_oracle(world, sql):
     ), f"an ungranted child row changed the outcome\n  referenced   {referenced}\n  unreferenced {unreferenced}"
 
 
+@pytest.mark.xfail(strict=True, reason="accepted: ddl grants may reveal ungranted table names")
 def test_drop_error_does_not_name_ungranted_child_table(world):
     _, target, _ = world(CHILD_SETUP, {"users": ["select", "drop"]})
 

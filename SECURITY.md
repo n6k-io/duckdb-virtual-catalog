@@ -29,3 +29,7 @@
 - Source-side execution of target-authored expressions.
 - The host filesystem and network.
 - The process: memory safety and hangs.
+
+## Accepted leaks
+
+- **DDL access can reveal ungranted table names.**

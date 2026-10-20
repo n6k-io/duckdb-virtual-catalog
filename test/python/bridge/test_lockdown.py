@@ -128,3 +128,33 @@ def test_unlimited_memory_limit_is_refused(target, memory_limit):
     with pytest.raises(duckdb.InvalidInputException, match="memory_limit"):
         target.execute("SELECT virtual_catalog_lockdown(?, 2)", [memory_limit])
     assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
+
+
+def test_drop_functions(source, target):
+    target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ['read_text', 'md5', 'version'])")
+    for sql in ["SELECT * FROM read_text('x')", "SELECT md5('x')", "SELECT version()", "PRAGMA version"]:
+        with pytest.raises(duckdb.CatalogException):
+            target.execute(sql)
+    assert source.execute("SELECT md5('x')").fetchone() == ("9dd4e461268c8034f5c8564e155c67a6",)
+
+
+def test_drop_functions_unknown_name_is_refused(target):
+    with pytest.raises(duckdb.InvalidInputException, match='no system function named "no_such_fn"'):
+        target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ['md5', 'no_such_fn'])")
+    assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
+    assert target.execute("SELECT md5('x')").fetchone() == ("9dd4e461268c8034f5c8564e155c67a6",)
+
+
+@pytest.mark.parametrize("names", [None, ["md5", None]], ids=["list", "element"])
+def test_drop_functions_null_is_refused(target, names):
+    with pytest.raises(duckdb.InvalidInputException, match="drop_functions must not"):
+        target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ?::VARCHAR[])", [names])
+    assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
+
+
+def test_drop_functions_survive_rollback(target):
+    target.execute("BEGIN")
+    target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ['md5'])")
+    target.execute("ROLLBACK")
+    with pytest.raises(duckdb.CatalogException):
+        target.execute("SELECT md5('x')")

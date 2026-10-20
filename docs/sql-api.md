@@ -33,7 +33,7 @@ schema lands in the target schema of the same name.
 | `bridge_primary_key_check` | `bridge_id, 'schema.table', sql` — runs `sql` on the source; zero rows accepts the declared key, any row rejects it |
 | `bridge_finalize_context` | `bridge_id` — optional; freezes the context, before or after `ATTACH` |
 | `bridge_finalize_policy` | `bridge_id` — optional; freezes the grants and keys, before or after `ATTACH`. Every later `bridge_policy` and `bridge_primary_key*` is refused |
-| `virtual_catalog_lockdown` | `memory_limit, threads BIGINT` — run on the target; locks its whole `DatabaseInstance`. Sets `memory_limit` and `threads`, disables spilling (`temp_directory = ''`), extension autoload/autoinstall, community extensions, persistent secrets, the local filesystem and external access, then `lock_configuration`. Bridges attach, read, write and detach as before. Refused when the configuration is already locked, on NULL, or when evaluated for more than one row |
+| `virtual_catalog_lockdown` | `memory_limit, threads BIGINT[, drop_functions VARCHAR[]]` — run on the target; locks its whole `DatabaseInstance`. First drops each named function from the system catalog (every scalar, aggregate, macro, table and pragma entry of that name, e.g. `['quack_serve', 'quack_stop']`). Sets `memory_limit` and `threads`, disables spilling (`temp_directory = ''`), extension autoload/autoinstall, community extensions, persistent secrets, the local filesystem and external access, then `lock_configuration`. Bridges attach, read, write and detach as before. Refused when the configuration is already locked, on NULL (including a NULL list element), when a name matches no system function, or when evaluated for more than one row |
 
 ## Providers
 

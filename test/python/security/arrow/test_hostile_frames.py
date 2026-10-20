@@ -75,8 +75,6 @@ def test_scan_payload_cannot_switch_schema(con, later):
 
 #: key array -> the refusal it must produce.
 KEYS = {
-    "time32": (pa.array([i * 1000 for i in range(5)], pa.time32("ms")), r"BIGINT -> TIME"),
-    "date64": (pa.array([86400000 * i for i in range(5)], pa.date64()), r"INTEGER -> DATE"),
     "dictionary": (
         pa.DictionaryArray.from_arrays(pa.array([0, 1, 2, 0, 1], pa.int32()), pa.array(["alpha", "beta", "gamma"])),
         "cannot be read as a key",

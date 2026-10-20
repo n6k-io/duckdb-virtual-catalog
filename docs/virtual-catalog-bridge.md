@@ -146,6 +146,9 @@ after it, `bridge_policy` refuses an `update` or `delete` on a table without
 scan: the plan reads the table to resolve the `WHERE`, and the row identities the
 write path uses are buffered by that scan.
 
+DDL access can reveal ungranted table names; see
+[SECURITY.md](../SECURITY.md#accepted-leaks).
+
 ### Row policies
 
 A policy has the two halves of a Postgres `CREATE POLICY`:
