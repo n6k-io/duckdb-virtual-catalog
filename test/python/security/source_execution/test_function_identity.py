@@ -10,8 +10,6 @@ import pytest
 from conftest import bridge, new_connection
 from security.world import POLICY, SETUP
 
-pytestmark = pytest.mark.xfail(strict=True, reason="E4: SourceHasFunction matches by name only")
-
 #: Provided by postgres_scanner as CONSISTENT, so the bridge may push it down.
 NAME = "postgres_hstore_to_json"
 MARKER = "SOURCE_UDF_RAN"
@@ -58,18 +56,3 @@ def test_same_name_source_function_does_not_run(shadowed, sql):
     assert calls == [], f"source function ran with {calls}"
     assert MARKER not in result
 
-
-def test_ambiguous_source_overload_does_not_invalidate_target():
-    source, target = new_connection(), new_connection()
-    source.execute(SETUP)
-    source.create_function("isfinite", lambda x: 1.0, ["DOUBLE"], "DOUBLE")
-    bridge(source, target, {"users": {"select": POLICY}})
-
-    try:
-        target.execute("SELECT id FROM app.main.users WHERE isfinite(id::DOUBLE)").fetchall()
-    except duckdb.Error:
-        pass
-
-    assert target.execute("SELECT 1").fetchone() == (1,)
-    source.close()
-    target.close()

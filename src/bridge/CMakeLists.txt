@@ -27,6 +27,7 @@ set(EXTENSION_SOURCES
     ${VCAT_SOURCES}
     bridge_extension.cpp
     bridge_catalog.cpp
+    builtin_functions.cpp
     duckdb_source.cpp
     lockdown.cpp
     predicate_fold.cpp)

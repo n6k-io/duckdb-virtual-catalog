@@ -340,6 +340,8 @@ Pushdown into the source:
 - **Projection** — only requested columns are fetched from source
 - **Filters** — `=`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `is_null`, `is_not_null`,
   and `AND`/`OR` conjunctions of those
+- **Function calls** — only the built-ins on the default list, plus names the owner adds with `bridge_allow_function`. `bridge_disallow_function` keeps a
+  name on the target. A call that does not cross runs on the target over the fetched rows
 
 A filter that cannot be rendered exactly makes the scan throw rather than fall
 back to filtering locally.

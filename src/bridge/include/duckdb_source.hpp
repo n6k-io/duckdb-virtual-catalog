@@ -66,10 +66,17 @@ private:
 	string registered_name;
 };
 
+//! The owner's changes to which calls a bridge pushes to the source; `PushableBuiltins` is the default.
+struct FunctionGrants {
+	case_insensitive_set_t allowed;
+	case_insensitive_set_t disallowed;
+};
+
 struct GrantBook {
 	mutex lock;
 	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> tables;
 	case_insensitive_set_t create_schemas;
+	FunctionGrants functions;
 	case_insensitive_map_t<shared_ptr<Connection>> shaping;
 	shared_ptr<BridgeContext> context;
 	//! The target's attach, refreshed when a grant changes after ATTACH. Null once the target catalog is gone.
@@ -138,7 +145,8 @@ private:
 	shared_ptr<Connection> PlanningConnection();
 	shared_ptr<DatabaseInstance> Database() const;
 
-	bool SourceHasFunction(const string &function_name);
+	//! Looks the function up where the source's plan deserializer will.
+	bool SourceHasFunction(const Function &function, CatalogType type);
 
 	string bridge_id;
 	weak_ptr<DatabaseInstance> source_db;
@@ -147,8 +155,6 @@ private:
 	shared_ptr<DatabaseInstance> source_db_hold;
 	SourcePin source;
 	shared_ptr<GrantBook> grants;
-	mutex functions_lock;
-	case_insensitive_map_t<bool> functions_known;
 };
 
 bool TryParseCrossingVerb(const string &text, CrossingVerb &out);

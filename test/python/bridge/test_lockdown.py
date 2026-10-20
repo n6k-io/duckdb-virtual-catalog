@@ -152,9 +152,10 @@ def test_drop_functions_null_is_refused(target, names):
     assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
 
 
-def test_drop_functions_survive_rollback(target):
+def test_transaction_is_refused(target):
     target.execute("BEGIN")
-    target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ['md5'])")
+    with pytest.raises(duckdb.PermissionException, match="inside a transaction"):
+        target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ['md5'])")
     target.execute("ROLLBACK")
-    with pytest.raises(duckdb.CatalogException):
-        target.execute("SELECT md5('x')")
+    assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
+    assert target.execute("SELECT md5('x')").fetchone() == ("9dd4e461268c8034f5c8564e155c67a6",)

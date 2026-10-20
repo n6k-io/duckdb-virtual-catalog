@@ -1,5 +1,6 @@
 #include "duckdb_source.hpp"
 
+#include "builtin_functions.hpp"
 #include "crossing_attach.hpp"
 #include "predicate_fold.hpp"
 
@@ -63,6 +64,7 @@ struct PendingSource {
 	std::chrono::steady_clock::time_point last_touched;
 	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> schemas;
 	case_insensitive_set_t create_schemas;
+	FunctionGrants functions;
 	shared_ptr<BridgeContext> context = make_shared_ptr<BridgeContext>();
 	bool policy_finalized = false;
 	idx_t token_failures = 0;
@@ -283,6 +285,19 @@ void ReadGrants(const string &bridge_id, ClientContext &context, F &&read) {
 template <class F>
 void WriteGrants(const string &bridge_id, ClientContext &context, F &&write) {
 	WithOpenGrants(bridge_id, context, true, std::forward<F>(write));
+}
+
+//! Function grants are read per call by AcceptsCall, so a change needs no refresh.
+template <class F>
+void WriteFunctionGrants(const string &bridge_id, ClientContext &context, F &&write) {
+	PendingLock lock;
+	auto target = LookupOpenGrants(lock, bridge_id, context);
+	if (target.pending) {
+		write(target.pending->functions);
+		return;
+	}
+	lock_guard<mutex> guard(target.live->lock);
+	write(target.live->functions);
 }
 
 optional_ptr<SourceGrant> FindGrant(GrantTables &tables, const string &schema, const string &table) {
@@ -806,6 +821,36 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	}
 }
 
+void GrantFunction(DataChunk &args, ExpressionState &state, Vector &result, bool allow) {
+	auto &context = state.GetContext();
+	auto count = args.size();
+	args.data[0].Flatten(count);
+	args.data[1].Flatten(count);
+	ThrowIfAnyNull(args, 2, allow ? "bridge_allow_function" : "bridge_disallow_function");
+	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
+	auto names = FlatVector::GetData<string_t>(args.data[1]);
+	auto result_data = FlatVector::GetData<string_t>(result);
+	for (idx_t i = 0; i < count; i++) {
+		auto name = names[i].GetString();
+		if (name.empty()) {
+			throw IOException("virtual_catalog_bridge: the function name cannot be empty");
+		}
+		WriteFunctionGrants(bridge_ids[i].GetString(), context, [&](FunctionGrants &functions) {
+			(allow ? functions.allowed : functions.disallowed).insert(name);
+			(allow ? functions.disallowed : functions.allowed).erase(name);
+		});
+		result_data[i] = StringVector::AddString(result, "ok");
+	}
+}
+
+void AllowFunctionFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	GrantFunction(args, state, result, true);
+}
+
+void DisallowFunctionFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	GrantFunction(args, state, result, false);
+}
+
 string RequiredAttachOption(AttachInfo &info, const char *key) {
 	auto it = info.options.find(key);
 	if (it == info.options.end()) {
@@ -1288,6 +1333,7 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &
 		source = it->second.source;
 		grants->tables = std::move(it->second.schemas);
 		grants->create_schemas = std::move(it->second.create_schemas);
+		grants->functions = std::move(it->second.functions);
 		grants->context = std::move(it->second.context);
 		grants->policy_finalized = it->second.policy_finalized;
 		PendingSources().erase(it);
@@ -1562,42 +1608,46 @@ CrossingPlan DuckDBSource::Plan(const CrossingPlanRequest &request) {
 	return CrossingPlan::Of(MakeSeamNode(request.seam.types));
 }
 
-bool DuckDBSource::SourceHasFunction(const string &function_name) {
-	{
-		lock_guard<mutex> guard(functions_lock);
-		auto it = functions_known.find(function_name);
-		if (it != functions_known.end()) {
-			return it->second;
-		}
-	}
+bool DuckDBSource::SourceHasFunction(const Function &function, CatalogType type) {
 	auto planning_conn = PlanningConnection();
-	auto &context = *planning_conn->context;
-	EntryLookupInfo lookup(CatalogType::SCALAR_FUNCTION_ENTRY, function_name);
-	EntryLookupInfo aggregate_lookup(CatalogType::AGGREGATE_FUNCTION_ENTRY, function_name);
-	bool known =
-	    Catalog::GetEntry(context, INVALID_CATALOG, DEFAULT_SCHEMA, lookup, OnEntryNotFound::RETURN_NULL) ||
-	    Catalog::GetEntry(context, INVALID_CATALOG, DEFAULT_SCHEMA, aggregate_lookup, OnEntryNotFound::RETURN_NULL);
-	lock_guard<mutex> guard(functions_lock);
-	functions_known[function_name] = known;
-	return known;
+	EntryLookupInfo lookup(type, function.name);
+	return Catalog::GetEntry(*planning_conn->context,
+	                         function.catalog_name.empty() ? SYSTEM_CATALOG : function.catalog_name,
+	                         function.schema_name.empty() ? DEFAULT_SCHEMA : function.schema_name, lookup,
+	                         OnEntryNotFound::RETURN_NULL) != nullptr;
 }
 
 CrossingVerdict DuckDBSource::AcceptsCall(const Expression &expr) {
-	string function_name;
+	optional_ptr<const Function> function;
+	CatalogType type;
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_FUNCTION:
-		function_name = expr.Cast<BoundFunctionExpression>().function.name;
+		function = &expr.Cast<BoundFunctionExpression>().function;
+		type = CatalogType::SCALAR_FUNCTION_ENTRY;
 		break;
 	case ExpressionClass::BOUND_AGGREGATE:
-		function_name = expr.Cast<BoundAggregateExpression>().function.name;
+		function = &expr.Cast<BoundAggregateExpression>().function;
+		type = CatalogType::AGGREGATE_FUNCTION_ENTRY;
 		break;
 	default:
 		return CrossingVerdict::Yes();
 	}
-	if (SourceHasFunction(function_name)) {
-		return CrossingVerdict::Yes();
+	auto &name = function->name;
+	bool allowed;
+	{
+		lock_guard<mutex> guard(grants->lock);
+		if (grants->functions.disallowed.count(name)) {
+			return CrossingVerdict::No("bridge '" + bridge_id + "' keeps " + name + " on the target");
+		}
+		allowed = grants->functions.allowed.count(name) > 0;
 	}
-	return CrossingVerdict::No("the source has no function " + function_name);
+	if (!allowed && !PushableBuiltins().count(name)) {
+		return CrossingVerdict::No("bridge '" + bridge_id + "' keeps " + name + " on the target");
+	}
+	if (!SourceHasFunction(*function, type)) {
+		return CrossingVerdict::No("the source has no function " + name);
+	}
+	return CrossingVerdict::Yes();
 }
 
 CrossingVerdict DuckDBSource::AcceptsType(const LogicalType &type) {
@@ -2034,6 +2084,18 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	primary_key_check.stability = FunctionStability::VOLATILE;
 	primary_key_check.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(primary_key_check);
+
+	ScalarFunction allow_function("bridge_allow_function", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                              LogicalType::VARCHAR, AllowFunctionFunc);
+	allow_function.stability = FunctionStability::VOLATILE;
+	allow_function.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	loader.RegisterFunction(allow_function);
+
+	ScalarFunction disallow_function("bridge_disallow_function", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                 LogicalType::VARCHAR, DisallowFunctionFunc);
+	disallow_function.stability = FunctionStability::VOLATILE;
+	disallow_function.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	loader.RegisterFunction(disallow_function);
 
 	ScalarFunction set_context("bridge_set_context", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
 	                           LogicalType::VARCHAR, SetContextFunc);

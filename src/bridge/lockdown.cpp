@@ -103,6 +103,9 @@ void LockdownFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	if (count == 0) {
 		return;
 	}
+	if (!state.GetContext().transaction.IsAutoCommit()) {
+		throw PermissionException("virtual_catalog_lockdown: cannot run inside a transaction");
+	}
 	if (count > 1) {
 		throw InvalidInputException("virtual_catalog_lockdown: call it once, not once per row");
 	}
