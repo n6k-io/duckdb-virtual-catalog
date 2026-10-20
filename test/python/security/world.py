@@ -24,3 +24,10 @@ HIDDEN = {3, 4}
 #: A table no grant mentions, and the value that proves it was read.
 UNGRANTED = "secret"
 CANARY = "hunter2"
+
+
+def outcome(con, sql):
+    try:
+        return ("ok", con.execute(sql).fetchall())
+    except Exception as e:  # noqa: BLE001 -- the outcome itself is what is compared
+        return ("error", type(e).__name__, str(e))

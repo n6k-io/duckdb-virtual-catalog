@@ -15,13 +15,18 @@
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/transaction/transaction.hpp"
 
+#include <algorithm>
+
 namespace duckdb {
 
 BridgeCatalog::BridgeCatalog(AttachedDatabase &db, unique_ptr<DuckDBSource> source)
     : VirtualCatalogBase(db), attach(db, Crossing<DuckDBSource>::Adapt(std::move(source))) {
+	attach.Source<DuckDBSource>().SetTarget(&attach);
 }
 
-BridgeCatalog::~BridgeCatalog() = default;
+BridgeCatalog::~BridgeCatalog() {
+	attach.Source<DuckDBSource>().SetTarget(nullptr);
+}
 
 string BridgeCatalog::GetCatalogType() {
 	return VIRTUAL_CATALOG_BRIDGE_TYPE;
@@ -30,6 +35,10 @@ string BridgeCatalog::GetCatalogType() {
 void BridgeCatalog::Initialize(optional_ptr<ClientContext>, bool load_builtin) {
 	DuckCatalog::Initialize(load_builtin);
 	// Not in the attach callback: the transaction manager does not exist until after it returns.
+	CreateServedSchemas();
+}
+
+void BridgeCatalog::CreateServedSchemas() {
 	auto transaction = CatalogTransaction::GetSystemTransaction(GetDatabase());
 	for (auto &schema : attach.Schemas()) {
 		CreateSchemaInfo info;
@@ -38,6 +47,28 @@ void BridgeCatalog::Initialize(optional_ptr<ClientContext>, bool load_builtin) {
 		info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
 		CreateSchema(transaction, info);
 	}
+}
+
+// A grant made after ATTACH can serve a schema Initialize did not create.
+optional_ptr<SchemaCatalogEntry> BridgeCatalog::LookupSchema(CatalogTransaction transaction,
+                                                             const EntryLookupInfo &schema_lookup,
+                                                             OnEntryNotFound if_not_found) {
+	auto entry = VirtualCatalogBase::LookupSchema(transaction, schema_lookup, OnEntryNotFound::RETURN_NULL);
+	if (entry) {
+		return entry;
+	}
+	auto served = attach.Schemas();
+	auto &name = schema_lookup.GetEntryName();
+	if (std::any_of(served.begin(), served.end(),
+	                [&](const string &schema) { return StringUtil::CIEquals(schema, name); })) {
+		CreateServedSchemas();
+	}
+	return VirtualCatalogBase::LookupSchema(transaction, schema_lookup, if_not_found);
+}
+
+void BridgeCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {
+	CreateServedSchemas();
+	VirtualCatalogBase::ScanSchemas(context, std::move(callback));
 }
 
 void BridgeCatalog::OnDetach(ClientContext &context) {

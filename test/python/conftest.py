@@ -92,6 +92,7 @@ def bridge(
     target,
     grants,
     pk_overrides=None,
+    foreign_keys=None,
     catalog="app",
     schema="main",
     source_catalog="memory",
@@ -102,6 +103,8 @@ def bridge(
     verb -> predicate. A predicate is the USING half, or a `(using, check)` pair to set the
     WITH CHECK half too. Grant names are `schema.table`; a bare name is qualified with `schema`
     so the many call sites that only care about one schema stay terse.
+
+    `foreign_keys` lists `(table, parent)` edges passed to bridge_allow_foreign_key.
 
     `insert` has no USING predicate to inherit a check from, so bridge_policy requires one
     explicitly. A case that says nothing about the write boundary gets `'true'` -- the same
@@ -134,6 +137,8 @@ def bridge(
                 source.execute("SELECT bridge_policy(?, ?, ?, ?)", [bridge_id, qualify(table), verb, using])
             else:
                 source.execute("SELECT bridge_policy(?, ?, ?, ?, ?)", [bridge_id, qualify(table), verb, using, check])
+    for table, parent in foreign_keys or ():
+        source.execute("SELECT bridge_allow_foreign_key(?, ?, ?)", [bridge_id, qualify(table), qualify(parent)])
     # ATTACH options are folded to constants at bind time, so the token cannot be a parameter.
     target.execute(f"ATTACH '' AS {catalog} (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id

@@ -19,6 +19,11 @@ constants at bind time.
 Table names are `'schema.table'`, resolved in `source_catalog`. Each granted source
 schema lands in the target schema of the same name.
 
+`bridge_policy`, `bridge_allow_function`, `bridge_disallow_function`,
+`bridge_allow_foreign_key` and the `bridge_primary_key*` functions work before and after
+`ATTACH`, until `bridge_finalize_policy`; see
+[setup flow](virtual-catalog-bridge.md#setup-flow).
+
 | Function | Arguments |
 |---|---|
 | `bridge_register_source` | `bridge_id, source_catalog[, token]` → token. With two arguments the token is generated as `NONCE:UUID`; with three the source names it |
@@ -27,7 +32,12 @@ schema lands in the target schema of the same name.
 | `bridge_primary_key` | `bridge_id, 'schema.table', columns VARCHAR[]` — overrides discovery |
 | `bridge_primary_key_query` | `bridge_id, 'schema.table', sql` — runs `sql` on the source; column 0 of every row is a key column, in key order |
 | `bridge_primary_key_check` | `bridge_id, 'schema.table', sql` — runs `sql` on the source; zero rows accepts the declared key, any row rejects it |
+| `bridge_allow_foreign_key` | `bridge_id, 'schema.table', 'schema.parent'` — accepts that `insert` and `update` on `table` reveal which keys exist in `parent`; see [foreign keys](virtual-catalog-bridge.md#foreign-keys). Refused when `table` declares no foreign key to `parent` |
+| `bridge_allow_function` | `bridge_id, name` — pushes calls to `name` to the source. Live on the target's next statement; undoes `bridge_disallow_function` |
+| `bridge_disallow_function` | `bridge_id, name` — keeps calls to `name` on the target, built-ins included. Live on the target's next statement; undoes `bridge_allow_function` |
 | `bridge_finalize_context` | `bridge_id` — optional; freezes the context, before or after `ATTACH` |
+| `bridge_finalize_policy` | `bridge_id` — optional; freezes the grants and keys, before or after `ATTACH`. Every later `bridge_policy`, `bridge_allow_function`, `bridge_disallow_function`, `bridge_allow_foreign_key` and `bridge_primary_key*` is refused |
+| `virtual_catalog_lockdown` | `memory_limit, threads BIGINT[, drop_functions VARCHAR[]]` — run on the target; locks its whole `DatabaseInstance`. First drops each named function from the system catalog (every scalar, aggregate, macro, table and pragma entry of that name, e.g. `['quack_serve', 'quack_stop']`). Sets `memory_limit` and `threads`, disables spilling (`temp_directory = ''`), extension autoload/autoinstall, community extensions, persistent secrets, the local filesystem and external access, then `lock_configuration`. Bridges attach, read, write and detach as before. Refused inside an explicit transaction, when the configuration is already locked, on NULL (including a NULL list element), when a name matches no system function, or when evaluated for more than one row |
 
 ## Providers
 

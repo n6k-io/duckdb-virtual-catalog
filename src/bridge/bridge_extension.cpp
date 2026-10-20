@@ -2,6 +2,7 @@
 
 #include "bridge_catalog.hpp"
 #include "duckdb_source.hpp"
+#include "lockdown.hpp"
 #include "vcat_describe.hpp"
 #include "vcat_permissions.hpp"
 
@@ -11,6 +12,7 @@ void VirtualCatalogBridgeLoadInternal(ExtensionLoader &loader) {
 	RegisterTablePermissionsFunction(loader, "bridge_table_permissions");
 	RegisterTableDescribeFunction(loader, "bridge_table_describe");
 	RegisterBridgeFunctions(loader);
+	RegisterLockdownFunction(loader);
 	RegisterBridgeCatalog(loader);
 }
 

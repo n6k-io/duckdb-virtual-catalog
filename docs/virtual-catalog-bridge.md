@@ -51,11 +51,19 @@ The token contains a nonce unique to the loaded extension binary — mismatched
 extension versions are rejected. Tokens expire after **30 seconds** if not
 consumed — the clock measures inactivity, so it covers the whole grant script
 rather than the first call alone. Grants are declared by the source (trusted
-side) and cannot be modified by the target: `bridge_policy`, `bridge_set_context`
-and `bridge_finalize_context` refuse any connection whose `DatabaseInstance` is
-not the one that called `bridge_register_source` — so any connection on the
-source instance may add grants, but no connection outside it can. Once the token
-is redeemed the grant set is frozen; the [context](#context-values) is not.
+side) and cannot be modified by the target: every grant and context function
+refuses any connection whose `DatabaseInstance` is not the one that called
+`bridge_register_source` — so any connection on the source instance may add
+grants, but no connection outside it can. Once the token is redeemed the grants
+stay open, like the [context](#context-values): `bridge_policy` and
+`bridge_primary_key*` still work, and the target's next statement — inside an
+open transaction too — sees the change. The exception is a target transaction
+that ran DDL through the bridge: for the schemas it ran DDL in, it keeps the
+tables, verbs and keys it had until it ends. `bridge_finalize_policy(bridge_id)`
+freezes the grants from that call on, before or after `ATTACH`.
+
+A key may be set before the policy that grants its table. A key on a table no
+policy grants is dropped at `ATTACH`; after `ATTACH` it is refused.
 
 A source that already holds a secret can name the token itself, with the 3-arg
 form. This is also what lets a test hardcode one:
@@ -68,18 +76,22 @@ ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'my-secret')
 The source catalog may be another `virtual_catalog_bridge`, so bridges chain:
 each hop applies its own policies and context, and a write or DDL passes through
 every hop. A key declared with `bridge_primary_key` on one hop is not seen by the
-next; declare it again there (a native primary key is). A read through a chain
-streams through every hop, except inside an explicit transaction on the outer
-bridge: there the inner hop holds its whole result in memory. The source may not
-be `temp` or `system`.
+next; declare it again there (a native primary key is). The source may not be
+`temp` or `system`.
+
+A read streams through every hop when the statement runs in autocommit. Inside an
+explicit transaction every hop, a single bridge included, holds its whole result
+in memory: the transaction's reads share one source connection, and a second
+query on it would close a streaming one.
 
 The source catalog is pinned at registration by identity, not by name. A rename
 (`ALTER DATABASE ... SET ALIAS TO ...`) is followed; after a `DETACH` of the source catalog
-every use of the bridge fails with `source catalog '...' was detached`, even if
-another database is later attached under the same name. This is also why the
-registered sources cannot form a cycle: a bridge can only be registered on a
-catalog that already exists, and never re-points. A source view, macro or
-`bridge_primary_key_query` that names a bridge is not covered by this.
+every read, write, DDL or grant through the bridge fails with
+`source catalog '...' was detached`, even if another database is later attached
+under the same name. This is also why the registered sources cannot form a
+cycle: a bridge can only be registered on a catalog that already exists, and
+never re-points. A source view or macro that names a bridge is not covered by
+this.
 
 ## Teardown
 
@@ -91,11 +103,10 @@ DETACH my_bridge;
 Not optional in a long-lived process when source and target are separate
 instances. The catalog then holds a reference to the **source**
 `DatabaseInstance`, so until the detach it is never released. When both are one
-instance the catalog holds none, and closing the instance is enough. A source
-registered but never attached holds its instance until a later bridge call
-expires it.
+instance the catalog holds none, and closing the instance is enough.
 Everything the catalog held goes with it, including any native entries created
-alongside the bridged ones.
+alongside the bridged ones. A source registered but never attached holds its
+instance until a later bridge call expires it.
 
 Every refusal during `ATTACH` — a missing option, a bad token, a grant set that
 does not hold together — is raised before the pending source is taken, so the
@@ -128,10 +139,32 @@ only — any other verb is refused by `bridge_policy` — and its policy is comp
 against the view's columns. On the target it is a `crossing` table entry with
 `verbs` `[select]` and no primary key.
 
-`update` and `delete` also require `select` on the same table, and the `ATTACH`
-refuses a grant set that breaks this. Both are driven by a
+`update` and `delete` also require `select` on the same table. Before `ATTACH`
+the grants may come in any order and `ATTACH` refuses a set that breaks this;
+after it, `bridge_policy` refuses an `update` or `delete` on a table without
+`select`. Both are driven by a
 scan: the plan reads the table to resolve the `WHERE`, and the row identities the
 write path uses are buffered by that scan.
+
+DDL access can reveal ungranted table names; see
+[SECURITY.md](../SECURITY.md#accepted-leaks).
+
+### Foreign keys
+
+The source checks a foreign key against every parent row, including rows the
+target cannot see. An `insert` or `update` on a table with a foreign key
+therefore succeeds or fails depending on whether the parent key exists.
+
+`insert` and `update` on such a table are refused unless, for each parent, either:
+
+- the parent is granted `select` with `policy_using` `'true'`, so the target can
+  already read every parent key, or
+- the owner accepts the leak with
+  `bridge_allow_foreign_key(bridge_id, 'schema.table', 'schema.parent')`.
+
+A table that references itself is its own parent. Like the `select` rule above,
+`ATTACH` checks the complete grant set before it, and `bridge_policy` checks each
+grant after it.
 
 ### Row policies
 
@@ -166,7 +199,7 @@ tables in a statement see the same values.
 
 - **Set before use.** A predicate naming an unset `$name` is refused by
   `bridge_policy`.
-- **Live.** The context stays changeable after `ATTACH`, unlike the grants:
+- **Live.** The context stays changeable after `ATTACH`, like the grants:
   `bridge_set_context` overwrites a value and the target's next statement —
   a prepared one included — uses it.
 - **Checked on change.** A new value is bound into every policy that uses it,
@@ -324,6 +357,8 @@ Pushdown into the source:
 - **Projection** — only requested columns are fetched from source
 - **Filters** — `=`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `is_null`, `is_not_null`,
   and `AND`/`OR` conjunctions of those
+- **Function calls** — only the built-ins on the default list, plus names the owner adds with `bridge_allow_function`. `bridge_disallow_function` keeps a
+  name on the target. A call that does not cross runs on the target over the fetched rows
 
 A filter that cannot be rendered exactly makes the scan throw rather than fall
 back to filtering locally.
@@ -352,9 +387,9 @@ Tables granted any write verb support the ones they were granted.
 
 The grant is checked once, when the write fence is built at bind time. The fence
 carries the proof, along with the key its seam is named from, so physical
-planning and execution read it rather than consulting the grant map again —
-grants are frozen at attach time, so a second lookup could only ever
-disagree with the first.
+planning and execution read it rather than consulting the grant map again:
+grants can change after bind, and a second lookup could disagree with the
+first.
 
 **Not yet supported:** `CREATE TABLE` in a *bridge* schema (it works in a plain
 `virtual_catalog_bridge` schema, as a native entry), `ON CONFLICT`, and the

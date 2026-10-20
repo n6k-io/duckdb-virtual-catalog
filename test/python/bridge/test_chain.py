@@ -25,7 +25,7 @@ def chain(a, b, c, inner, outer, pk_overrides=None):
 
 
 def handshake(source, target, source_catalog, context, grants):
-    """Register, set context, grant and attach; `grants` is a list of (table, verb, using)."""
+    """`grants` is a list of (table, verb, using); an `insert` grant gets check `'true'`."""
     bridge_id = unique_id()
     token = source.execute("SELECT bridge_register_source(?, ?)", [bridge_id, source_catalog]).fetchone()[0]
     for name, value in context.items():
@@ -147,8 +147,9 @@ def test_chain_within_one_instance():
 
 
 def test_two_hop_read_streams(hops):
-    """Rows past the first five million raise, so a hop that materializes its result fails; one that
-    streams hands back the first rows long before reaching them."""
+    """Rows past the view's cutoff raise, so a hop that materializes its result fails; one that
+    streams hands back the first rows long before reaching them. One thread, so a parallel scan
+    cannot run ahead into the raising rows."""
     a, b, c = hops
     for con in (a, b, c):
         con.execute("SET threads = 1")

@@ -22,8 +22,15 @@ vcat_includes(VCAT_INCLUDES)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CROSSING_INCLUDES} ${VCAT_INCLUDES})
 
-set(EXTENSION_SOURCES ${CROSSING_SOURCES} ${VCAT_SOURCES} bridge_extension.cpp
-                      bridge_catalog.cpp duckdb_source.cpp)
+set(EXTENSION_SOURCES
+    ${CROSSING_SOURCES}
+    ${VCAT_SOURCES}
+    bridge_extension.cpp
+    bridge_catalog.cpp
+    builtin_functions.cpp
+    duckdb_source.cpp
+    lockdown.cpp
+    predicate_fold.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
@@ -33,3 +40,20 @@ install(
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
+
+option(VCAT_BUILD_CPP_TESTS "Build the virtual_catalog C++ unit tests" ON)
+if(VCAT_BUILD_CPP_TESTS AND BUILD_MAIN_DUCKDB_LIBRARY)
+  file(GLOB_RECURSE VCAT_BRIDGE_TEST_SOURCES CONFIGURE_DEPENDS
+       ${REPO_ROOT}/test/cpp/bridge/test_*.cpp)
+  add_executable(
+    vcat_bridge_unittest ${REPO_ROOT}/test/cpp/bridge/unittest_main.cpp
+                         ${VCAT_BRIDGE_TEST_SOURCES})
+  target_include_directories(
+    vcat_bridge_unittest
+    PRIVATE ${DUCKDB_MODULE_BASE_DIR}/third_party/catch
+            ${REPO_ROOT}/test/cpp/bridge ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(vcat_bridge_unittest duckdb_static Threads::Threads)
+  link_extension_libraries(vcat_bridge_unittest "")
+  set_target_properties(vcat_bridge_unittest PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                                        ${CMAKE_BINARY_DIR})
+endif()

@@ -4,10 +4,31 @@
 #include "nanoarrow_ipc.h"
 
 #include <cerrno>
+#include <cstring>
 #include <deque>
 
 namespace duckdb {
 namespace vcat {
+
+namespace {
+
+// Names and nullability may differ between messages; the physical layout may not.
+bool SameLayout(const ArrowSchema &a, const ArrowSchema &b) {
+	if (std::strcmp(a.format, b.format) != 0 || a.n_children != b.n_children) {
+		return false;
+	}
+	for (int64_t i = 0; i < a.n_children; i++) {
+		if (!SameLayout(*a.children[i], *b.children[i])) {
+			return false;
+		}
+	}
+	if (!a.dictionary || !b.dictionary) {
+		return a.dictionary == b.dictionary;
+	}
+	return SameLayout(*a.dictionary, *b.dictionary);
+}
+
+} // namespace
 
 struct ArrowFrameDecoder::State {
 	ArrowIpcDecoder decoder {};
@@ -71,7 +92,8 @@ bool ArrowFrameDecoder::PushFrame(const uint8_t *data, size_t len) {
 		view.size_bytes = static_cast<int64_t>(len - off);
 
 		err.message[0] = '\0';
-		int rc = ArrowIpcDecoderDecodeHeader(&st.decoder, view, &err);
+		int32_t prefix_size_bytes = 0;
+		int rc = ArrowIpcDecoderPeekHeader(&st.decoder, view, &prefix_size_bytes, &err);
 		if (rc == ENODATA) {
 			// An empty message body is how the writer signals end of stream.
 			st.done = true;
@@ -80,6 +102,29 @@ bool ArrowFrameDecoder::PushFrame(const uint8_t *data, size_t len) {
 		if (rc != NANOARROW_OK) {
 			st.failed = true;
 			st.error_message = std::string(err.message);
+			return false;
+		}
+		// header_size_bytes is prefix + length in int32 and wraps negative on a hostile length; Verify
+		// would then hand flatcc a size larger than the buffer.
+		if (st.decoder.header_size_bytes <= prefix_size_bytes || st.decoder.header_size_bytes > view.size_bytes) {
+			st.failed = true;
+			st.error_message = "truncated Arrow IPC message: the header length prefix exceeds the " +
+			                   std::to_string(len - off) + " bytes that remain";
+			return false;
+		}
+		ArrowBufferView header = view;
+		header.size_bytes = st.decoder.header_size_bytes;
+		// Decode follows flatbuffer offsets unchecked, so the header must pass the verifier first.
+		if (ArrowIpcDecoderVerifyHeader(&st.decoder, header, &err) != NANOARROW_OK ||
+		    ArrowIpcDecoderDecodeHeader(&st.decoder, header, &err) != NANOARROW_OK) {
+			st.failed = true;
+			st.error_message = std::string(err.message);
+			return false;
+		}
+		// A negative length cancels the header size in msg_total, and `off` stops advancing.
+		if (st.decoder.body_size_bytes < 0) {
+			st.failed = true;
+			st.error_message = "Arrow IPC message declares a negative body length";
 			return false;
 		}
 		const size_t msg_total =
@@ -97,11 +142,26 @@ bool ArrowFrameDecoder::PushFrame(const uint8_t *data, size_t len) {
 
 		if (st.decoder.message_type == NANOARROW_IPC_MESSAGE_TYPE_SCHEMA) {
 			err.message[0] = '\0';
-			if (ArrowIpcDecoderDecodeSchema(&st.decoder, &st.schema, &err) != NANOARROW_OK) {
+			ArrowSchema incoming {};
+			if (ArrowIpcDecoderDecodeSchema(&st.decoder, &incoming, &err) != NANOARROW_OK) {
 				st.failed = true;
 				st.error_message = std::string(err.message);
 				return false;
 			}
+			// Callers bind the first schema once and index later batches by it.
+			if (st.schema_set) {
+				bool same = SameLayout(st.schema, incoming);
+				st.schema.release(&st.schema);
+				st.schema_set = false;
+				if (!same) {
+					incoming.release(&incoming);
+					st.failed = true;
+					st.error_message = "Arrow IPC stream changed its schema mid-stream";
+					return false;
+				}
+			}
+			st.schema = incoming;
+			st.schema_set = true;
 			if (st.dictionaries_init) {
 				ArrowIpcDictionariesReset(&st.dictionaries);
 				st.dictionaries_init = false;
@@ -131,7 +191,6 @@ bool ArrowFrameDecoder::PushFrame(const uint8_t *data, size_t len) {
 				return false;
 			}
 			st.dictionaries_init = true;
-			st.schema_set = true;
 		} else if (st.decoder.message_type == NANOARROW_IPC_MESSAGE_TYPE_DICTIONARY_BATCH) {
 			if (!st.schema_set) {
 				st.failed = true;
@@ -142,7 +201,7 @@ bool ArrowFrameDecoder::PushFrame(const uint8_t *data, size_t len) {
 			body.data.as_uint8 = data + off + st.decoder.header_size_bytes;
 			body.size_bytes = st.decoder.body_size_bytes;
 			err.message[0] = '\0';
-			if (ArrowIpcDecoderDecodeDictionary(&st.decoder, body, NANOARROW_VALIDATION_LEVEL_DEFAULT, &st.dictionaries,
+			if (ArrowIpcDecoderDecodeDictionary(&st.decoder, body, NANOARROW_VALIDATION_LEVEL_FULL, &st.dictionaries,
 			                                    &err) != NANOARROW_OK) {
 				st.failed = true;
 				st.error_message = std::string(err.message);
@@ -160,7 +219,7 @@ bool ArrowFrameDecoder::PushFrame(const uint8_t *data, size_t len) {
 			ArrowArray array {};
 			err.message[0] = '\0';
 			if (ArrowIpcDecoderDecodeArrayWithDictionaries(&st.decoder, body, -1, &st.dictionaries, &array,
-			                                               NANOARROW_VALIDATION_LEVEL_DEFAULT, &err) != NANOARROW_OK) {
+			                                               NANOARROW_VALIDATION_LEVEL_FULL, &err) != NANOARROW_OK) {
 				st.failed = true;
 				st.error_message = std::string(err.message);
 				return false;

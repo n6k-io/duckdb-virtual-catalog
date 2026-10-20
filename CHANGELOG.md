@@ -4,10 +4,12 @@
 
 - Bridges chain: a source catalog may itself be a `virtual_catalog_bridge`. Each hop applies its own policies and context; reads, writes, DDL and rollback pass through every hop.
 - A native primary key is discovered through every hop. A key declared with `bridge_primary_key` covers one hop; declare it again on the next.
-- Reads stream through every hop, except inside an explicit transaction on the outer bridge, where the inner hop holds its whole result in memory.
-- The source catalog is pinned at registration by identity, not by name. A rename (`ALTER DATABASE ... SET ALIAS TO ...`) is followed; after a `DETACH` of the source every use fails with `source catalog '...' was detached`, even if another database is attached under the same name.
-- Registered sources cannot form a cycle. A source view, macro or `bridge_primary_key_query` that names a bridge is not covered.
+- Reads stream through every hop in autocommit. Inside an explicit transaction every hop, a single bridge included, holds its whole result in memory.
+- The source catalog is pinned at registration by identity, not by name. A rename (`ALTER DATABASE ... SET ALIAS TO ...`) is followed; after a `DETACH` of the source every read, write, DDL or grant fails with `source catalog '...' was detached`, even if another database is attached under the same name.
+- Registered sources cannot form a cycle. A source view or macro that names a bridge is not covered.
 - `temp` and `system` are refused as a source catalog.
+- `insert` and `update` on a table with a foreign key are refused unless the parent is granted `select` with `'true'`, or `bridge_allow_foreign_key` accepts that the write reveals which parent keys exist.
+- `bridge_policy` and `bridge_primary_key*` work after `ATTACH`; the target's next statement sees the change. `bridge_finalize_policy` freezes them, before or after `ATTACH`.
 - A bridge whose source is on its own instance no longer keeps that instance alive; closing it is enough. Across instances `DETACH` is still required.
 - Fixed: `UPDATE ... FROM` rows held on the target could write wrong values, update the wrong row, or update nothing.
 - Fixed: a join the source runs, read by an expression only the target can compute, failed with `Failed to bind column reference` and invalidated the database.
