@@ -683,6 +683,7 @@ const case_insensitive_set_t &PushableBuiltins() {
 
 const case_insensitive_set_t &TargetOnlyBuiltins() {
 	static const case_insensitive_set_t names {
+	    "bridge_allow_foreign_key",
 	    "bridge_allow_function",
 	    "bridge_disallow_function",
 	    "bridge_finalize_context",

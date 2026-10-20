@@ -149,6 +149,23 @@ write path uses are buffered by that scan.
 DDL access can reveal ungranted table names; see
 [SECURITY.md](../SECURITY.md#accepted-leaks).
 
+### Foreign keys
+
+The source checks a foreign key against every parent row, including rows the
+target cannot see. An `insert` or `update` on a table with a foreign key
+therefore succeeds or fails depending on whether the parent key exists.
+
+`insert` and `update` on such a table are refused unless, for each parent, either:
+
+- the parent is granted `select` with `policy_using` `'true'`, so the target can
+  already read every parent key, or
+- the owner accepts the leak with
+  `bridge_allow_foreign_key(bridge_id, 'schema.table', 'schema.parent')`.
+
+A table that references itself is its own parent. Like the `select` rule above,
+`ATTACH` checks the complete grant set before it, and `bridge_policy` checks each
+grant after it.
+
 ### Row policies
 
 A policy has the two halves of a Postgres `CREATE POLICY`:

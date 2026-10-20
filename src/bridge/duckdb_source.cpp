@@ -19,6 +19,7 @@
 #include "duckdb/main/query_parameters.hpp"
 #include "duckdb/main/relation.hpp"
 #include "duckdb/main/relation/view_relation.hpp"
+#include "duckdb/parser/constraints/foreign_key_constraint.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
@@ -528,6 +529,46 @@ vector<string> DiscoverKeyColumns(TableCatalogEntry &table) {
 	return key;
 }
 
+vector<string> DiscoverForeignKeyParents(TableCatalogEntry &table) {
+	vector<string> parents;
+	for (auto &constraint : table.GetConstraints()) {
+		if (constraint->type != ConstraintType::FOREIGN_KEY) {
+			continue;
+		}
+		auto &info = constraint->Cast<ForeignKeyConstraint>().info;
+		if (info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
+			parents.push_back(info.table);
+		} else if (info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
+			parents.push_back(table.name);
+		}
+	}
+	return parents;
+}
+
+//! The source checks a foreign key over every parent row, hidden ones included, so an insert or update reveals
+//! whether a parent key exists unless the target can already read every parent row.
+void ThrowIfForeignKeyOracle(GrantTables &tables, const string &schema, const string &table,
+                             const vector<string> &parents, const case_insensitive_set_t &allowed, CrossingVerb verb,
+                             const string &bridge_id) {
+	if (verb != CrossingVerb::INSERT && verb != CrossingVerb::UPDATE) {
+		return;
+	}
+	for (auto &parent : parents) {
+		if (allowed.count(parent)) {
+			continue;
+		}
+		auto parent_grant = FindGrant(tables, schema, parent);
+		if (parent_grant && parent_grant->Has(CrossingVerb::SELECT) && parent_grant->select_unrestricted) {
+			continue;
+		}
+		throw PermissionException(
+		    "virtual_catalog_bridge: table '%s.%s' in bridge '%s' grants '%s' over a foreign key to '%s.%s', which "
+		    "is not granted 'select' with USING 'true'; the write would reveal which keys exist in it. Call "
+		    "bridge_allow_foreign_key('%s', '%s.%s', '%s.%s') to accept this",
+		    schema, table, bridge_id, CrossingVerbName(verb), schema, parent, bridge_id, schema, table, schema, parent);
+	}
+}
+
 //! Rewrites every unqualified column reference in `expr`, the root included: a set column becomes
 //! its seam column (the value being written), anything else is pinned to the target table.
 void PointCheckAtUpdatedRow(unique_ptr<ParsedExpression> &expr, const string &table, const vector<string> &set_columns,
@@ -726,6 +767,7 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 
 		auto is_view = false;
 		vector<string> discovered_key;
+		vector<string> foreign_key_parents;
 		unique_ptr<ParsedExpression> using_predicate;
 		unique_ptr<ParsedExpression> check_predicate;
 		{
@@ -778,6 +820,7 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 					}
 					if (!is_view) {
 						discovered_key = DiscoverKeyColumns(entry->Cast<TableCatalogEntry>());
+						foreign_key_parents = DiscoverForeignKeyParents(entry->Cast<TableCatalogEntry>());
 					}
 				}
 			} catch (...) {
@@ -809,11 +852,20 @@ void PolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 				    "DELETE are driven by a scan of the table and cannot be granted alone",
 				    schema, table, bridge_id, CrossingVerbName(verb));
 			}
+			if (live) {
+				ThrowIfForeignKeyOracle(tables, schema, table, foreign_key_parents,
+				                        existing ? existing->allowed_foreign_keys : case_insensitive_set_t(), verb,
+				                        bridge_id);
+			}
 			auto &grant = tables[schema][table];
 			grant.Allow(verb);
+			if (verb == CrossingVerb::SELECT) {
+				grant.select_unrestricted = IsUnrestricted(using_text);
+			}
 			if (grant.key.empty() && !is_view) {
 				grant.key = std::move(discovered_key);
 			}
+			grant.foreign_key_parents = std::move(foreign_key_parents);
 			grant.using_predicates[static_cast<idx_t>(verb)] = std::move(using_predicate);
 			grant.check_predicates[static_cast<idx_t>(verb)] = std::move(check_predicate);
 		});
@@ -934,6 +986,71 @@ void PrimaryKeyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 			auto &grant = GrantForKey(grant_tables, schema, table, live, bridge_id);
 			grant.key = std::move(key);
 			grant.key_verified = false;
+		});
+		result_data[i] = StringVector::AddString(result, "ok");
+	}
+}
+
+void AllowForeignKeyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &context = state.GetContext();
+	auto count = args.size();
+	for (idx_t c = 0; c < 3; c++) {
+		args.data[c].Flatten(count);
+	}
+	ThrowIfAnyNull(args, 3, "bridge_allow_foreign_key");
+	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
+	auto table_names = FlatVector::GetData<string_t>(args.data[1]);
+	auto parent_names = FlatVector::GetData<string_t>(args.data[2]);
+	auto result_data = FlatVector::GetData<string_t>(result);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto bridge_id = bridge_ids[i].GetString();
+		string schema;
+		string table;
+		SplitGrantName(table_names[i].GetString(), schema, table);
+		string parent_schema;
+		string parent;
+		SplitGrantName(parent_names[i].GetString(), parent_schema, parent);
+
+		shared_ptr<DatabaseInstance> source_db;
+		SourcePin source;
+		{
+			PendingLock lock;
+			auto target = LookupOpenGrants(lock, bridge_id, context);
+			source_db = target.source_db;
+			source = target.source;
+		}
+
+		{
+			Connection source_conn(*source_db);
+			source_conn.BeginTransaction();
+			try {
+				auto catalog = source.Use(*source_conn.context);
+				EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, table);
+				auto entry =
+				    Catalog::GetEntry(*source_conn.context, catalog, schema, lookup, OnEntryNotFound::RETURN_NULL);
+				if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
+					throw CatalogException("virtual_catalog_bridge: '%s.%s' not found in catalog '%s' on source",
+					                       schema, table, catalog);
+				}
+				auto parents = DiscoverForeignKeyParents(entry->Cast<TableCatalogEntry>());
+				auto references = [&](const string &name) {
+					return StringUtil::CIEquals(name, parent);
+				};
+				if (!StringUtil::CIEquals(schema, parent_schema) ||
+				    std::none_of(parents.begin(), parents.end(), references)) {
+					throw IOException("virtual_catalog_bridge: '%s.%s' has no foreign key to '%s.%s'", schema, table,
+					                  parent_schema, parent);
+				}
+			} catch (...) {
+				source_conn.Rollback();
+				throw;
+			}
+			source_conn.Rollback();
+		}
+
+		WriteGrants(bridge_id, context, [&](GrantTables &grant_tables, case_insensitive_set_t &, bool live) {
+			GrantForKey(grant_tables, schema, table, live, bridge_id).allowed_foreign_keys.insert(parent);
 		});
 		result_data[i] = StringVector::AddString(result, "ok");
 	}
@@ -1300,6 +1417,12 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &
 				auto &grant = table_entry.second;
 				if (grant.verbs != 0) {
 					table_count++;
+				}
+				for (auto verb : {CrossingVerb::INSERT, CrossingVerb::UPDATE}) {
+					if (grant.Has(verb)) {
+						ThrowIfForeignKeyOracle(it->second.schemas, schema_entry.first, table_entry.first,
+						                        grant.foreign_key_parents, grant.allowed_foreign_keys, verb, bridge_id);
+					}
 				}
 				if (grant.Has(CrossingVerb::SELECT)) {
 					continue;
@@ -2063,6 +2186,13 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	policy_check.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	policy_set.AddFunction(policy_check);
 	loader.RegisterFunction(policy_set);
+
+	ScalarFunction allow_foreign_key("bridge_allow_foreign_key",
+	                                 {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                 LogicalType::VARCHAR, AllowForeignKeyFunc);
+	allow_foreign_key.stability = FunctionStability::VOLATILE;
+	allow_foreign_key.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	loader.RegisterFunction(allow_foreign_key);
 
 	ScalarFunction primary_key("bridge_primary_key",
 	                           {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)},

@@ -22,6 +22,10 @@ struct SourceGrant {
 	vector<unique_ptr<ParsedExpression>> check_predicates;
 	vector<string> key;
 	bool key_verified = true;
+	bool select_unrestricted = false;
+	//! Same schema as the grant: DuckDB refuses a foreign key across schemas.
+	vector<string> foreign_key_parents;
+	case_insensitive_set_t allowed_foreign_keys;
 
 	SourceGrant() : using_predicates(CrossingVerbs().size()), check_predicates(CrossingVerbs().size()) {
 	}

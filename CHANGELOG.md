@@ -8,6 +8,7 @@
 - The source catalog is pinned at registration by identity, not by name. A rename (`ALTER DATABASE ... SET ALIAS TO ...`) is followed; after a `DETACH` of the source every read, write, DDL or grant fails with `source catalog '...' was detached`, even if another database is attached under the same name.
 - Registered sources cannot form a cycle. A source view or macro that names a bridge is not covered.
 - `temp` and `system` are refused as a source catalog.
+- `insert` and `update` on a table with a foreign key are refused unless the parent is granted `select` with `'true'`, or `bridge_allow_foreign_key` accepts that the write reveals which parent keys exist.
 - `bridge_policy` and `bridge_primary_key*` work after `ATTACH`; the target's next statement sees the change. `bridge_finalize_policy` freezes them, before or after `ATTACH`.
 - A bridge whose source is on its own instance no longer keeps that instance alive; closing it is enough. Across instances `DETACH` is still required.
 - Fixed: `UPDATE ... FROM` rows held on the target could write wrong values, update the wrong row, or update nothing.

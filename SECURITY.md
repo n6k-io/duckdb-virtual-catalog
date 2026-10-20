@@ -48,3 +48,9 @@ clear error where it can, but it does not have to stay safe. Examples:
 ## Accepted leaks
 
 - **DDL access can reveal ungranted table names.**
+- **`bridge_allow_foreign_key` reveals which parent keys exist.** An `insert` or `update` succeeds
+  or fails depending on whether the key exists in the parent table, policy-hidden rows included.
+- **A foreign key from an ungranted table names the referencing column, not the referencing table.**
+  A `delete`, or an `update` of the referenced key, fails while an ungranted row references that
+  key. The error names the ungranted table's foreign-key column (e.g. `uid`), but not the table
+  (e.g. `secret_payroll`).
