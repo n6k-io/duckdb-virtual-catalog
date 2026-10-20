@@ -14,13 +14,13 @@ statement ok
 SELECT bridge_register_source('ww', 'memory', 'tok_ww');
 
 statement ok
-SELECT bridge_policy('ww', 'main.orders', 'select', 'true');
+SELECT bridge_set_policy('ww', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('ww', 'main.orders', 'update', 'true', 'true');
+SELECT bridge_set_policy('ww', 'main.orders', 'update', {'using': 'true', 'check': 'true'});
 
 statement ok
-SELECT bridge_policy('ww', 'main.orders', 'delete', 'true');
+SELECT bridge_set_policy('ww', 'main.orders', 'delete', 'true');
 
 statement ok
 ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ww', TOKEN 'tok_ww');
@@ -80,10 +80,10 @@ statement ok
 SELECT bridge_register_source('ws', 'memory', 'tok_ws');
 
 statement ok
-SELECT bridge_policy('ws', 'main.scoped', 'select', 'true');
+SELECT bridge_set_policy('ws', 'main.scoped', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('ws', 'main.scoped', 'update', 'tenant = 1');
+SELECT bridge_set_policy('ws', 'main.scoped', 'update', 'tenant = 1');
 
 statement ok
 ATTACH '' AS s (TYPE virtual_catalog_bridge, ID 'ws', TOKEN 'tok_ws');

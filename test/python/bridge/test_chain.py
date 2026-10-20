@@ -25,16 +25,13 @@ def chain(a, b, c, inner, outer, pk_overrides=None):
 
 
 def handshake(source, target, source_catalog, context, grants):
-    """`grants` is a list of (table, verb, using); an `insert` grant gets check `'true'`."""
+    """`grants` is a list of (table, verb, using); an `insert` grant's value is its check."""
     bridge_id = unique_id()
     token = source.execute("SELECT bridge_register_source(?, ?)", [bridge_id, source_catalog]).fetchone()[0]
     for name, value in context.items():
         source.execute("SELECT bridge_set_context(?, ?, ?)", [bridge_id, name, value])
     for table, verb, using in grants:
-        if verb == "insert":
-            source.execute("SELECT bridge_policy(?, ?, ?, ?, ?)", [bridge_id, table, verb, using, "true"])
-        else:
-            source.execute("SELECT bridge_policy(?, ?, ?, ?)", [bridge_id, table, verb, using])
+        source.execute("SELECT bridge_set_policy(?, ?, ?, ?)", [bridge_id, table, verb, using])
     target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id
 
@@ -73,7 +70,7 @@ def test_two_hop_writes_with_the_key_declared_again(hops):
 
 def test_two_hop_writes_find_the_native_key_through_the_first_hop(hops):
     """The first hop describes the source table with its constraints, so the outer grant discovers
-    the native primary key without a bridge_primary_key."""
+    the native primary key without a primary_key setting."""
     a, b, c = hops
     chain(a, b, c, {"users": READWRITE}, {"users": READWRITE})
     c.execute("UPDATE app.main.users SET name = 'ADA' WHERE id = 1")

@@ -7,8 +7,8 @@ literal and carry on as syntax. This guard is what stops the old style creeping 
 
 Keyword alone is not the signal -- error-message prose says "UPDATE and DELETE are driven by a scan"
 and is not a query. What marks an assembled statement is a keyword-bearing literal next to a `+`.
-That is deliberately narrow: it does not see user SQL passed straight through (bridge_primary_key_query
-and bridge_primary_key_check hand the caller's own string to SendQuery, which is the documented
+That is deliberately narrow: it does not see user SQL passed straight through (a primary_key's
+columns_from_query and verify_unique hand the owner's own string to SendQuery, which is the documented
 contract), and a fragment split so that no single line holds both a keyword and a `+` slips by. It
 catches how the code was actually written.
 """

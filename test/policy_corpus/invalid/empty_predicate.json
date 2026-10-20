@@ -1,0 +1,8 @@
+{
+  "policy_version": 1,
+  "tables": {
+    "main.users": {
+      "select": "  "
+    }
+  }
+}

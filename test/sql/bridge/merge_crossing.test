@@ -20,13 +20,13 @@ statement ok
 SELECT bridge_register_source('mg', 'memory', 'tok_mg');
 
 statement ok
-SELECT bridge_policy('mg', 'main.target', 'select', 'true');
+SELECT bridge_set_policy('mg', 'main.target', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('mg', 'main.target', 'update', 'true', 'true');
+SELECT bridge_set_policy('mg', 'main.target', 'update', {'using': 'true', 'check': 'true'});
 
 statement ok
-SELECT bridge_policy('mg', 'main.feed', 'select', 'true');
+SELECT bridge_set_policy('mg', 'main.feed', 'select', 'true');
 
 statement ok
 ATTACH '' AS m (TYPE virtual_catalog_bridge, ID 'mg', TOKEN 'tok_mg');

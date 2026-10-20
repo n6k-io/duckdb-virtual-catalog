@@ -26,19 +26,19 @@ statement ok
 SELECT bridge_register_source('bnd', 'memory', 'tok_bnd');
 
 statement ok
-SELECT bridge_policy('bnd', 'main', 'create', 'true');
+SELECT bridge_set_policy('bnd', 'main', 'create', 'true');
 
 statement ok
 SELECT bridge_set_context('bnd', 'role', 'admin');
 
 statement ok
-SELECT bridge_policy('bnd', 'main.served', 'select', '$role = ''admin'' OR tenant = 7');
+SELECT bridge_set_policy('bnd', 'main.served', 'select', '$role = ''admin'' OR tenant = 7');
 
 statement ok
-SELECT bridge_policy('bnd', 'main.served', v, 'true') FROM (VALUES ('alter'), ('drop')) _(v);
+SELECT bridge_set_policy('bnd', 'main.served', v, 'true') FROM (VALUES ('alter'), ('drop')) _(v);
 
 statement ok
-SELECT bridge_policy('bnd', 'aux.shadowed', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
+SELECT bridge_set_policy('bnd', 'aux.shadowed', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'bnd', TOKEN 'tok_bnd');

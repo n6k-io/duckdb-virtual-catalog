@@ -14,8 +14,8 @@ statement ok
 CREATE TABLE memory.main.nopk(x INTEGER, y VARCHAR);
 
 # ---------------------------------------------------------------------------
-# bridge_register_source only mints a token; bridge_policy is what validates,
-# one (table, verb) at a time, on the source connection.
+# bridge_register_source only mints a token; bridge_set_policy is what validates,
+# one setting at a time, on the source connection.
 # ---------------------------------------------------------------------------
 
 statement ok
@@ -28,38 +28,38 @@ SELECT bridge_register_source('v1', 'memory');
 a source is already registered for bridge
 
 statement error
-SELECT bridge_policy('v1', 'users', 'select', 'true');
+SELECT bridge_set_policy('v1', 'users', 'select', 'true');
 ----
-must be schema-qualified as 'schema.table'
+must be 'schema.table'
 
 statement error
-SELECT bridge_policy('v1', 'shop.main.users', 'select', 'true');
+SELECT bridge_set_policy('v1', 'shop.main.users', 'select', 'true');
 ----
-must name a schema and a table
+names catalog 'shop'
 
 statement error
-SELECT bridge_policy('v1', '.users', 'select', 'true');
+SELECT bridge_set_policy('v1', '.users', 'select', 'true');
 ----
-has an empty schema or table name
+has an empty name part
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'write', 'true');
+SELECT bridge_set_policy('v1', 'main.users', 'write', 'true');
 ----
-invalid verb 'write'
+unknown setting
 
 statement error
-SELECT bridge_policy('v1', 'main.ghost', 'select', 'true');
+SELECT bridge_set_policy('v1', 'main.ghost', 'select', 'true');
 ----
 not found in catalog 'memory' on source
 
 # A schema the source does not have resolves no differently from a table it does not have.
 statement error
-SELECT bridge_policy('v1', 'nosuchschema.users', 'select', 'true');
+SELECT bridge_set_policy('v1', 'nosuchschema.users', 'select', 'true');
 ----
 not found in catalog 'memory' on source
 
 statement error
-SELECT bridge_policy('unregistered', 'main.users', 'select', 'true');
+SELECT bridge_set_policy('unregistered', 'main.users', 'select', 'true');
 ----
 no registered source for bridge
 
@@ -67,109 +67,106 @@ no registered source for bridge
 # The predicate is compiled against the source table it will be grafted onto.
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'select', 'nosuchcol = 1');
+SELECT bridge_set_policy('v1', 'main.users', 'select', 'nosuchcol = 1');
 ----
 is not a valid WHERE clause on the source
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'select', 'count(*) > 0');
+SELECT bridge_set_policy('v1', 'main.users', 'select', 'count(*) > 0');
 ----
 is not a valid WHERE clause on the source
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'select', 'row_number() over () = 1');
+SELECT bridge_set_policy('v1', 'main.users', 'select', 'row_number() over () = 1');
 ----
 is not a valid WHERE clause on the source
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'select', '1, 2');
+SELECT bridge_set_policy('v1', 'main.users', 'select', '1, 2');
 ----
 must be a single expression
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'select', 'id = $1');
+SELECT bridge_set_policy('v1', 'main.users', 'select', 'id = $1');
 ----
 not positional ones
 
 # A WHERE clause would coerce all three of these, and the policy would then be stored as something
 # that is not a predicate at all. The predicate is projected and type-checked instead.
 statement error
-SELECT bridge_policy('v1', 'main.users', 'select', '42');
+SELECT bridge_set_policy('v1', 'main.users', 'select', '42');
 ----
 must be BOOLEAN, but it is INTEGER
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'select', 'name');
+SELECT bridge_set_policy('v1', 'main.users', 'select', 'name');
 ----
 must be BOOLEAN, but it is VARCHAR
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'select', 'NULL');
+SELECT bridge_set_policy('v1', 'main.users', 'select', 'NULL');
 ----
 must be BOOLEAN
 
-# INSERT is appended through DuckDB's Appender, which has no WHERE to graft onto. It takes the
-# grant, not a restriction.
+# INSERT is appended through DuckDB's Appender, which has no WHERE to graft onto, so it has no
+# USING half to set.
 statement error
-SELECT bridge_policy('v1', 'main.users', 'insert', 'id > 0');
+SELECT bridge_set_policy('v1', 'main.users', 'insert', {'using': 'id > 0', 'check': 'true'});
 ----
-must be literally 'true'
+unknown key "using"
 
 statement error
-SELECT bridge_policy('v1', 'main.users', 'grant', 'true');
+SELECT bridge_set_policy('v1', 'main.users', 'grant', 'true');
 ----
-invalid verb 'grant'
+unknown setting
 
 # --- the WITH CHECK half ----------------------------------------------------
-# An insert's USING predicate cannot restrict rows, so its WITH CHECK is the only limit on what it
-# may write. Silence would be an open boundary, so the grant has to say which it means.
-statement error
-SELECT bridge_policy('v1', 'main.users', 'insert', 'true');
-----
-must state a WITH CHECK predicate
-
-# 'true' is the opt-out, spelled out.
+# An insert's value is its check, the only limit on what it may write. 'true' is the opt-out.
 statement ok
-SELECT bridge_policy('v1', 'main.users', 'insert', 'true', 'true');
+SELECT bridge_set_policy('v1', 'main.users', 'insert', 'id > 0');
+
+statement ok
+SELECT bridge_set_policy('v1', 'main.users', 'insert', 'true');
 
 # SELECT and DELETE write no row, so there is nothing for a check to constrain.
 statement error
-SELECT bridge_policy('v1', 'main.users', 'delete', 'true', 'id > 0');
+SELECT bridge_set_policy('v1', 'main.users', 'delete', {'using': 'true', 'check': 'id > 0'});
 ----
-only supported for 'insert' and 'update'
+'delete' takes true or a predicate string
 
 # A check is validated against the source the same way a USING predicate is.
 statement error
-SELECT bridge_policy('v1', 'main.users', 'update', 'true', 'nosuchcolumn > 0');
+SELECT bridge_set_policy('v1', 'main.users', 'update', {'using': 'true', 'check': 'nosuchcolumn > 0'});
 ----
 is not a valid WHERE clause on the source
 
 statement ok
-SELECT bridge_policy('v1', 'main.users', 'select', 'id > 0');
+SELECT bridge_set_policy('v1', 'main.users', 'select', 'id > 0');
 
-# One policy per (table, verb): grants accumulate, they do not overwrite.
-statement error
-SELECT bridge_policy('v1', 'main.users', 'select', 'true');
-----
-a 'select' policy is already defined
+# Setting a verb again overwrites it.
+statement ok
+SELECT bridge_set_policy('v1', 'main.users', 'select', 'true');
+
+statement ok
+SELECT bridge_set_policy('v1', 'main.users', 'select', 'id > 0');
 
 # --- primary keys -----------------------------------------------------------
 # Discovery runs on the first grant for a table. A key that discovery cannot find may still be
 # supplied afterwards; it is the write that refuses without one.
 
 statement ok
-SELECT bridge_policy('v1', 'main.nopk', 'select', 'true');
+SELECT bridge_set_policy('v1', 'main.nopk', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v1', 'main.nopk', 'update', 'true');
+SELECT bridge_set_policy('v1', 'main.nopk', 'update', 'true');
 
 statement error
-SELECT bridge_primary_key('v1', 'main.nopk', []::VARCHAR[]);
+SELECT bridge_set_policy('v1', 'main.nopk', 'primary_key', []::VARCHAR[]);
 ----
 cannot be empty
 
 statement ok
-SELECT bridge_primary_key('v1', 'main.nopk', ['x']);
+SELECT bridge_set_policy('v1', 'main.nopk', 'primary_key', ['x']);
 
 # --- caller-supplied key discovery and validation ---------------------------
 
@@ -180,62 +177,57 @@ statement ok
 INSERT INTO memory.main.dupkey VALUES (1, 'a'), (1, 'b'), (2, 'c');
 
 statement ok
-SELECT bridge_policy('v1', 'main.dupkey', 'select', 'true');
+SELECT bridge_set_policy('v1', 'main.dupkey', 'select', 'true');
 
 statement error
-SELECT bridge_primary_key_query('v1', 'shop.main.dupkey', 'SELECT ''k''');
+SELECT bridge_set_policy('v1', 'shop.main.dupkey', 'primary_key', {'columns_from_query': 'SELECT ''k'''});
 ----
-must name a schema and a table
+names catalog 'shop'
 
 statement error
-SELECT bridge_primary_key_query('v1', 'main.dupkey', 'SELECT k FROM memory.main.dupkey WHERE false');
+SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT k FROM memory.main.dupkey WHERE false'});
 ----
 returned no columns
 
 statement error
-SELECT bridge_primary_key_query('v1', 'main.dupkey', 'SELECT * FROM memory.main.no_such_table');
+SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT * FROM memory.main.no_such_table'});
 ----
-primary key query for table 'main.dupkey'
+columns_from_query for 'main.dupkey' failed
 
 statement error
-SELECT bridge_primary_key_query('v1', 'main.dupkey', 'SELECT NULL');
+SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT NULL'});
 ----
 empty or NULL
 
 statement ok
-SELECT bridge_primary_key_query('v1', 'main.dupkey', 'SELECT ''k''');
+SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT ''k'''});
 
 statement ok
-SELECT bridge_policy('v1', 'main.dupkey', 'delete', 'true');
+SELECT bridge_set_policy('v1', 'main.dupkey', 'delete', 'true');
 
 statement error
-SELECT bridge_primary_key_check('v1', 'shop.main.dupkey', 'SELECT 1 WHERE false');
+SELECT bridge_set_policy('v1', 'shop.main.dupkey', 'primary_key', {'columns': ['k'], 'verify_unique': 'SELECT 1 WHERE false'});
 ----
-must name a schema and a table
+names catalog 'shop'
 
 statement error
-SELECT bridge_primary_key_check('v1', 'main.ungranted_table', 'SELECT 1 WHERE false');
-----
-no primary key is set
-
-statement error
-SELECT bridge_primary_key_check('v1', 'main.dupkey', 'SELECT k FROM memory.main.dupkey GROUP BY k HAVING count(*) > 1');
+SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns': ['k'], 'verify_unique': 'SELECT k FROM memory.main.dupkey GROUP BY k HAVING count(*) > 1'});
 ----
 is not unique on the source
 
 statement error
-SELECT bridge_primary_key_check('v1', 'main.dupkey', 'SELECT * FROM memory.main.no_such_table');
+SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns': ['k'], 'verify_unique': 'SELECT * FROM memory.main.no_such_table'});
 ----
-primary key check for table 'main.dupkey'
+verify_unique for 'main.dupkey' failed
 
 query T
-SELECT bridge_primary_key_check('v1', 'main.users', 'SELECT id FROM memory.main.users GROUP BY id HAVING count(*) > 1');
+SELECT bridge_set_policy('v1', 'main.users', 'primary_key', {'columns': ['id'], 'verify_unique': 'SELECT id FROM memory.main.users GROUP BY id HAVING count(*) > 1'});
 ----
 ok
 
 # --- freeze-time validation -------------------------------------------------
 # Both checks run before the pending source is consumed, so a rejected attach can be fixed with
-# another bridge_policy call and retried with the SAME token.
+# another bridge_set_policy call and retried with the SAME token.
 
 statement ok
 SELECT bridge_register_source('v_empty', 'memory', 'tok_empty');
@@ -246,16 +238,16 @@ ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
 has no policies
 
 statement ok
-SELECT bridge_policy('v_empty', 'main.users', 'delete', 'true');
+SELECT bridge_set_policy('v_empty', 'main.users', 'primary_key', ['id']);
 
-# UPDATE and DELETE are driven by a scan of the table, so they cannot be granted without select.
 statement error
 ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
 ----
-without 'select'
+grants no verb
 
+# delete needs no select.
 statement ok
-SELECT bridge_policy('v_empty', 'main.users', 'select', 'true');
+SELECT bridge_set_policy('v_empty', 'main.users', 'delete', 'true');
 
 # Same token, still live: neither rejection consumed the pending source.
 statement ok
@@ -289,7 +281,7 @@ statement ok
 SELECT bridge_register_source('hs_b', 'memory', 'tok_hs_b');
 
 statement ok
-SELECT bridge_policy('hs_b', 'main.users', v, 'true', c) FROM (VALUES ('select', NULL), ('insert', 'true'), ('update', NULL), ('delete', NULL)) _(v, c);
+SELECT bridge_set_policy('hs_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
 
 # The token is checked against the pending source's own.
 statement error
@@ -332,7 +324,7 @@ statement ok
 SELECT bridge_register_source('hs_b', 'memory', 'tok_hs_reuse');
 
 statement ok
-SELECT bridge_policy('hs_b', 'main.users', 'select', 'true');
+SELECT bridge_set_policy('hs_b', 'main.users', 'select', 'true');
 
 statement ok
 ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_b', TOKEN 'tok_hs_reuse');
@@ -363,10 +355,10 @@ statement ok
 SELECT bridge_register_source('hs_multi', 'memory', 'tok_hs_multi');
 
 statement ok
-SELECT bridge_policy('hs_multi', 'main.users', 'select', 'true');
+SELECT bridge_set_policy('hs_multi', 'main.users', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('hs_multi', 'sales.orders', 'select', 'true');
+SELECT bridge_set_policy('hs_multi', 'sales.orders', 'select', 'true');
 
 # No CREATE SCHEMA hs.sales anywhere above.
 statement ok

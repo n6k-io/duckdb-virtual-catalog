@@ -19,7 +19,7 @@ SHAPES = [
 def test_target_view_stays_on_target(attacker, body, create_grant):
     source, target, bridge_id = attacker
     if create_grant:
-        source.execute("SELECT bridge_policy(?, 'main', 'create', 'true')", [bridge_id])
+        source.execute("SELECT bridge_set_policy(?, 'main', 'create', 'true')", [bridge_id])
 
     target.execute(f"CREATE VIEW app.main.v AS {body}")
 

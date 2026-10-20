@@ -1,0 +1,14 @@
+{
+  "policy_version": 1,
+  "tables": {
+    "main.users": {
+      "select": true,
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "columns_from_query": "SELECT 'id'"
+      }
+    }
+  }
+}

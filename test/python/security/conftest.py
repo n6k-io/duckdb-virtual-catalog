@@ -34,8 +34,7 @@ def attacker(bridged):
 
 @pytest.fixture
 def attacker_granted_delete(bridged):
-    """As `attacker`, plus an unrestricted delete grant -- the select policy is what must confine
-    it. Yields (source, target)."""
+    """As `attacker`, plus an unrestricted delete grant. Yields (source, target)."""
     source, target, handshake = bridged
     source.execute(SETUP)
     handshake(source, target, {"users": {"select": POLICY, "delete": "true"}})

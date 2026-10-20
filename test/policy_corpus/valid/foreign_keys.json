@@ -1,0 +1,15 @@
+{
+  "policy_version": 1,
+  "tables": {
+    "main.orgs": {
+      "select": "id > 0"
+    },
+    "main.members": {
+      "select": true,
+      "insert": true,
+      "foreign_keys": [
+        "main.orgs"
+      ]
+    }
+  }
+}

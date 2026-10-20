@@ -30,10 +30,14 @@ set(EXTENSION_SOURCES
     builtin_functions.cpp
     duckdb_source.cpp
     lockdown.cpp
+    policy_config.cpp
     predicate_fold.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
+
+target_link_libraries(${EXTENSION_NAME} duckdb_yyjson)
+target_link_libraries(${LOADABLE_EXTENSION_NAME} duckdb_yyjson)
 
 install(
   TARGETS ${EXTENSION_NAME}

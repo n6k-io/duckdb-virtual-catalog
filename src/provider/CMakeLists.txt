@@ -47,8 +47,8 @@ set(EXTENSION_SOURCES
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
-# yyjson is provider-only too: it carries the ALTER details and the
-# stream-function metadata across the UDF boundary.
+# yyjson carries the ALTER details and the stream-function metadata across the
+# UDF boundary.
 target_link_libraries(${EXTENSION_NAME} duckdb_yyjson)
 target_link_libraries(${LOADABLE_EXTENSION_NAME} duckdb_yyjson)
 

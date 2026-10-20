@@ -14,16 +14,16 @@ statement ok
 SELECT bridge_register_source('v2_transaction', 'memory', 'tok_transaction');
 
 statement ok
-SELECT bridge_policy('v2_transaction', 'main.orders', 'select', 'true');
+SELECT bridge_set_policy('v2_transaction', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v2_transaction', 'main.orders', 'insert', 'true', 'true');
+SELECT bridge_set_policy('v2_transaction', 'main.orders', 'insert', 'true');
 
 statement ok
-SELECT bridge_policy('v2_transaction', 'main.orders', 'update', 'true');
+SELECT bridge_set_policy('v2_transaction', 'main.orders', 'update', 'true');
 
 statement ok
-SELECT bridge_policy('v2_transaction', 'main.orders', 'delete', 'true');
+SELECT bridge_set_policy('v2_transaction', 'main.orders', 'delete', 'true');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_transaction', TOKEN 'tok_transaction');

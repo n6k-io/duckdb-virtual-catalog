@@ -20,50 +20,50 @@ statement ok
 SELECT bridge_register_source('v2_parity_keys', 'memory', 'tok_parity_keys');
 
 statement ok
-SELECT bridge_policy('v2_parity_keys', 'main.nopk', 'select', 'true');
+SELECT bridge_set_policy('v2_parity_keys', 'main.nopk', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v2_parity_keys', 'main.nopk', 'delete', 'true');
+SELECT bridge_set_policy('v2_parity_keys', 'main.nopk', 'delete', 'true');
 
 statement ok
-SELECT bridge_policy('v2_parity_keys', 'main.dupes', 'select', 'true');
+SELECT bridge_set_policy('v2_parity_keys', 'main.dupes', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v2_parity_keys', 'main.dupes', 'delete', 'true');
+SELECT bridge_set_policy('v2_parity_keys', 'main.dupes', 'delete', 'true');
 
 # A key must name real columns of the table.
 statement error
-SELECT bridge_primary_key('v2_parity_keys', 'main.nopk', ['nosuch']);
+SELECT bridge_set_policy('v2_parity_keys', 'main.nopk', 'primary_key', ['nosuch']);
 ----
 is not a column of
 
 statement error
-SELECT bridge_primary_key('v2_parity_keys', 'main.nopk', []);
+SELECT bridge_set_policy('v2_parity_keys', 'main.nopk', 'primary_key', []);
 ----
 cannot be empty
 
 # A key may be set before the grant that uses it. A key for a table nobody grants is never installed.
 statement error
-SELECT bridge_primary_key('v2_parity_keys', 'main.ungranted', ['x']);
+SELECT bridge_set_policy('v2_parity_keys', 'main.ungranted', 'primary_key', ['x']);
 ----
 not found in catalog
 
 statement ok
-SELECT bridge_primary_key('v2_parity_keys', 'main.nopk', ['x']);
+SELECT bridge_set_policy('v2_parity_keys', 'main.nopk', 'primary_key', ['x']);
 
 # The key can also be derived by a query against the source.
 statement ok
-SELECT bridge_primary_key_query('v2_parity_keys', 'main.dupes', 'SELECT ''x''');
+SELECT bridge_set_policy('v2_parity_keys', 'main.dupes', 'primary_key', {'columns_from_query': 'SELECT ''x'''});
 
 # A check that returns rows means the declared key is not unique.
 statement error
-SELECT bridge_primary_key_check('v2_parity_keys', 'main.dupes', 'SELECT x FROM memory.main.dupes GROUP BY x HAVING count(*) > 1');
+SELECT bridge_set_policy('v2_parity_keys', 'main.dupes', 'primary_key', {'columns_from_query': 'SELECT ''x''', 'verify_unique': 'SELECT x FROM memory.main.dupes GROUP BY x HAVING count(*) > 1'});
 ----
 is not unique on the source
 
 # A check that returns nothing proves it.
 statement ok
-SELECT bridge_primary_key_check('v2_parity_keys', 'main.nopk', 'SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1');
+SELECT bridge_set_policy('v2_parity_keys', 'main.nopk', 'primary_key', {'columns': ['x'], 'verify_unique': 'SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1'});
 
 statement ok
 ATTACH '' AS k (TYPE virtual_catalog_bridge, ID 'v2_parity_keys', TOKEN 'tok_parity_keys');

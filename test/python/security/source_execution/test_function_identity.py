@@ -55,4 +55,3 @@ def test_same_name_source_function_does_not_run(shadowed, sql):
 
     assert calls == [], f"source function ran with {calls}"
     assert MARKER not in result
-

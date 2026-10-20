@@ -91,7 +91,7 @@ def test_bridge_swap_under_concurrent_binds_does_not_free_live_entries():
                 t.execute("DETACH app")
                 b = unique_id()
                 tok = s.execute("SELECT bridge_register_source(?, 'memory')", [b]).fetchone()[0]
-                s.execute("SELECT bridge_policy(?,'main.big','select','true')", [b])
+                s.execute("SELECT bridge_set_policy(?, 'main.big', 'select', 'true')", [b])
                 t.execute(
                     "ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (b, tok)
                 )
@@ -126,7 +126,7 @@ def test_a_bridge_attached_over_its_own_source_name_does_not_recurse():
         con.execute("CREATE TABLE app.main.t(id INTEGER PRIMARY KEY)")
         loop = unique_id()
         token = con.execute("SELECT bridge_register_source(?, 'app')", [loop]).fetchone()[0]
-        con.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [loop])
+        con.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [loop])
         con.execute("DETACH app")
         try:
             con.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{loop}', TOKEN '{token}')")
@@ -151,11 +151,11 @@ def test_policy_refuses_a_source_catalog_detached_after_registration():
     con.execute("CREATE TABLE t(id INTEGER PRIMARY KEY)")
     host = unique_id()
     token = con.execute("SELECT bridge_register_source(?, 'memory')", [host]).fetchone()[0]
-    con.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [host])
+    con.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [host])
     con.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{host}', TOKEN '{token}')")
 
     with pytest.raises(Exception, match="was detached"):
-        con.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [bridge_id])
+        con.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [bridge_id])
     con.close()
 
 
@@ -172,18 +172,18 @@ def test_cyclic_bridge_reads_fail_instead_of_recursing():
 
         i1 = unique_id()
         tk = a.execute("SELECT bridge_register_source(?, 'memory')", [i1]).fetchone()[0]
-        a.execute("SELECT bridge_policy(?,'main.t1','select','true')", [i1])
+        a.execute("SELECT bridge_set_policy(?, 'main.t1', 'select', 'true')", [i1])
         b.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (i1, tk))
         assert b.execute("SELECT * FROM app.main.t1").fetchall() == [(1, 'x')]
 
         i2 = unique_id()
         tk2 = b.execute("SELECT bridge_register_source(?, 'app')", [i2]).fetchone()[0]
-        b.execute("SELECT bridge_policy(?,'main.t1','select','true')", [i2])
+        b.execute("SELECT bridge_set_policy(?, 'main.t1', 'select', 'true')", [i2])
         b.execute("ATTACH '' AS app2 (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (i2, tk2))
 
         i3 = unique_id()
         tk3 = b.execute("SELECT bridge_register_source(?, 'app2')", [i3]).fetchone()[0]
-        b.execute("SELECT bridge_policy(?,'main.t1','select','true')", [i3])
+        b.execute("SELECT bridge_set_policy(?, 'main.t1', 'select', 'true')", [i3])
         b.execute("DETACH app")
         b.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (i3, tk3))
         for catalog in ("app", "app2"):
@@ -215,7 +215,7 @@ def test_detaching_a_bridge_source_while_it_is_granted_does_not_deadlock():
         def attach_inner(con):
             inner = unique_id()
             tk = a.execute("SELECT bridge_register_source(?, 'memory')", [inner]).fetchone()[0]
-            a.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [inner])
+            a.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [inner])
             con.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (inner, tk))
 
         attach_inner(b)
@@ -233,7 +233,7 @@ def test_detaching_a_bridge_source_while_it_is_granted_does_not_deadlock():
                 try:
                     outer = unique_id()
                     con.execute("SELECT bridge_register_source(?, 'app')", [outer])
-                    con.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [outer])
+                    con.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [outer])
                 except Exception as e:
                     message = str(e)
                     assert "was detached" in message or "does not exist" in message, message

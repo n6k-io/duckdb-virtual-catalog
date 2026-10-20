@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/n6k-io/duckdb-virtual-catalog/docs/policy-v1.schema.json",
+  "title": "virtual_catalog_bridge policy, version 1",
+  "description": "The document bridge_configure_policy installs. It replaces the bridge's whole policy.",
+  "type": "object",
+  "required": [
+    "policy_version"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policy_version": {
+      "const": 1
+    },
+    "schemas": {
+      "description": "Schema name to schema settings.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "create": {
+            "description": "true lets the target create tables in this schema.",
+            "$ref": "#/$defs/flag"
+          }
+        }
+      }
+    },
+    "tables": {
+      "description": "Table name ('schema.table' or 'catalog.schema.table', SQL identifier syntax) to table settings.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/table"
+      }
+    },
+    "functions": {
+      "description": "A list is the exact whitelist, built-ins dropped. An object changes the built-in whitelist.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/names"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "add": {
+              "$ref": "#/$defs/names"
+            },
+            "remove": {
+              "$ref": "#/$defs/names"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "text": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "names": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    },
+    "predicate": {
+      "description": "true, or a SQL boolean expression over the table's columns and $context names.",
+      "oneOf": [
+        {
+          "const": true
+        },
+        {
+          "$ref": "#/$defs/text"
+        }
+      ]
+    },
+    "grant": {
+      "description": "A predicate grants the verb; false denies it, as leaving it out does.",
+      "oneOf": [
+        {
+          "const": false
+        },
+        {
+          "$ref": "#/$defs/predicate"
+        }
+      ]
+    },
+    "table": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "select"
+          ],
+          "properties": {
+            "select": {
+              "not": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "insert"
+          ],
+          "properties": {
+            "insert": {
+              "not": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "update"
+          ],
+          "properties": {
+            "update": {
+              "not": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "delete"
+          ],
+          "properties": {
+            "delete": {
+              "not": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "alter"
+          ],
+          "properties": {
+            "alter": {
+              "not": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "drop"
+          ],
+          "properties": {
+            "drop": {
+              "not": {
+                "const": false
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "select": {
+          "$ref": "#/$defs/grant"
+        },
+        "insert": {
+          "description": "A predicate here is the check every inserted row must pass.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/grant"
+            },
+            {
+              "type": "object",
+              "required": [
+                "check"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "check": {
+                  "$ref": "#/$defs/predicate"
+                }
+              }
+            }
+          ]
+        },
+        "update": {
+          "description": "A predicate here picks the rows an update may touch and is also their check.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/grant"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "using": {
+                  "$ref": "#/$defs/predicate"
+                },
+                "check": {
+                  "$ref": "#/$defs/predicate"
+                }
+              }
+            }
+          ]
+        },
+        "delete": {
+          "$ref": "#/$defs/grant"
+        },
+        "alter": {
+          "description": "The predicate may use $context names only, not columns.",
+          "$ref": "#/$defs/grant"
+        },
+        "drop": {
+          "$ref": "#/$defs/flag"
+        },
+        "primary_key": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/columns"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "oneOf": [
+                {
+                  "required": [
+                    "columns"
+                  ]
+                },
+                {
+                  "required": [
+                    "columns_from_query"
+                  ]
+                }
+              ],
+              "properties": {
+                "columns": {
+                  "$ref": "#/$defs/columns"
+                },
+                "columns_from_query": {
+                  "description": "SQL run on the source; the first column of each row is a key column name.",
+                  "$ref": "#/$defs/text"
+                },
+                "verify_unique": {
+                  "description": "SQL run on the source that must return no rows when the key is unique.",
+                  "$ref": "#/$defs/text"
+                }
+              }
+            }
+          ]
+        },
+        "foreign_keys": {
+          "description": "Parent tables this table may write references to without the parent being readable in full.",
+          "$ref": "#/$defs/names"
+        }
+      },
+      "description": "A table's settings. At least one verb must be granted."
+    },
+    "columns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    },
+    "flag": {
+      "description": "true or false; the string 'true' means true.",
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\s*[Tt][Rr][Uu][Ee]\\s*$"
+        }
+      ]
+    }
+  }
+}

@@ -14,7 +14,7 @@ statement ok
 SELECT bridge_register_source('oc_b', 'memory', 'tok_oc_b');
 
 statement ok
-SELECT bridge_policy('oc_b', 'main.users', v, 'true', c) FROM (VALUES ('select', NULL), ('insert', 'true'), ('update', NULL), ('delete', NULL)) _(v, c);
+SELECT bridge_set_policy('oc_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
 
 statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'oc_b', TOKEN 'tok_oc_b');

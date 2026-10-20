@@ -5,6 +5,7 @@ reach a provider at all (the UDFs need a host language). These tests drive the r
 DatabaseInstances in one process for the bridge, Python UDFs for providers and stream functions.
 """
 
+import json
 import pathlib
 import uuid
 
@@ -100,45 +101,43 @@ def bridge(
     """Run the documented handshake across two connections. Returns the bridge id.
 
     `grants` maps a table to either a list of verbs (each granted unrestricted) or a dict of
-    verb -> predicate. A predicate is the USING half, or a `(using, check)` pair to set the
-    WITH CHECK half too. Grant names are `schema.table`; a bare name is qualified with `schema`
-    so the many call sites that only care about one schema stay terse.
+    verb -> predicate. A predicate is the USING half (the check, for insert), or a `(using, check)`
+    pair for update. Grant names are `schema.table`; a bare name is qualified with `schema` so the
+    many call sites that only care about one schema stay terse.
 
-    `foreign_keys` lists `(table, parent)` edges passed to bridge_allow_foreign_key.
-
-    `insert` has no USING predicate to inherit a check from, so bridge_policy requires one
-    explicitly. A case that says nothing about the write boundary gets `'true'` -- the same
-    opt-out it would have to spell out in SQL. Pass a pair to mean anything else.
+    `pk_overrides` maps a table to its primary_key columns. `foreign_keys` lists `(table, parent)`
+    edges for the child's foreign_keys.
     """
 
     def qualify(name):
         return name if "." in name else f"{schema}.{name}"
+
+    tables = {}
+    for table, verbs in grants.items():
+        if not isinstance(verbs, dict):
+            verbs = {verb: True for verb in verbs}
+        entry = tables.setdefault(qualify(table), {})
+        for verb, predicate in verbs.items():
+            if isinstance(predicate, tuple):
+                using, check = predicate
+                predicate = (
+                    {"check": check} if verb == "insert" and using == "true" else {"using": using, "check": check}
+                )
+            entry[verb] = predicate
+    for table, columns in (pk_overrides or {}).items():
+        if isinstance(columns, str):
+            columns = [c.strip() for c in columns.split(",") if c.strip()]
+        tables.setdefault(qualify(table), {})["primary_key"] = columns
+    for table, parent in foreign_keys or ():
+        tables.setdefault(qualify(table), {}).setdefault("foreign_keys", []).append(qualify(parent))
 
     bridge_id = unique_id()
     token = source.execute(
         "SELECT bridge_register_source(?, ?)",
         [bridge_id, source_catalog],
     ).fetchone()[0]
-    # Keys first: discovery runs on the first grant, and for a keyless table an update/delete grant
-    # is refused before a later override could rescue it.
-    for table, columns in (pk_overrides or {}).items():
-        if isinstance(columns, str):
-            columns = [c.strip() for c in columns.split(",") if c.strip()]
-        source.execute("SELECT bridge_primary_key(?, ?, ?)", [bridge_id, qualify(table), columns])
-    for table, verbs in grants.items():
-        if not isinstance(verbs, dict):
-            verbs = {verb: "true" for verb in verbs}
-        for verb, predicate in verbs.items():
-            if isinstance(predicate, tuple):
-                using, check = predicate
-            else:
-                using, check = predicate, ("true" if verb == "insert" else None)
-            if check is None:
-                source.execute("SELECT bridge_policy(?, ?, ?, ?)", [bridge_id, qualify(table), verb, using])
-            else:
-                source.execute("SELECT bridge_policy(?, ?, ?, ?, ?)", [bridge_id, qualify(table), verb, using, check])
-    for table, parent in foreign_keys or ():
-        source.execute("SELECT bridge_allow_foreign_key(?, ?, ?)", [bridge_id, qualify(table), qualify(parent)])
+    policy = {"policy_version": 1, "tables": tables}
+    source.execute("SELECT bridge_configure_policy(?, ?)", [bridge_id, json.dumps(policy)])
     # ATTACH options are folded to constants at bind time, so the token cannot be a parameter.
     target.execute(f"ATTACH '' AS {catalog} (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id

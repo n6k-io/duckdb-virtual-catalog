@@ -183,7 +183,7 @@ def test_create_is_not_an_ungranted_name_oracle(sql):
         try:
             source.execute(setup)
             bridge_id = bridge(source, target, {"users": {"select": POLICY}})
-            source.execute("SELECT bridge_policy(?, 'main', 'create', 'true')", [bridge_id])
+            source.execute("SELECT bridge_set_policy(?, 'main', 'create', 'true')", [bridge_id])
             results.append(outcome(target, sql))
         finally:
             source.close()

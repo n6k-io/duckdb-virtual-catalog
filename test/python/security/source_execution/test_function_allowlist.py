@@ -1,7 +1,7 @@
 """ATTACK  target pushes a call the source answers differently: a built-in that reads source state, or a
         source function behind a target function's name (E4, E5)
 BREACH  the call runs on the source without the owner allowing it
-PASS    only PushableBuiltins and the owner's bridge_allow_function names cross; the rest run on the target
+PASS    only PushableBuiltins and the names the owner adds to the whitelist cross; the rest run on the target
 """
 
 import duckdb
@@ -48,7 +48,7 @@ def test_default_builtin_is_pushed(world):
 
 def test_disallow_keeps_builtin_on_target(world):
     source, target, bridge_id, _ = world
-    source.execute("SELECT bridge_disallow_function(?, 'abs')", [bridge_id])
+    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'remove', 'abs')", [bridge_id])
 
     assert runs_on_target(target, "SELECT id FROM app.main.users WHERE abs(tenant) = 1", "abs")
     assert target.execute("SELECT id FROM app.main.users WHERE abs(tenant) = 1 ORDER BY id").fetchall() == [
@@ -57,42 +57,52 @@ def test_disallow_keeps_builtin_on_target(world):
     ]
 
 
+def test_exact_whitelist_drops_the_builtins(world):
+    source, target, bridge_id, _ = world
+    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'set', ['abs'])", [bridge_id])
+
+    assert not runs_on_target(target, "SELECT id FROM app.main.users WHERE abs(tenant) = 1", "abs")
+    assert runs_on_target(target, "SELECT id FROM app.main.users WHERE sign(tenant) = 1", "sign")
+
+
 def test_source_function_needs_allow(world):
     source, target, bridge_id, calls = world
     assert tag_query(target) == [(1,), (2,)]
     assert calls == []
 
-    source.execute("SELECT bridge_allow_function(?, ?)", [bridge_id, FUNCTION])
+    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, FUNCTION])
     assert tag_query(target) == [(1,), (2,)]
     assert calls
 
 
 def test_disallow_overrides_allow(world):
     source, target, bridge_id, calls = world
-    source.execute("SELECT bridge_allow_function(?, ?)", [bridge_id, FUNCTION])
-    source.execute("SELECT bridge_disallow_function(?, ?)", [bridge_id, FUNCTION])
+    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, FUNCTION])
+    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'remove', ?)", [bridge_id, FUNCTION])
 
     assert tag_query(target) == [(1,), (2,)]
     assert calls == []
 
 
-@pytest.mark.parametrize("call", ["bridge_allow_function", "bridge_disallow_function"])
-def test_target_cannot_change_functions(world, call):
+@pytest.mark.parametrize("op", ["add", "remove", "set"])
+def test_target_cannot_change_functions(world, op):
     _, target, bridge_id, _ = world
     with pytest.raises(duckdb.PermissionException):
-        target.execute(f"SELECT {call}(?, 'current_setting')", [bridge_id])
+        target.execute(
+            "SELECT bridge_set_policy(?, ':functions', 'whitelist', ?, ['current_setting'])", [bridge_id, op]
+        )
 
 
-@pytest.mark.parametrize("call", ["bridge_allow_function", "bridge_disallow_function"])
-def test_refused_after_finalize(world, call):
+@pytest.mark.parametrize("op", ["add", "remove", "set"])
+def test_refused_after_finalize(world, op):
     source, _, bridge_id, _ = world
     source.execute("SELECT bridge_finalize_policy(?)", [bridge_id])
     with pytest.raises(duckdb.PermissionException, match="finalized"):
-        source.execute(f"SELECT {call}(?, 'abs')", [bridge_id])
+        source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', ?, ['abs'])", [bridge_id, op])
 
 
 @pytest.mark.parametrize("name", [None, ""])
 def test_function_name_is_required(world, name):
     source, _, bridge_id, _ = world
     with pytest.raises(duckdb.IOException):
-        source.execute("SELECT bridge_allow_function(?, ?)", [bridge_id, name])
+        source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, name])

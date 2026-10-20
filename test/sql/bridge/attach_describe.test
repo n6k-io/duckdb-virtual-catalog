@@ -31,38 +31,38 @@ SELECT bridge_register_source('v2_attach_describe', 'memory');
 a source is already registered for bridge
 
 statement error
-SELECT bridge_policy('v2_attach_describe', 'orders', 'select', 'true');
+SELECT bridge_set_policy('v2_attach_describe', 'orders', 'select', 'true');
 ----
-must be schema-qualified
+must be 'schema.table'
 
 statement error
-SELECT bridge_policy('v2_attach_describe', 'main.nosuch', 'select', 'true');
+SELECT bridge_set_policy('v2_attach_describe', 'main.nosuch', 'select', 'true');
 ----
 not found in catalog
 
 statement error
-SELECT bridge_policy('v2_attach_describe', 'main.orders', 'levitate', 'true');
+SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'levitate', 'true');
 ----
-invalid verb
+unknown setting
 
 statement error
-SELECT bridge_policy('v2_attach_describe', 'main.orders', 'select', 'nosuchcolumn = 1');
+SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'select', 'nosuchcolumn = 1');
 ----
 is not a valid WHERE clause on the source
 
 statement error
-SELECT bridge_policy('v2_attach_describe', 'main.orders', 'select', 'amt');
+SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'select', 'amt');
 ----
 must be BOOLEAN
 
 statement ok
-SELECT bridge_policy('v2_attach_describe', 'main.orders', 'select', 'true');
+SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v2_attach_describe', 'main.orders', 'update', 'true');
+SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'update', 'true');
 
 statement ok
-SELECT bridge_policy('v2_attach_describe', 'main.customers', 'select', 'true');
+SELECT bridge_set_policy('v2_attach_describe', 'main.customers', 'select', 'true');
 
 statement error
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_attach_describe', TOKEN 'not-the-token');

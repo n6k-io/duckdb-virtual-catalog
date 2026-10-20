@@ -35,7 +35,7 @@ statement ok
 SELECT bridge_register_source('pa', 'memory', 'tok_pa');
 
 statement ok
-SELECT bridge_policy('pa', 'main.users', 'select', 'true');
+SELECT bridge_set_policy('pa', 'main.users', 'select', 'true');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'pa', TOKEN 'tok_pa');
@@ -47,7 +47,7 @@ does not exist
 
 # A new table in a served schema.
 statement ok
-SELECT bridge_policy('pa', 'main.extra', 'select', 'true');
+SELECT bridge_set_policy('pa', 'main.extra', 'select', 'true');
 
 query IT
 SELECT id, note FROM b.main.extra;
@@ -61,7 +61,7 @@ INSERT INTO b.main.extra VALUES (2, 'y');
 does not have 'insert' permission
 
 statement ok
-SELECT bridge_policy('pa', 'main.extra', 'insert', 'true', 'true');
+SELECT bridge_set_policy('pa', 'main.extra', 'insert', 'true');
 
 statement ok
 INSERT INTO b.main.extra VALUES (2, 'y');
@@ -71,14 +71,13 @@ SELECT count(*) FROM memory.main.extra;
 ----
 2
 
-statement error
-SELECT bridge_policy('pa', 'main.extra', 'insert', 'true', 'true');
-----
-already defined
+# Setting a verb again overwrites it.
+statement ok
+SELECT bridge_set_policy('pa', 'main.extra', 'insert', 'true');
 
 # A new verb with a restricting predicate on a granted table.
 statement ok
-SELECT bridge_policy('pa', 'main.extra', 'update', 'id = 1');
+SELECT bridge_set_policy('pa', 'main.extra', 'update', 'id = 1');
 
 statement ok
 UPDATE b.main.extra SET note = 'z';
@@ -91,7 +90,7 @@ SELECT id, note FROM memory.main.extra ORDER BY id;
 
 # A schema the bridge did not serve at ATTACH.
 statement ok
-SELECT bridge_policy('pa', 'side.t', 'select', 'true');
+SELECT bridge_set_policy('pa', 'side.t', 'select', 'true');
 
 query I
 SELECT id FROM b.side.t;
@@ -103,7 +102,7 @@ statement ok
 BEGIN;
 
 statement ok
-SELECT bridge_policy('pa', 'main.nopk', 'select', 'true');
+SELECT bridge_set_policy('pa', 'main.nopk', 'select', 'true');
 
 query I
 SELECT count(*) FROM b.main.nopk;
@@ -116,30 +115,31 @@ COMMIT;
 statement ok
 CREATE TABLE memory.main.later(id INTEGER PRIMARY KEY);
 
-# After ATTACH the select-first rule is checked per call.
-statement error
-SELECT bridge_policy('pa', 'main.later', 'delete', 'true');
-----
-without 'select'
+# delete needs no select; revoking it again removes the table.
+statement ok
+SELECT bridge_set_policy('pa', 'main.later', 'delete', 'true');
+
+statement ok
+SELECT bridge_set_policy('pa', 'main.later', 'delete', false);
 
 statement error
-SELECT bridge_primary_key('pa', 'side.ungranted', ['id']);
+SELECT bridge_set_policy('pa', 'side.ungranted', 'primary_key', ['id']);
 ----
 not found in catalog
 
 statement error
-SELECT bridge_primary_key('pa', 'main.later', ['id']);
+SELECT bridge_set_policy('pa', 'main.later', 'primary_key', ['id']);
 ----
 is not granted in bridge
 
 statement ok
-SELECT bridge_primary_key('pa', 'main.nopk', ['x']);
+SELECT bridge_set_policy('pa', 'main.nopk', 'primary_key', ['x']);
 
 statement ok
-SELECT bridge_primary_key_check('pa', 'main.nopk', 'SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1');
+SELECT bridge_set_policy('pa', 'main.nopk', 'primary_key', {'columns': ['x'], 'verify_unique': 'SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1'});
 
 statement ok
-SELECT bridge_policy('pa', 'main.nopk', 'delete', 'true');
+SELECT bridge_set_policy('pa', 'main.nopk', 'delete', 'true');
 
 query IT
 SELECT name, primary_key FROM bridge_table_permissions('b', schema := 'main') ORDER BY name;
@@ -166,12 +166,12 @@ statement ok
 SELECT bridge_finalize_policy('pa');
 
 statement error
-SELECT bridge_policy('pa', 'main.later', 'select', 'true');
+SELECT bridge_set_policy('pa', 'main.later', 'select', 'true');
 ----
 are finalized
 
 statement error
-SELECT bridge_primary_key('pa', 'main.nopk', ['x']);
+SELECT bridge_set_policy('pa', 'main.nopk', 'primary_key', ['x']);
 ----
 are finalized
 
@@ -198,17 +198,13 @@ statement ok
 SELECT bridge_register_source('pb', 'memory', 'tok_pb');
 
 statement ok
-SELECT bridge_policy('pb', 'main.users', 'select', 'true');
-
-# A key on a table no policy grants is dropped at ATTACH.
-statement ok
-SELECT bridge_primary_key('pb', 'main.extra', ['id']);
+SELECT bridge_set_policy('pb', 'main.users', 'select', 'true');
 
 statement ok
 SELECT bridge_finalize_policy('pb');
 
 statement error
-SELECT bridge_policy('pb', 'main.extra', 'select', 'true');
+SELECT bridge_set_policy('pb', 'main.extra', 'select', 'true');
 ----
 are finalized
 
@@ -216,7 +212,7 @@ statement ok
 ATTACH '' AS b2 (TYPE virtual_catalog_bridge, ID 'pb', TOKEN 'tok_pb');
 
 statement error
-SELECT bridge_policy('pb', 'main.extra', 'select', 'true');
+SELECT bridge_set_policy('pb', 'main.extra', 'select', 'true');
 ----
 are finalized
 

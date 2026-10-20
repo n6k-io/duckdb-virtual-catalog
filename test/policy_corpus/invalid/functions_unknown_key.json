@@ -1,0 +1,8 @@
+{
+  "policy_version": 1,
+  "functions": {
+    "allow": [
+      "f"
+    ]
+  }
+}

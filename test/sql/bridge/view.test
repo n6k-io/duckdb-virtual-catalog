@@ -25,36 +25,36 @@ statement ok
 SELECT bridge_set_context('v2_view', 'tenant', 7);
 
 statement error
-SELECT bridge_policy('v2_view', 'main.big_orders', 'insert', 'true', 'true');
+SELECT bridge_set_policy('v2_view', 'main.big_orders', 'insert', 'true');
 ----
 a view can only be granted 'select', not 'insert'
 
 statement error
-SELECT bridge_policy('v2_view', 'main.big_orders', 'update', 'true');
+SELECT bridge_set_policy('v2_view', 'main.big_orders', 'update', 'true');
 ----
 a view can only be granted 'select', not 'update'
 
 statement error
-SELECT bridge_policy('v2_view', 'main.big_orders', 'delete', 'true');
+SELECT bridge_set_policy('v2_view', 'main.big_orders', 'delete', 'true');
 ----
 a view can only be granted 'select', not 'delete'
 
 statement error
-SELECT bridge_policy('v2_view', 'main.big_orders', 'alter', 'true');
+SELECT bridge_set_policy('v2_view', 'main.big_orders', 'alter', 'true');
 ----
 a view can only be granted 'select', not 'alter'
 
 # The policy is checked against the view's columns, not the table's.
 statement error
-SELECT bridge_policy('v2_view', 'main.big_orders', 'select', 'amt > 0');
+SELECT bridge_set_policy('v2_view', 'main.big_orders', 'select', 'amt > 0');
 ----
 is not a valid WHERE clause on the source
 
 statement ok
-SELECT bridge_policy('v2_view', 'main.big_orders', 'select', 'tenant = $tenant');
+SELECT bridge_set_policy('v2_view', 'main.big_orders', 'select', 'tenant = $tenant');
 
 statement ok
-SELECT bridge_policy('v2_view', 'main.by_tenant', 'select', 'true');
+SELECT bridge_set_policy('v2_view', 'main.by_tenant', 'select', 'true');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_view', TOKEN 'tok_view');

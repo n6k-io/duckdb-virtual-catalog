@@ -25,7 +25,7 @@ def ddl_world():
     source.execute(SETUP)
     source.create_function("source_only", source_only, ["INTEGER"], "INTEGER")
     bridge_id = bridge(source, target, {"users": {"select": "true", "alter": "true", "update": "true"}})
-    source.execute("SELECT bridge_policy(?, 'main', 'create', 'true')", [bridge_id])
+    source.execute("SELECT bridge_set_policy(?, 'main', 'create', 'true')", [bridge_id])
     yield source, target, calls
     source.close()
     target.close()
@@ -126,6 +126,28 @@ def test_alter_type_using_cannot_read_source_setting(ddl_world):
     )
 
     assert source.execute("SELECT count(*) FROM users WHERE tenant::VARCHAR = 'SOURCE_SECRET'").fetchone() == (0,)
+
+
+#: field path -> the struct-bearing table the target creates
+ADD_FIELD = {
+    "struct": ("s.h", "s STRUCT(a INTEGER)"),
+    "list_of_struct": ("l.element.h", "l STRUCT(a INTEGER)[]"),
+}
+
+
+@pytest.mark.parametrize("field, column", ADD_FIELD.values(), ids=ADD_FIELD.keys())
+def test_add_field_default_is_refused(ddl_world, field, column):
+    source, target, _ = ddl_world
+    source.execute("SET GLOBAL http_proxy_password = 'SOURCE_SECRET'")
+    target.execute(f"CREATE TABLE app.main.nested(id INTEGER PRIMARY KEY, {column})")
+    before = catalog_snapshot(source)
+
+    with pytest.raises(duckdb.PermissionException, match="must be a constant"):
+        target.execute(
+            f"ALTER TABLE app.main.nested ADD COLUMN {field} VARCHAR DEFAULT current_setting('http_proxy_password')"
+        )
+
+    assert catalog_snapshot(source) == before
 
 
 CONSTANT_DEFAULTS = [

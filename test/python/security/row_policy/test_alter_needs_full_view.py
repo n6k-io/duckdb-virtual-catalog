@@ -68,9 +68,9 @@ def gated_bridge(source, target, user):
     source.execute("SELECT bridge_set_context(?, 'user', ?)", [bridge_id, user])
     source.execute("SELECT bridge_set_context(?, 'tenant', 1)", [bridge_id])
     source.execute(
-        "SELECT bridge_policy(?, 'main.users', 'select', '$user = ''admin'' OR tenant = $tenant')", [bridge_id]
+        "SELECT bridge_set_policy(?, 'main.users', 'select', '$user = ''admin'' OR tenant = $tenant')", [bridge_id]
     )
-    source.execute("SELECT bridge_policy(?, 'main.users', 'alter', '$user = ''admin''')", [bridge_id])
+    source.execute("SELECT bridge_set_policy(?, 'main.users', 'alter', '$user = ''admin''')", [bridge_id])
     target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id
 
@@ -111,4 +111,4 @@ def test_alter_grant_may_not_reference_a_column(pair):
     source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
 
     with pytest.raises(duckdb.Error, match="column"):
-        source.execute("SELECT bridge_policy(?, 'main.users', 'alter', 'tenant = 1')", [bridge_id])
+        source.execute("SELECT bridge_set_policy(?, 'main.users', 'alter', 'tenant = 1')", [bridge_id])

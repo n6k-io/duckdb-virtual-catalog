@@ -21,6 +21,9 @@ struct SourceGrant {
 	vector<unique_ptr<ParsedExpression>> using_predicates;
 	vector<unique_ptr<ParsedExpression>> check_predicates;
 	vector<string> key;
+	//! The table's own PRIMARY KEY, which `key` falls back to when no key is set.
+	vector<string> discovered_key;
+	bool key_set = false;
 	bool key_verified = true;
 	bool select_unrestricted = false;
 	//! Same schema as the grant: DuckDB refuses a foreign key across schemas.
@@ -43,6 +46,22 @@ struct SourceGrant {
 	unique_ptr<ParsedExpression> CopyCheck(CrossingVerb verb) const {
 		auto &predicate = check_predicates[static_cast<idx_t>(verb)];
 		return predicate ? predicate->Copy() : nullptr;
+	}
+	SourceGrant Copy() const {
+		SourceGrant copy;
+		copy.verbs = verbs;
+		for (auto verb : CrossingVerbs()) {
+			copy.using_predicates[static_cast<idx_t>(verb)] = CopyUsing(verb);
+			copy.check_predicates[static_cast<idx_t>(verb)] = CopyCheck(verb);
+		}
+		copy.key = key;
+		copy.discovered_key = discovered_key;
+		copy.key_set = key_set;
+		copy.key_verified = key_verified;
+		copy.select_unrestricted = select_unrestricted;
+		copy.foreign_key_parents = foreign_key_parents;
+		copy.allowed_foreign_keys = allowed_foreign_keys;
+		return copy;
 	}
 };
 
@@ -72,6 +91,8 @@ private:
 
 //! The owner's changes to which calls a bridge pushes to the source; `PushableBuiltins` is the default.
 struct FunctionGrants {
+	//! False once the owner set the whitelist exactly.
+	bool builtins = true;
 	case_insensitive_set_t allowed;
 	case_insensitive_set_t disallowed;
 };
@@ -87,12 +108,16 @@ struct GrantBook {
 	optional_ptr<CrossingAttach> target;
 	//! Guarded by the bridge registry's mutex, not `lock`.
 	bool policy_finalized = false;
+	//! Grant changes from target DDL whose transaction is still open; their undo names tables, so the policy
+	//! cannot be replaced under them.
+	idx_t uncommitted_ddl = 0;
 };
 
 class DuckDBSession {
 public:
 	DuckDBSession(shared_ptr<DatabaseInstance> source_db, SourcePin source, shared_ptr<GrantBook> grants,
 	              bool autocommit);
+	~DuckDBSession();
 
 	CrossingScan Read(ClientContext &context, const CrossingQuery &query);
 	CrossingWriter Write(ClientContext &context, const CrossingQuery &query);
@@ -113,6 +138,9 @@ private:
 	//! Defaults, CHECKs and generated columns are stored on the source and run on the owner's later inserts.
 	void ThrowIfDdlCarriesExpression(const CrossingDdl &ddl);
 	void RecordDdl(const shared_ptr<Connection> &source_conn, const string &catalog, const CrossingDdl &ddl);
+	//! Caller holds the GrantBook's lock.
+	void PushGrantUndo(std::function<void()> undo);
+	void ForgetGrantUndo();
 	void UndoGrants();
 	void ForgetShaping();
 
@@ -160,8 +188,6 @@ private:
 	SourcePin source;
 	shared_ptr<GrantBook> grants;
 };
-
-bool TryParseCrossingVerb(const string &text, CrossingVerb &out);
 
 unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db);
 

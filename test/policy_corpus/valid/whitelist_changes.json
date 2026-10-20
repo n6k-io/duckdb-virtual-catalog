@@ -1,0 +1,11 @@
+{
+  "policy_version": 1,
+  "functions": {
+    "add": [
+      "my_udf"
+    ],
+    "remove": [
+      "random"
+    ]
+  }
+}

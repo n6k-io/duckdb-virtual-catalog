@@ -123,13 +123,12 @@ def test_source_writes_are_visible_immediately(bridged):
     assert target.execute("SELECT count(*) FROM app.main.users").fetchone() == (6,)
 
 
-def test_a_three_part_grant_name_is_rejected(source, target):
-    """A grant name is 'schema.table'. The source catalog is fixed by bridge_register_source, so a
-    third part has nowhere to go."""
+def test_a_three_part_grant_name_must_name_the_source_catalog(source, target):
+    """The source catalog is fixed by bridge_register_source, so a third part may only repeat it."""
     source.execute("ATTACH ':memory:' AS shop")
     source.execute("CREATE TABLE shop.main.orders(id INTEGER PRIMARY KEY, item VARCHAR)")
     source.execute(SETUP)
-    with pytest.raises(Exception, match="must name a schema and a table"):
+    with pytest.raises(Exception, match="names catalog 'shop', but this bridge's source catalog is 'memory'"):
         bridge(source, target, {"shop.main.orders": READ})
 
 
@@ -137,8 +136,8 @@ def test_a_bare_grant_name_is_rejected(source, target):
     source.execute(SETUP)
     bridge_id = unique_id()
     source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
-    with pytest.raises(Exception, match="must be schema-qualified"):
-        source.execute("SELECT bridge_policy(?, 'users', 'select', 'true')", [bridge_id])
+    with pytest.raises(Exception, match="must be 'schema.table'"):
+        source.execute("SELECT bridge_set_policy(?, 'users', 'select', 'true')", [bridge_id])
 
 
 def test_source_tables_outside_the_default_catalog_reach_via_source_args(source, target):

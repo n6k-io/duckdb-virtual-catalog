@@ -20,7 +20,7 @@ statement ok
 SELECT bridge_register_source('sr_b', 'memory', 'tok_sr_b');
 
 statement ok
-SELECT bridge_policy('sr_b', 'main.anchor', 'select', 'true');
+SELECT bridge_set_policy('sr_b', 'main.anchor', 'select', 'true');
 
 statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'sr_b', TOKEN 'tok_sr_b');

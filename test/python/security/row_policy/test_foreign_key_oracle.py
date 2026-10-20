@@ -36,7 +36,7 @@ def world():
 @pytest.mark.parametrize("ddl", FOREIGN_KEYS.values(), ids=FOREIGN_KEYS.keys())
 def test_foreign_key_is_refused(world, ddl):
     source, target, bridge_id = world(SETUP, {"users": {"select": POLICY}})
-    source.execute("SELECT bridge_policy(?, 'main', 'create', 'true')", [bridge_id])
+    source.execute("SELECT bridge_set_policy(?, 'main', 'create', 'true')", [bridge_id])
     target.execute("USE app")
 
     with pytest.raises(duckdb.PermissionException, match="foreign key"):
@@ -92,11 +92,11 @@ def test_write_over_self_reference_is_refused(world):
 
 def test_write_granted_after_attach_is_refused_until_allowed(world):
     source, target, bridge_id = world(PARENT_SETUP, {"users": {"select": POLICY}})
-    grant = "SELECT bridge_policy(?, 'main.users', 'insert', 'true', ?)"
+    grant = "SELECT bridge_set_policy(?, 'main.users', 'insert', ?)"
 
     with pytest.raises(duckdb.PermissionException, match="foreign key to 'main.secret_orgs'"):
         source.execute(grant, [bridge_id, POLICY])
-    source.execute("SELECT bridge_allow_foreign_key(?, 'main.users', 'main.secret_orgs')", [bridge_id])
+    source.execute("SELECT bridge_set_policy(?, 'main.users', 'foreign_keys', 'add', 'main.secret_orgs')", [bridge_id])
     source.execute(grant, [bridge_id, POLICY])
 
     assert outcome(target, "INSERT INTO app.main.users VALUES (10, 1, 7)") == ("ok", [(1,)])
@@ -106,14 +106,18 @@ def test_allow_needs_a_declared_foreign_key(world):
     source, _, bridge_id = world(PARENT_SETUP, {"users": {"select": POLICY}})
 
     with pytest.raises(duckdb.IOException, match="has no foreign key to 'main.users'"):
-        source.execute("SELECT bridge_allow_foreign_key(?, 'main.secret_orgs', 'main.users')", [bridge_id])
+        source.execute(
+            "SELECT bridge_set_policy(?, 'main.secret_orgs', 'foreign_keys', 'add', 'main.users')", [bridge_id]
+        )
 
 
 def test_target_cannot_allow_a_foreign_key(world):
     _, target, bridge_id = world(PARENT_SETUP, {"users": {"select": POLICY}})
 
     with pytest.raises(duckdb.PermissionException, match="different source connection"):
-        target.execute("SELECT bridge_allow_foreign_key(?, 'main.users', 'main.secret_orgs')", [bridge_id])
+        target.execute(
+            "SELECT bridge_set_policy(?, 'main.users', 'foreign_keys', 'add', 'main.secret_orgs')", [bridge_id]
+        )
 
 
 def test_allow_is_refused_after_finalize(world):
@@ -121,10 +125,12 @@ def test_allow_is_refused_after_finalize(world):
     source.execute("SELECT bridge_finalize_policy(?)", [bridge_id])
 
     with pytest.raises(duckdb.PermissionException, match="finalized"):
-        source.execute("SELECT bridge_allow_foreign_key(?, 'main.users', 'main.secret_orgs')", [bridge_id])
+        source.execute(
+            "SELECT bridge_set_policy(?, 'main.users', 'foreign_keys', 'add', 'main.secret_orgs')", [bridge_id]
+        )
 
 
-@pytest.mark.xfail(strict=True, reason="accepted: bridge_allow_foreign_key reveals which parent keys exist")
+@pytest.mark.xfail(strict=True, reason="accepted: a foreign_keys entry reveals which parent keys exist")
 @pytest.mark.parametrize("sql", PARENT_PROBES.values(), ids=PARENT_PROBES.keys())
 def test_parent_foreign_key_is_not_an_ungranted_key_oracle(world, sql):
     grants = {"users": {"select": POLICY, "insert": ("true", POLICY), "update": POLICY}}

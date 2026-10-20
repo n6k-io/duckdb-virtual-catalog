@@ -75,7 +75,7 @@ def test_locked_source_still_grants(pair):
     bridge_id = bridge(source, target, {"users": READ})
     source.execute("SELECT bridge_set_context(?, 'tenant', 1)", [bridge_id])
     source.execute("CREATE TABLE logs(id INTEGER PRIMARY KEY)")
-    source.execute("SELECT bridge_policy(?, 'main.logs', 'select', 'id = $tenant')", [bridge_id])
+    source.execute("SELECT bridge_set_policy(?, 'main.logs', 'select', 'id = $tenant')", [bridge_id])
     source.execute("INSERT INTO logs VALUES (1), (2)")
     assert target.execute("SELECT id FROM app.main.logs").fetchall() == [(1,)]
 

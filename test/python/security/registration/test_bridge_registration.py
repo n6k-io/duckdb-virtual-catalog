@@ -31,7 +31,7 @@ def register_pending(source):
     source.execute(SETUP)
     bridge_id = unique_id()
     token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute("SELECT bridge_policy(?, 'main.users', 'select', 'true')", [bridge_id])
+    source.execute("SELECT bridge_set_policy(?, 'main.users', 'select', 'true')", [bridge_id])
     return bridge_id, token
 
 
@@ -74,7 +74,7 @@ def test_expired_pending_source_does_not_deadlock():
 
         pending_id = unique_id()
         middle.execute("SELECT bridge_register_source(?, 'app')", [pending_id])
-        middle.execute("SELECT bridge_policy(?, 'main.t', 'select', 'true')", [pending_id])
+        middle.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [pending_id])
         middle.close()
         del middle
 

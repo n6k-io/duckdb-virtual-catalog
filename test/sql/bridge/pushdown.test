@@ -20,10 +20,10 @@ statement ok
 SELECT bridge_register_source('v2_pushdown', 'memory', 'tok_pushdown');
 
 statement ok
-SELECT bridge_policy('v2_pushdown', 'main.orders', 'select', 'true');
+SELECT bridge_set_policy('v2_pushdown', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v2_pushdown', 'main.customers', 'select', 'true');
+SELECT bridge_set_policy('v2_pushdown', 'main.customers', 'select', 'true');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_pushdown', TOKEN 'tok_pushdown');

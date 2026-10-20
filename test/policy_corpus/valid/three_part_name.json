@@ -1,0 +1,8 @@
+{
+  "policy_version": 1,
+  "tables": {
+    "memory.main.users": {
+      "select": true
+    }
+  }
+}

@@ -20,16 +20,16 @@ statement ok
 SELECT bridge_register_source('v2_delete', 'memory', 'tok_delete');
 
 statement ok
-SELECT bridge_policy('v2_delete', 'main.orders', 'select', 'tenant = 7');
+SELECT bridge_set_policy('v2_delete', 'main.orders', 'select', 'tenant = 7');
 
 statement ok
-SELECT bridge_policy('v2_delete', 'main.orders', 'delete', 'tenant = 7');
+SELECT bridge_set_policy('v2_delete', 'main.orders', 'delete', 'tenant = 7');
 
 statement ok
-SELECT bridge_policy('v2_delete', 'main.nokey', 'select', 'true');
+SELECT bridge_set_policy('v2_delete', 'main.nokey', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v2_delete', 'main.nokey', 'delete', 'true');
+SELECT bridge_set_policy('v2_delete', 'main.nokey', 'delete', 'true');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_delete', TOKEN 'tok_delete');
@@ -49,7 +49,7 @@ SELECT id FROM b.main.orders ORDER BY id;
 1
 4
 
-# A row the policy hides cannot be deleted: it is not reachable to be addressed.
+# A row the policies hide cannot be deleted.
 statement ok
 DELETE FROM b.main.orders WHERE id = 3;
 
@@ -64,7 +64,7 @@ DELETE FROM b.main.nokey WHERE x = 1;
 ----
 has no key
 
-# Deleting everything reachable leaves the hidden row behind.
+# Deleting everything the delete policy reaches leaves the hidden row behind.
 statement ok
 DELETE FROM b.main.orders;
 

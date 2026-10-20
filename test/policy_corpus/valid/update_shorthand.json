@@ -1,0 +1,9 @@
+{
+  "policy_version": 1,
+  "tables": {
+    "main.users": {
+      "select": true,
+      "update": "tenant = 1"
+    }
+  }
+}
