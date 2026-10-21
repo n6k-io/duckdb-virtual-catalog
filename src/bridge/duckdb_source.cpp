@@ -49,6 +49,7 @@
 #include "duckdb/parser/statement/select_statement.hpp"
 #include "duckdb/planner/bind_context.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/common/enums/database_modification_type.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
@@ -1159,6 +1160,11 @@ void SetPolicy(ClientContext &context, const string &bridge_id, const PolicyEdit
 			                      });
 		}
 		CommitPolicy(bridge_id, context, true, [&](PolicyState &state, bool live) {
+			bool clears =
+			    edit.op == PolicyListOp::REMOVE || (edit.op == PolicyListOp::SET && edit.foreign_keys.empty());
+			if (clears && !FindGrant(state.tables, edit.target.schema, edit.target.name)) {
+				return;
+			}
 			auto &grant = GrantToConfigure(state, edit.target, live, bridge_id);
 			if (edit.op == PolicyListOp::SET) {
 				grant.allowed_foreign_keys.clear();
@@ -1936,6 +1942,15 @@ CrossingVerdict DuckDBSource::AcceptsCall(const Expression &expr) {
 		function = &expr.Cast<BoundAggregateExpression>().function;
 		type = CatalogType::AGGREGATE_FUNCTION_ENTRY;
 		break;
+	case ExpressionClass::BOUND_WINDOW: {
+		auto &aggregate = expr.Cast<BoundWindowExpression>().aggregate;
+		if (!aggregate) {
+			return CrossingVerdict::Yes();
+		}
+		function = aggregate.get();
+		type = CatalogType::AGGREGATE_FUNCTION_ENTRY;
+		break;
+	}
 	default:
 		return CrossingVerdict::Yes();
 	}

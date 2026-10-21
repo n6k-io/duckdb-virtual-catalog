@@ -106,3 +106,20 @@ def test_function_name_is_required(world, name):
     source, _, bridge_id, _ = world
     with pytest.raises(duckdb.IOException):
         source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, name])
+
+
+WINDOW_SQL = "SELECT id, sum(tenant) OVER () FROM app.main.users"
+
+
+def test_disallow_keeps_window_aggregate_on_target(world):
+    source, target, bridge_id, _ = world
+    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'remove', 'sum')", [bridge_id])
+
+    assert runs_on_target(target, WINDOW_SQL, "sum")
+
+
+def test_exact_whitelist_keeps_window_aggregate_on_target(world):
+    source, target, bridge_id, _ = world
+    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'set', ['abs'])", [bridge_id])
+
+    assert runs_on_target(target, WINDOW_SQL, "sum")

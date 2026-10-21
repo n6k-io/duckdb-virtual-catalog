@@ -116,3 +116,17 @@ def test_concurrent_settings_are_all_kept(source, target):
     target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     granted = target.execute("SELECT name FROM bridge_table_permissions('app') ORDER BY name").fetchall()
     assert sorted(row[0] for row in granted) == sorted(names)
+
+
+@pytest.mark.parametrize("edit", ["'remove', 'main.users'", "'set', []::VARCHAR[]"])
+def test_foreign_key_edit_on_ungranted_table_leaves_attach_working(source, target, edit):
+    source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY)")
+    source.execute("CREATE TABLE orders(id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id))")
+    bridge_id = unique_id()
+    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT bridge_set_policy(?, 'main.users', 'select', true)", [bridge_id])
+    source.execute(f"SELECT bridge_set_policy(?, 'main.orders', 'foreign_keys', {edit})", [bridge_id])
+
+    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    granted = target.execute("SELECT name FROM bridge_table_permissions('app')").fetchall()
+    assert granted == [("users",)]
