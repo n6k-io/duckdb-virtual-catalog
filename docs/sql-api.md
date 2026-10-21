@@ -16,18 +16,34 @@ the source has granted, and released by `DETACH`. Both options are required, and
 neither may be a `?` parameter or a subquery: DuckDB folds ATTACH options to
 constants at bind time.
 
-Table names are `'schema.table'`, resolved in `source_catalog`. Each granted source
-schema lands in the target schema of the same name.
+The policy is set with two functions, before or after `ATTACH`, until
+`bridge_finalize_policy`; see [policy](virtual-catalog-bridge.md#policy).
 
 | Function | Arguments |
 |---|---|
 | `bridge_register_source` | `bridge_id, source_catalog[, token]` → token. With two arguments the token is generated as `NONCE:UUID`; with three the source names it |
-| `bridge_set_context` | `bridge_id, name, value ANY` — a value policies reference as `$name`. Must precede the `bridge_policy` that uses it. Works before and after `ATTACH`; overwrites, and the target's next statement uses the new value. Refused when the value breaks a policy that uses it, when NULL, or after `bridge_finalize_context` |
-| `bridge_policy` | `bridge_id, 'schema.table', verb, policy_using[, policy_check]` — verb is `select\|insert\|update\|delete\|alter`; the same `(table, verb)` twice is an error. `policy_using` is mandatory (`'true'` = unrestricted) and says which rows the verb may reach. `policy_check` says what it may write, applies to `insert` and `update` only, and is a violation when it evaluates to NULL. Per verb: `update` defaults it to `policy_using` when omitted; `insert` must state it (`'true'` to opt out) because an insert has no USING to inherit; `select` and `delete` write no row and reject it. On `update` it is evaluated against the row as it will be *after* the update |
-| `bridge_primary_key` | `bridge_id, 'schema.table', columns VARCHAR[]` — overrides discovery |
-| `bridge_primary_key_query` | `bridge_id, 'schema.table', sql` — runs `sql` on the source; column 0 of every row is a key column, in key order |
-| `bridge_primary_key_check` | `bridge_id, 'schema.table', sql` — runs `sql` on the source; zero rows accepts the declared key, any row rejects it |
+| `bridge_set_context` | `bridge_id, name, value ANY` — a value policies reference as `$name`. Must precede the policy that uses it. Works before and after `ATTACH`; overwrites, and the target's next statement uses the new value. Refused when the value breaks a policy that uses it, when NULL, or after `bridge_finalize_context` |
+| `bridge_configure_policy` | `bridge_id, policy JSON` — replaces the whole policy with the document. Checked in full before anything changes. Schema: [`policy-v1.schema.json`](policy-v1.schema.json) |
+| `bridge_validate_policy_config` | `source_catalog, policy JSON` → table. Checks a document against the catalog without a bridge; see [below](#policy-validation) |
+| `bridge_set_policy` | `bridge_id, target, setting, value ANY` — assigns one setting. `NULL` removes it; for a verb, so does `false` |
+| `bridge_set_policy` | `bridge_id, target, setting, op, value ANY` — changes a list setting. `op` is `add`, `remove` or `set`; `value` is a name or a list of names (`set` takes a list) |
 | `bridge_finalize_context` | `bridge_id` — optional; freezes the context, before or after `ATTACH` |
+| `bridge_finalize_policy` | `bridge_id` — optional; freezes the policy, before or after `ATTACH`. Every later `bridge_configure_policy` and `bridge_set_policy` is refused |
+| `virtual_catalog_lockdown` | `memory_limit, threads BIGINT[, drop_functions VARCHAR[]]` — run on the target; locks its whole `DatabaseInstance`. First drops each named function from the system catalog (every scalar, aggregate, macro, table and pragma entry of that name, e.g. `['quack_serve', 'quack_stop']`). Sets `memory_limit` and `threads`, disables spilling (`temp_directory = ''`), extension autoload/autoinstall, community extensions, persistent secrets, the local filesystem and external access, then `lock_configuration`. Bridges attach, read, write and detach as before. Refused inside an explicit transaction, when the configuration is already locked, on NULL (including a NULL list element), when a name matches no system function, or when evaluated for more than one row |
+
+### Policy validation
+
+`bridge_validate_policy_config(source_catalog, policy)` — run on the source. One
+row per setting that would make `bridge_configure_policy` or `ATTACH` fail; no
+rows when there is none. Each table and verb is checked, but a malformed document
+returns only its first parse error, and whole-policy checks stop at their first
+failure. `unchecked` rows are not failures.
+
+| Column | Type |
+|---|---|
+| `path` | VARCHAR — the setting, as in `bridge_configure_policy` errors; NULL for the document as a whole |
+| `severity` | VARCHAR — `error`; `unchecked` for a predicate that uses `$context`, which is parsed but not bound; `data_dependent` for any failure of a `primary_key` that uses `columns_from_query` or `verify_unique` |
+| `message` | VARCHAR |
 
 ## Providers
 

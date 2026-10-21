@@ -1,6 +1,7 @@
 #include "vcat_stream_function.hpp"
 
 #include "arrow_frame_decoder.hpp"
+#include "provider_arrow.hpp"
 #include "sql_build.hpp"
 #include "yyjson_util.hpp"
 
@@ -288,6 +289,8 @@ unique_ptr<FunctionData> OpenStreamAndBindSchema(ClientContext &context, TableFu
 	                                        std::move(stream_data));
 	auto *sp = result->owned_stream_data.get();
 	sp->stream.get_schema(&sp->stream, &result->schema_root.arrow_schema);
+	vcat_provider::ThrowOnMismatchedExtensionStorage(context, result->schema_root.arrow_schema,
+	                                                 "virtual_catalog_provider: stream open");
 	ArrowTableFunction::PopulateArrowTableSchema(context, result->arrow_table, result->schema_root.arrow_schema);
 	names = result->arrow_table.GetNames();
 	return_types = result->arrow_table.GetTypes();

@@ -1,0 +1,14 @@
+{
+  "policy_version": 1,
+  "tables": {
+    "main.users": {
+      "select": "tenant = 1",
+      "insert": "tenant = 1",
+      "update": {
+        "using": "tenant = 1",
+        "check": "tenant = 1"
+      },
+      "delete": "tenant = 1"
+    }
+  }
+}

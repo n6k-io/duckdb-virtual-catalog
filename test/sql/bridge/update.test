@@ -14,10 +14,10 @@ statement ok
 SELECT bridge_register_source('v2_update', 'memory', 'tok_update');
 
 statement ok
-SELECT bridge_policy('v2_update', 'main.orders', 'select', 'tenant = 7');
+SELECT bridge_set_policy('v2_update', 'main.orders', 'select', 'tenant = 7');
 
 statement ok
-SELECT bridge_policy('v2_update', 'main.orders', 'update', 'tenant = 7');
+SELECT bridge_set_policy('v2_update', 'main.orders', 'update', 'tenant = 7');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_update', TOKEN 'tok_update');
@@ -45,7 +45,7 @@ SELECT id, name, amt FROM memory.main.orders ORDER BY id;
 3	alan	250
 4	bumped	351
 
-# The hidden row is untouched: it was never reachable to be keyed.
+# The hidden row is untouched: the update policy does not reach it.
 statement ok
 UPDATE b.main.orders SET amt = 999;
 

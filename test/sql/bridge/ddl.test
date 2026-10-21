@@ -18,44 +18,43 @@ SELECT bridge_register_source('ddl', 'memory', 'tok_ddl');
 
 # A create policy names a schema, not a table.
 statement error
-SELECT bridge_policy('ddl', 'main.orders', 'create', 'true');
+SELECT bridge_set_policy('ddl', 'main.orders', 'create', 'true');
 ----
-names a schema, not a table
+'create' takes a schema name
 
 statement error
-SELECT bridge_policy('ddl', 'nope', 'create', 'true');
+SELECT bridge_set_policy('ddl', 'nope', 'create', 'true');
 ----
 schema 'nope' not found
 
 # DDL verbs take no row predicate and no WITH CHECK.
 statement error
-SELECT bridge_policy('ddl', 'main', 'create', 'id > 1');
+SELECT bridge_set_policy('ddl', 'main', 'create', 'id > 1');
 ----
-must be literally 'true'
+'create' takes only true
 
 statement error
-SELECT bridge_policy('ddl', 'main.orders', 'drop', 'id > 1');
+SELECT bridge_set_policy('ddl', 'main.orders', 'drop', 'id > 1');
 ----
-must be literally 'true'
+'drop' takes only true
 
 statement error
-SELECT bridge_policy('ddl', 'main.orders', 'alter', 'true', 'true');
+SELECT bridge_set_policy('ddl', 'main.orders', 'alter', {'using': 'true', 'check': 'true'});
 ----
-WITH CHECK predicate is only supported
+'alter' takes true or a predicate string
 
 statement ok
-SELECT bridge_policy('ddl', 'main', 'create', 'true');
+SELECT bridge_set_policy('ddl', 'main', 'create', 'true');
 
-statement error
-SELECT bridge_policy('ddl', 'main', 'create', 'true');
-----
-already defined for schema 'main'
+# Setting it again overwrites it.
+statement ok
+SELECT bridge_set_policy('ddl', 'main', 'create', 'true');
 
 statement ok
-SELECT bridge_policy('ddl', 'main.orders', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
+SELECT bridge_set_policy('ddl', 'main.orders', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
 
 statement ok
-SELECT bridge_policy('ddl', 'main.locked', 'select', 'true');
+SELECT bridge_set_policy('ddl', 'main.locked', 'select', 'true');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ddl', TOKEN 'tok_ddl');

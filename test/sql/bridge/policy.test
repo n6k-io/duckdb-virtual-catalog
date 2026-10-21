@@ -14,7 +14,7 @@ statement ok
 SELECT bridge_register_source('v2_policy', 'memory', 'tok_policy');
 
 statement ok
-SELECT bridge_policy('v2_policy', 'main.orders', 'select', 'tenant = 7');
+SELECT bridge_set_policy('v2_policy', 'main.orders', 'select', 'tenant = 7');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_policy', TOKEN 'tok_policy');

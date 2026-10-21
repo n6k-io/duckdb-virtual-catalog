@@ -14,6 +14,10 @@ markers = [
     "bridge: exercises the crossing/plan-IR bridge path",
     "provider: exercises the Arrow/UDF provider path",
     "parity: compares a backend against a native DuckDB table",
+    "backends: restricts a `backend` test to the named backends",
+    "backend_native: upstream is native DuckDB storage",
+    "backend_sqlite: upstream is a sqlite file",
+    "backend_postgres: upstream is a postgres schema",
 ]
 
 [dependency-groups]
@@ -23,10 +27,13 @@ dev = [
     "clang-tidy>=22.1.8",
     "cmake-format>=0.6.13",
     "duckdb==1.5.4",
+    "jsonschema>=4.23",
     "numpy>=2.5.2",
     "pyarrow>=25.0.1",
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
+    "python-dotenv>=1.2.4",
+    "pytz>=2026.5",
     "scipy>=1.16.3",
 ]
 

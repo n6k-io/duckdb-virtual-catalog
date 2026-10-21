@@ -1,0 +1,11 @@
+{
+  "policy_version": 1,
+  "tables": {
+    "main.users": {
+      "insert": {
+        "using": "true",
+        "check": "true"
+      }
+    }
+  }
+}

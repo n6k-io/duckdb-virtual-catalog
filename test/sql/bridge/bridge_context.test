@@ -20,7 +20,7 @@ statement ok
 SELECT bridge_register_source('ctx', 'memory', 'tok_ctx');
 
 statement error
-SELECT bridge_policy('ctx', 'main.orders', 'select', 'tenant = $tenant');
+SELECT bridge_set_policy('ctx', 'main.orders', 'select', 'tenant = $tenant');
 ----
 uses context '$tenant', which is not set
 
@@ -52,32 +52,32 @@ statement ok
 SELECT bridge_set_context('ctx', 'since', DATE '2020-06-01');
 
 statement error
-SELECT bridge_policy('ctx', 'main.orders', 'select', 'tenant = $1');
+SELECT bridge_set_policy('ctx', 'main.orders', 'select', 'tenant = $1');
 ----
 not positional ones
 
 statement error
-SELECT bridge_policy('ctx', 'main.orders', 'select', 'tenant = ?');
+SELECT bridge_set_policy('ctx', 'main.orders', 'select', 'tenant = ?');
 ----
 not positional ones
 
 statement ok
-SELECT bridge_policy('ctx', 'main.orders', 'select', 'tenant = $tenant');
+SELECT bridge_set_policy('ctx', 'main.orders', 'select', 'tenant = $tenant');
 
 statement ok
-SELECT bridge_policy('ctx', 'main.orders', 'update', 'tenant = $tenant AND region = $region', 'tenant = $tenant');
+SELECT bridge_set_policy('ctx', 'main.orders', 'update', {'using': 'tenant = $tenant AND region = $region', 'check': 'tenant = $tenant'});
 
 statement ok
-SELECT bridge_policy('ctx', 'main.orders', 'delete', 'tenant = $tenant AND since > $since');
+SELECT bridge_set_policy('ctx', 'main.orders', 'delete', 'tenant = $tenant AND since > $since');
 
 statement ok
-SELECT bridge_policy('ctx', 'main.orders', 'insert', 'true', 'tenant = $tenant');
+SELECT bridge_set_policy('ctx', 'main.orders', 'insert', 'tenant = $tenant');
 
 statement ok
 SELECT bridge_set_context('ctx', 'open', true);
 
 statement ok
-SELECT bridge_policy('ctx', 'main.gate', 'select', '$open');
+SELECT bridge_set_policy('ctx', 'main.gate', 'select', '$open');
 
 # A value that no longer makes the policies valid is refused, and the old value stays.
 statement error
@@ -97,11 +97,9 @@ SELECT id FROM b.main.orders ORDER BY id;
 statement ok
 PREPARE all_ids AS SELECT id FROM b.main.orders ORDER BY id;
 
-# Grants are frozen at attach; context is not.
-statement error
-SELECT bridge_policy('ctx', 'main.orders', 'alter', 'true');
-----
-no registered source for bridge
+# Grants stay open after attach.
+statement ok
+SELECT bridge_set_policy('ctx', 'main.orders', 'alter', 'true');
 
 statement ok
 SELECT bridge_set_context('ctx', 'tenant', 9);
@@ -230,7 +228,7 @@ SELECT bridge_set_context('ctx', 'tenant', 9);
 ----
 no registered source for bridge
 
-# Finalized before attach: the context is locked, the grants are still open until attach.
+# Finalized before attach: the context is locked, the grants are still open.
 statement ok
 SELECT bridge_register_source('ctx2', 'memory', 'tok_ctx2');
 
@@ -246,7 +244,7 @@ SELECT bridge_set_context('ctx2', 'tenant', 7);
 is finalized
 
 statement ok
-SELECT bridge_policy('ctx2', 'main.orders', 'select', 'tenant = $tenant');
+SELECT bridge_set_policy('ctx2', 'main.orders', 'select', 'tenant = $tenant');
 
 statement ok
 ATTACH '' AS b2 (TYPE virtual_catalog_bridge, ID 'ctx2', TOKEN 'tok_ctx2');

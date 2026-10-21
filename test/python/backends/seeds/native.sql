@@ -1,0 +1,26 @@
+CREATE TABLE users(id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, score INTEGER CHECK (score >= 0));
+INSERT INTO users VALUES (1, 'ana', 10), (2, 'Bo', 20), (3, 'cy', NULL), (4, 'd''x', 40);
+
+CREATE TABLE secret(id INTEGER PRIMARY KEY, password VARCHAR);
+INSERT INTO secret VALUES (1, 'hunter2');
+
+CREATE VIEW secret_view AS SELECT password FROM secret;
+
+CREATE TABLE types(
+    id INTEGER PRIMARY KEY,
+    b BOOLEAN,
+    i BIGINT,
+    f DOUBLE,
+    n DECIMAL(10, 2),
+    s VARCHAR,
+    d DATE,
+    ts TIMESTAMP,
+    tz TIMESTAMPTZ,
+    u UUID,
+    bl BLOB,
+    l INTEGER[]
+);
+INSERT INTO types VALUES
+    (1, true, 9007199254740993, 1.5, 12.34, 'x''y', DATE '2024-02-29', TIMESTAMP '2024-02-29 12:34:56.789',
+     TIMESTAMPTZ '2024-02-29 12:34:56+00', '00000000-0000-0000-0000-000000000001', '\x00\xff'::BLOB, [1, 2]),
+    (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);

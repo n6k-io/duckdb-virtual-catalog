@@ -1,0 +1,12 @@
+CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, score INTEGER CHECK (score >= 0));
+INSERT INTO users VALUES (1, 'ana', 10), (2, 'Bo', 20), (3, 'cy', NULL), (4, 'd''x', 40);
+
+CREATE TABLE secret(id INTEGER PRIMARY KEY, password TEXT);
+INSERT INTO secret VALUES (1, 'hunter2');
+
+CREATE VIEW secret_view AS SELECT password FROM secret;
+
+CREATE TABLE types(id INTEGER PRIMARY KEY, i INTEGER, f REAL, s TEXT, bl BLOB, n NUMERIC, d DATE, ts TIMESTAMP);
+INSERT INTO types VALUES
+    (1, 9007199254740993, 1.5, 'x''y', X'00FF', 12.34, '2024-02-29', '2024-02-29 12:34:56.789'),
+    (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL);

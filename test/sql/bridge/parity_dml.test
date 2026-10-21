@@ -14,10 +14,10 @@ statement ok
 SELECT bridge_register_source('v2_oc', 'memory', 'tok_oc');
 
 statement ok
-SELECT bridge_policy('v2_oc', 'main.users', v, 'true') FROM (VALUES ('select'), ('update'), ('delete')) _(v);
+SELECT bridge_set_policy('v2_oc', 'main.users', v, 'true') FROM (VALUES ('select'), ('update'), ('delete')) _(v);
 
 statement ok
-SELECT bridge_policy('v2_oc', 'main.users', 'insert', 'true', 'true');
+SELECT bridge_set_policy('v2_oc', 'main.users', 'insert', 'true');
 
 statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_oc', TOKEN 'tok_oc');

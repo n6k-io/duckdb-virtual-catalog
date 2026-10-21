@@ -1,0 +1,11 @@
+{
+  "policy_version": 1,
+  "tables": {
+    "main.users": {
+      "select": true,
+      "primary_key": {
+        "verify_unique": "SELECT 1"
+      }
+    }
+  }
+}

@@ -7,7 +7,7 @@ external server.
   per-table permissions.
 - `virtual_catalog_provider` backs tables with host-registered UDFs.
 
-- Per-table, per-verb grants (`select`/`insert`/`update`/`delete`/`alter`) with optional row policies
+- Per-table, per-verb grants with optional row policies, set as one JSON document or a setting at a time
 - Automatic PK discovery off the source table's `PRIMARY KEY` constraint
 - INSERT via DuckDB Appender, UPDATE/DELETE via prepared statements over a shared PK buffer
 - Token-based setup handshake with nonce validation
@@ -20,13 +20,18 @@ external server.
 ```sql
 LOAD virtual_catalog_bridge;
 
--- source connection: mint a token, then grant one verb at a time
+-- source connection: mint a token, then set the policy
 SELECT bridge_register_source('b1', 'memory');
 SELECT bridge_set_context('b1', 'tenant', 42);
-SELECT bridge_policy('b1', 'main.users',   'select', 'true');
-SELECT bridge_policy('b1', 'main.users',   'update', 'tenant_id = $tenant');   -- reaches, and writes, the tenant
-SELECT bridge_policy('b1', 'main.users',   'insert', 'true', 'tenant_id = $tenant');
-SELECT bridge_policy('b1', 'sales.orders', 'select', 'true');
+SELECT bridge_configure_policy('b1', '{
+  "policy_version": 1,
+  "tables": {
+    "main.users":   {"select": true, "update": "tenant_id = $tenant", "insert": "tenant_id = $tenant"},
+    "sales.orders": {"select": true}
+  }
+}');
+-- or one setting at a time
+SELECT bridge_set_policy('b1', 'main.users', 'delete', 'tenant_id = $tenant');
 
 -- target connection: the ATTACH redeems the token; app.main and app.sales are created as needed
 ATTACH '' AS app (TYPE virtual_catalog_bridge, ID b1, TOKEN '<token>');

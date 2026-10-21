@@ -11,7 +11,7 @@ statement ok
 SELECT bridge_register_source('recv_a', 'memory', 'tok_recv_a');
 
 statement ok
-SELECT bridge_policy('recv_a', 'main.users', 'select', 'true');
+SELECT bridge_set_policy('recv_a', 'main.users', 'select', 'true');
 
 # Every refusal is raised before the pending source is taken, so a bad attach costs the caller
 # neither the token nor the grant script.

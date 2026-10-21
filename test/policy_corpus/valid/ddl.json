@@ -1,0 +1,15 @@
+{
+  "policy_version": 1,
+  "schemas": {
+    "main": {
+      "create": true
+    }
+  },
+  "tables": {
+    "main.users": {
+      "select": true,
+      "alter": true,
+      "drop": true
+    }
+  }
+}

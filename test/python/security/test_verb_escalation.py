@@ -6,9 +6,10 @@ The source is compared whether or not the statement was refused: a write that er
 reaching the source is still a breach.
 """
 
+import duckdb
 import pytest
 
-from security.world import HIDDEN
+from security.world import HIDDEN, SETUP
 
 WRITES = {
     "insert": "INSERT INTO app.main.users VALUES (9, 1)",
@@ -36,21 +37,66 @@ def test_select_only_grant_refuses_every_write(attacker, sql):
     assert after == before, f"source changed\n  before {before}\n  after  {after}"
 
 
-def test_granted_delete_cannot_reach_rows_the_policy_hides(attacker_granted_delete):
+READING_DELETES = {
+    "where": "DELETE FROM app.main.users WHERE tenant = 2",
+    "returning": "DELETE FROM app.main.users RETURNING id",
+}
+
+
+@pytest.mark.parametrize("sql", READING_DELETES.values(), ids=READING_DELETES.keys())
+def test_granted_delete_reading_rows_cannot_reach_rows_the_policy_hides(attacker_granted_delete, sql):
     """
-    ATTACK  delete by a predicate matching only rows the select policy hides
+    ATTACK  a delete that reads its rows, under an unrestricted delete grant
     BREACH  a tenant-2 row disappears
     PASS    tenant 2 intact
 
-    DELETE resolves rows through a scan, so the select policy is what confines it even though the
-    delete grant itself is unrestricted.
+    Reading the rows takes the select policy, so it confines the delete.
     """
     source, target = attacker_granted_delete
 
     try:
-        target.execute("DELETE FROM app.main.users WHERE tenant = 2")
+        target.execute(sql)
     except Exception:  # noqa: BLE001
         pass
 
     survivors = {row[0] for row in source.execute("SELECT id FROM users").fetchall()}
     assert HIDDEN <= survivors, f"deleted hidden rows {sorted(HIDDEN - survivors)}"
+
+
+def test_granted_delete_reading_no_row_reaches_what_it_grants(attacker_granted_delete):
+    """A delete reading nothing is governed by the delete policy alone, here `true`."""
+    source, target = attacker_granted_delete
+
+    assert target.execute("DELETE FROM app.main.users").fetchall() == [(4,)]
+    assert source.execute("SELECT count(*) FROM users").fetchall() == [(0,)]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "UPDATE app.main.users SET tenant = 3 WHERE id = 1",
+        "UPDATE app.main.users SET tenant = tenant + 1",
+        "DELETE FROM app.main.users WHERE id = 1",
+        "DELETE FROM app.main.users RETURNING id",
+        "SELECT * FROM app.main.users",
+    ],
+)
+def test_write_grant_without_select_refuses_reading_rows(bridged, sql):
+    source, target, handshake = bridged
+    source.execute(SETUP)
+    handshake(source, target, {"users": {"update": "true", "delete": "true"}})
+    before = source.execute("SELECT * FROM users ORDER BY id").fetchall()
+
+    with pytest.raises(duckdb.PermissionException, match="does not have 'select' permission"):
+        target.execute(sql)
+    assert source.execute("SELECT * FROM users ORDER BY id").fetchall() == before
+
+
+def test_write_grant_without_select_takes_writes_reading_no_row(bridged):
+    source, target, handshake = bridged
+    source.execute(SETUP)
+    handshake(source, target, {"users": {"update": "true", "delete": "true"}})
+
+    assert target.execute("UPDATE app.main.users SET tenant = 9").fetchall() == [(4,)]
+    assert target.execute("DELETE FROM app.main.users").fetchall() == [(4,)]
+    assert source.execute("SELECT count(*) FROM users").fetchall() == [(0,)]

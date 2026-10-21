@@ -153,6 +153,15 @@ static unique_ptr<GlobalTableFunctionState> ProviderScanInitGlobal(ClientContext
 			    "virtual_catalog_provider: read UDF for '%s' returned an unreadable Arrow schema",
 			    bind_data.owned_stream_data->provider_table_name);
 		}
+		try {
+			vcat_provider::ThrowOnMismatchedExtensionStorage(context, stream_schema,
+			                                                 "virtual_catalog_provider: read UDF");
+		} catch (...) {
+			if (stream_schema.release) {
+				stream_schema.release(&stream_schema);
+			}
+			throw;
+		}
 		// Checked against what the schema UDF declared. Unchecked, a short result leaves projected
 		// columns unmapped and ArrowToDuckDB indexes a column that was never added, and a column
 		// returned as utf8 where INTEGER was declared is read as the offsets buffer.

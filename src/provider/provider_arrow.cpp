@@ -4,10 +4,12 @@
 #include "arrow_frame_decoder.hpp"
 #include "sql_build.hpp"
 
+#include "duckdb/common/arrow/schema_metadata.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/table/arrow/arrow_duck_schema.hpp"
 #include "duckdb/function/table/arrow.hpp"
+#include "duckdb/main/config.hpp"
 #include "duckdb/main/connection.hpp"
 #include "nanoarrow.h"
 
@@ -113,6 +115,34 @@ void PreloadedRelease(ArrowArrayStream *stream) {
 
 } // namespace
 
+void ThrowOnMismatchedExtensionStorage(ClientContext &context, const ArrowSchema &schema, const char *what) {
+	if (schema.metadata && schema.format) {
+		ArrowSchemaMetadata metadata(schema.metadata);
+		if (metadata.HasExtension()) {
+			auto &config = DBConfig::GetConfig(context);
+			auto info = metadata.GetExtensionInfo(schema.format);
+			if (config.HasArrowExtension(info)) {
+				auto registered = config.GetArrowExtension(info).GetInfo().GetArrowFormat();
+				if (!registered.empty() && registered != schema.format) {
+					ArrowStringView name {nullptr, 0};
+					ArrowMetadataGetValue(schema.metadata, ArrowCharView(ArrowSchemaMetadata::ARROW_EXTENSION_NAME),
+					                      &name);
+					throw IOException("%s: column '%s' is tagged %s, which must be stored as '%s', not '%s'", what,
+					                  schema.name ? schema.name : "",
+					                  string(name.data ? name.data : "", NumericCast<size_t>(name.size_bytes)),
+					                  registered, schema.format);
+				}
+			}
+		}
+	}
+	for (int64_t i = 0; i < schema.n_children; i++) {
+		ThrowOnMismatchedExtensionStorage(context, *schema.children[i], what);
+	}
+	if (schema.dictionary) {
+		ThrowOnMismatchedExtensionStorage(context, *schema.dictionary, what);
+	}
+}
+
 DecodedProviderSchema DecodeSchemaMessage(ClientContext &context, const string &ipc_bytes, const char *what) {
 	if (ipc_bytes.empty()) {
 		throw IOException("%s: the provider returned an empty Arrow schema", what);
@@ -123,6 +153,7 @@ DecodedProviderSchema DecodeSchemaMessage(ClientContext &context, const string &
 		throw IOException("%s: the provider's Arrow payload carried no schema message", what);
 	}
 	const auto *schema = decoder.GetSchema();
+	ThrowOnMismatchedExtensionStorage(context, *schema, what);
 
 	DecodedProviderSchema result;
 	result.primary_keys = ReadPrimaryKeys(*schema);
@@ -185,6 +216,14 @@ TrailingColumns DescribeTrailingColumns(ClientContext &context, ArrowArrayStream
 	}
 	for (idx_t i = column_count - count; i < column_count; i++) {
 		auto &child = *schema.children[i];
+		try {
+			ThrowOnMismatchedExtensionStorage(context, child, what);
+		} catch (...) {
+			if (schema.release) {
+				schema.release(&schema);
+			}
+			throw;
+		}
 		result.types.push_back(ArrowType::GetArrowLogicalType(context, child)->GetDuckType(true));
 		result.formats.push_back(child.format ? string(child.format) : string());
 	}

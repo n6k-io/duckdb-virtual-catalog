@@ -26,16 +26,19 @@ statement ok
 SELECT bridge_register_source('bnd', 'memory', 'tok_bnd');
 
 statement ok
-SELECT bridge_policy('bnd', 'main', 'create', 'true');
+SELECT bridge_set_policy('bnd', 'main', 'create', 'true');
 
 statement ok
-SELECT bridge_policy('bnd', 'main.served', 'select', 'tenant = 7');
+SELECT bridge_set_context('bnd', 'role', 'admin');
 
 statement ok
-SELECT bridge_policy('bnd', 'main.served', v, 'true') FROM (VALUES ('alter'), ('drop')) _(v);
+SELECT bridge_set_policy('bnd', 'main.served', 'select', '$role = ''admin'' OR tenant = 7');
 
 statement ok
-SELECT bridge_policy('bnd', 'aux.shadowed', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
+SELECT bridge_set_policy('bnd', 'main.served', v, 'true') FROM (VALUES ('alter'), ('drop')) _(v);
+
+statement ok
+SELECT bridge_set_policy('bnd', 'aux.shadowed', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'bnd', TOKEN 'tok_bnd');
@@ -93,6 +96,45 @@ SELECT count(*) FROM bridge_table_permissions('b') WHERE name = 'ungranted';
 ----
 0
 
+statement ok
+USE b;
+
+statement error
+CREATE TABLE fk_probe(uid INTEGER REFERENCES served(id));
+----
+cannot declare a foreign key
+
+statement ok
+USE memory;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE table_name = 'fk_probe';
+----
+0
+
+statement error
+CREATE TABLE b.main.expr_default(id INTEGER PRIMARY KEY, x VARCHAR DEFAULT current_database());
+----
+must be a constant
+
+statement error
+CREATE TABLE b.main.expr_generated(id INTEGER PRIMARY KEY, x INTEGER GENERATED ALWAYS AS (id + 1));
+----
+generated column
+
+statement error
+CREATE TABLE b.main.expr_check(id INTEGER PRIMARY KEY, x INTEGER CHECK (x < 5));
+----
+CHECK constraint
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE table_name LIKE 'expr_%';
+----
+0
+
+statement ok
+CREATE TABLE b.main.const_default(id INTEGER PRIMARY KEY, x INTEGER DEFAULT 7);
+
 # ---------------------------------------------------------------------------
 # A table without a key is not granted verbs that need one.
 # ---------------------------------------------------------------------------
@@ -129,3 +171,15 @@ query II
 SELECT id, memo FROM b.main.served;
 ----
 1	NULL
+
+# ---------------------------------------------------------------------------
+# An alter is refused once the select policy hides rows from this target.
+# ---------------------------------------------------------------------------
+
+statement ok
+SELECT bridge_set_context('bnd', 'role', 'user');
+
+statement error
+ALTER TABLE b.main.served ADD COLUMN other VARCHAR;
+----
+cannot see the full table

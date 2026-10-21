@@ -11,10 +11,10 @@ statement ok
 SELECT bridge_register_source('ins_plan', 'memory', 'tok_ins_plan');
 
 statement ok
-SELECT bridge_policy('ins_plan', 'main.t', 'select', 'true');
+SELECT bridge_set_policy('ins_plan', 'main.t', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('ins_plan', 'main.t', 'insert', 'true', 'true');
+SELECT bridge_set_policy('ins_plan', 'main.t', 'insert', 'true');
 
 statement ok
 ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ins_plan', TOKEN 'tok_ins_plan');
@@ -78,10 +78,10 @@ statement ok
 SELECT bridge_register_source('ins_check', 'memory', 'tok_ins_check');
 
 statement ok
-SELECT bridge_policy('ins_check', 'main.c', 'select', 'true');
+SELECT bridge_set_policy('ins_check', 'main.c', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('ins_check', 'main.c', 'insert', 'true', 'amt < 100');
+SELECT bridge_set_policy('ins_check', 'main.c', 'insert', 'amt < 100');
 
 statement ok
 ATTACH '' AS ck (TYPE virtual_catalog_bridge, ID 'ins_check', TOKEN 'tok_ins_check');

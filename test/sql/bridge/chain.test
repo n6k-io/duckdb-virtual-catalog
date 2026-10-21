@@ -14,10 +14,10 @@ statement ok
 SELECT bridge_register_source('chain_inner', 'memory', 'tok_chain_inner');
 
 statement ok
-SELECT bridge_policy('chain_inner', 'main.users', 'select', 'id <= 2');
+SELECT bridge_set_policy('chain_inner', 'main.users', 'select', 'id <= 2');
 
 statement ok
-SELECT bridge_policy('chain_inner', 'main.users', 'update', 'true');
+SELECT bridge_set_policy('chain_inner', 'main.users', 'update', 'true');
 
 statement ok
 ATTACH '' AS inner_hop (TYPE virtual_catalog_bridge, ID 'chain_inner', TOKEN 'tok_chain_inner');
@@ -26,10 +26,10 @@ statement ok
 SELECT bridge_register_source('chain_outer', 'inner_hop', 'tok_chain_outer');
 
 statement ok
-SELECT bridge_policy('chain_outer', 'main.users', 'select', 'true');
+SELECT bridge_set_policy('chain_outer', 'main.users', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('chain_outer', 'main.users', 'update', 'true');
+SELECT bridge_set_policy('chain_outer', 'main.users', 'update', 'true');
 
 statement ok
 ATTACH '' AS outer_hop (TYPE virtual_catalog_bridge, ID 'chain_outer', TOKEN 'tok_chain_outer');

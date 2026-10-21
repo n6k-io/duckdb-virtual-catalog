@@ -17,13 +17,13 @@ statement ok
 SELECT bridge_register_source('ic', 'memory', 'tok_ic');
 
 statement ok
-SELECT bridge_policy('ic', 'main.src', 'select', 'true');
+SELECT bridge_set_policy('ic', 'main.src', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('ic', 'main.dst', 'select', 'true');
+SELECT bridge_set_policy('ic', 'main.dst', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('ic', 'main.dst', 'insert', 'true', 'true');
+SELECT bridge_set_policy('ic', 'main.dst', 'insert', 'true');
 
 statement ok
 ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ic', TOKEN 'tok_ic');
@@ -75,13 +75,13 @@ statement ok
 SELECT bridge_register_source('ig', 'memory', 'tok_ig');
 
 statement ok
-SELECT bridge_policy('ig', 'main.src', 'select', 'true');
+SELECT bridge_set_policy('ig', 'main.src', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('ig', 'main.guarded', 'select', 'true');
+SELECT bridge_set_policy('ig', 'main.guarded', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('ig', 'main.guarded', 'insert', 'true', 'amt < 15');
+SELECT bridge_set_policy('ig', 'main.guarded', 'insert', 'amt < 15');
 
 statement ok
 ATTACH '' AS g (TYPE virtual_catalog_bridge, ID 'ig', TOKEN 'tok_ig');

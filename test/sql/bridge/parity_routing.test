@@ -20,13 +20,13 @@ statement ok
 SELECT bridge_register_source('v2_ws_b', 'memory', 'tok_ws');
 
 statement ok
-SELECT bridge_policy('v2_ws_b', 'main.users', v, 'true') FROM (VALUES ('select'), ('update'), ('delete')) _(v);
+SELECT bridge_set_policy('v2_ws_b', 'main.users', v, 'true') FROM (VALUES ('select'), ('update'), ('delete')) _(v);
 
 statement ok
-SELECT bridge_policy('v2_ws_b', 'main.users', 'insert', 'true', 'true');
+SELECT bridge_set_policy('v2_ws_b', 'main.users', 'insert', 'true');
 
 statement ok
-SELECT bridge_policy('v2_ws_b', 'main.logs', 'select', 'true');
+SELECT bridge_set_policy('v2_ws_b', 'main.logs', 'select', 'true');
 
 statement ok
 ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_ws_b', TOKEN 'tok_ws');

@@ -1,0 +1,18 @@
+{
+  "policy_version": 1,
+  "tables": {
+    "main.users": {
+      "select": true,
+      "primary_key": [
+        "id"
+      ]
+    },
+    "main.orgs": {
+      "select": true,
+      "primary_key": {
+        "columns_from_query": "SELECT 'id'",
+        "verify_unique": "SELECT id FROM memory.main.orgs GROUP BY id HAVING count(*) > 1"
+      }
+    }
+  }
+}

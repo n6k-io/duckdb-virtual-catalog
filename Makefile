@@ -20,10 +20,11 @@ JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc)
 test-cpp:
 	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
 	@cmake "$(CPP_TEST_BUILD_DIR)" > "$(CPP_TEST_LOG)" 2>&1 || { cat "$(CPP_TEST_LOG)"; exit 1; }
-	@echo "building vcat_provider_unittest..."
-	@cmake --build "$(CPP_TEST_BUILD_DIR)" --target vcat_provider_unittest -j$(JOBS) \
+	@echo "building vcat_provider_unittest vcat_bridge_unittest..."
+	@cmake --build "$(CPP_TEST_BUILD_DIR)" --target vcat_provider_unittest vcat_bridge_unittest -j$(JOBS) \
 		>> "$(CPP_TEST_LOG)" 2>&1 || { cat "$(CPP_TEST_LOG)"; exit 1; }
 	@"$(CPP_TEST_BUILD_DIR)/vcat_provider_unittest" $(CPP_TEST_ARGS)
+	@"$(CPP_TEST_BUILD_DIR)/vcat_bridge_unittest" $(CPP_TEST_ARGS)
 
 PYTEST=uv run pytest test/python
 

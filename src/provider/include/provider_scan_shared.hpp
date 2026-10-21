@@ -10,6 +10,7 @@
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/types/hugeint.hpp"
+#include "duckdb/common/types/interval.hpp"
 #include "duckdb/function/table/arrow.hpp"
 
 #include <cstdlib>
@@ -61,6 +62,11 @@ struct ProviderScanFunctionData : public ArrowScanFunctionData {
 // so an unknown string layout is rejected, not guessed at.
 inline Value ReadArrowValue(ArrowArray &array, idx_t pos, const LogicalType &type, const char *format,
                             const char *context) {
+	if (array.dictionary || array.n_buffers < 2 || !array.buffers[1]) {
+		throw IOException("%s: primary key column uses the Arrow layout '%s', which cannot be read as a key", context,
+		                  format);
+	}
+
 	if (array.buffers[0]) {
 		auto *validity = reinterpret_cast<const uint8_t *>(array.buffers[0]);
 		auto bit_idx = array.offset + pos;
@@ -114,15 +120,82 @@ inline Value ReadArrowValue(ArrowArray &array, idx_t pos, const LogicalType &typ
 		}
 	}
 
+	auto *int32s = reinterpret_cast<const int32_t *>(array.buffers[1]);
+	auto *int64s = reinterpret_cast<const int64_t *>(array.buffers[1]);
+	if (format[0] == 't') {
+		const string layout(format);
+		if (layout == "tdD" && type.id() == LogicalTypeId::DATE) {
+			return Value::DATE(date_t(int32s[offset]));
+		}
+		if (layout == "tdm" && type.id() == LogicalTypeId::DATE) {
+			return Value::DATE(
+			    date_t(NumericCast<int32_t>(int64s[offset] / (Interval::MSECS_PER_SEC * Interval::SECS_PER_DAY))));
+		}
+		if (layout == "tts" && type.id() == LogicalTypeId::TIME) {
+			return Value::TIME(dtime_t(int32s[offset] * Interval::MICROS_PER_SEC));
+		}
+		if (layout == "ttm" && type.id() == LogicalTypeId::TIME) {
+			return Value::TIME(dtime_t(int32s[offset] * Interval::MICROS_PER_MSEC));
+		}
+		if (layout == "ttu" && type.id() == LogicalTypeId::TIME) {
+			return Value::TIME(dtime_t(int64s[offset]));
+		}
+		if (layout == "ttn" && type.id() == LogicalTypeId::TIME_NS) {
+			return Value::TIME_NS(dtime_ns_t(int64s[offset]));
+		}
+		if (layout == "tss:" && type.id() == LogicalTypeId::TIMESTAMP_SEC) {
+			return Value::TIMESTAMPSEC(timestamp_sec_t(int64s[offset]));
+		}
+		if (layout == "tsm:" && type.id() == LogicalTypeId::TIMESTAMP_MS) {
+			return Value::TIMESTAMPMS(timestamp_ms_t(int64s[offset]));
+		}
+		if (layout == "tsu:" && type.id() == LogicalTypeId::TIMESTAMP) {
+			return Value::TIMESTAMP(timestamp_t(int64s[offset]));
+		}
+		if (layout == "tsn:" && type.id() == LogicalTypeId::TIMESTAMP_NS) {
+			return Value::TIMESTAMPNS(timestamp_ns_t(int64s[offset]));
+		}
+		if (layout.size() > 4 && layout[1] == 's' && layout[3] == ':' && type.id() == LogicalTypeId::TIMESTAMP_TZ) {
+			auto raw = int64s[offset];
+			switch (layout[2]) {
+			case 's':
+				return Value::TIMESTAMPTZ(timestamp_tz_t(raw * Interval::MICROS_PER_SEC));
+			case 'm':
+				return Value::TIMESTAMPTZ(timestamp_tz_t(raw * Interval::MICROS_PER_MSEC));
+			case 'u':
+				return Value::TIMESTAMPTZ(timestamp_tz_t(raw));
+			case 'n':
+				return Value::TIMESTAMPTZ(timestamp_tz_t(raw / Interval::NANOS_PER_MICRO));
+			default:
+				break;
+			}
+		}
+		throw IOException("%s: primary key column has Arrow layout '%s' but DuckDB type %s", context, format,
+		                  type.ToString());
+	}
+
+	const bool single = format[1] == '\0';
 	switch (type.InternalType()) {
 	case PhysicalType::INT8:
-		return Value::TINYINT(reinterpret_cast<const int8_t *>(array.buffers[1])[offset]);
+		if (single && format[0] == 'c') {
+			return Value::TINYINT(reinterpret_cast<const int8_t *>(array.buffers[1])[offset]);
+		}
+		break;
 	case PhysicalType::INT16:
-		return Value::SMALLINT(reinterpret_cast<const int16_t *>(array.buffers[1])[offset]);
+		if (single && format[0] == 's') {
+			return Value::SMALLINT(reinterpret_cast<const int16_t *>(array.buffers[1])[offset]);
+		}
+		break;
 	case PhysicalType::INT32:
-		return Value::INTEGER(reinterpret_cast<const int32_t *>(array.buffers[1])[offset]);
+		if (single && format[0] == 'i') {
+			return Value::INTEGER(int32s[offset]);
+		}
+		break;
 	case PhysicalType::INT64:
-		return Value::BIGINT(reinterpret_cast<const int64_t *>(array.buffers[1])[offset]);
+		if (single && format[0] == 'l') {
+			return Value::BIGINT(int64s[offset]);
+		}
+		break;
 	case PhysicalType::VARCHAR: {
 		// Offsets in buffers[1], char data in buffers[2]; the offset WIDTH is what the format says.
 		auto *data = reinterpret_cast<const char *>(array.buffers[2]);
@@ -143,6 +216,8 @@ inline Value ReadArrowValue(ArrowArray &array, idx_t pos, const LogicalType &typ
 	default:
 		throw IOException("%s: unsupported primary key column type: %s", context, type.ToString());
 	}
+	throw IOException("%s: primary key column has Arrow layout '%s' but DuckDB type %s", context, format,
+	                  type.ToString());
 }
 
 // The row ids written to `rowid_vec` are indices into the PK buffer this call appends to.

@@ -14,10 +14,10 @@ statement ok
 SELECT bridge_register_source('ctas', 'memory', 'tok_ctas');
 
 statement ok
-SELECT bridge_policy('ctas', 'main', 'create', 'true');
+SELECT bridge_set_policy('ctas', 'main', 'create', 'true');
 
 statement ok
-SELECT bridge_policy('ctas', 'main.orders', 'select', 'amt > 100');
+SELECT bridge_set_policy('ctas', 'main.orders', 'select', 'amt > 100');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ctas', TOKEN 'tok_ctas');

@@ -14,13 +14,13 @@ statement ok
 SELECT bridge_register_source('v2_pol_rw', 'memory', 'tok_rw');
 
 statement ok
-SELECT bridge_policy('v2_pol_rw', 'main.orders', 'select', 'true');
+SELECT bridge_set_policy('v2_pol_rw', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v2_pol_rw', 'main.orders', 'update', 'tenant_id = 1');
+SELECT bridge_set_policy('v2_pol_rw', 'main.orders', 'update', 'tenant_id = 1');
 
 statement ok
-SELECT bridge_policy('v2_pol_rw', 'main.orders', 'delete', 'amt = 50');
+SELECT bridge_set_policy('v2_pol_rw', 'main.orders', 'delete', 'amt = 50');
 
 statement ok
 ATTACH '' AS rw (TYPE virtual_catalog_bridge, ID 'v2_pol_rw', TOKEN 'tok_rw');
@@ -80,10 +80,10 @@ statement ok
 SELECT bridge_register_source('v2_pol_wc', 'memory', 'tok_wc');
 
 statement ok
-SELECT bridge_policy('v2_pol_wc', 'main.orders', 'select', 'true');
+SELECT bridge_set_policy('v2_pol_wc', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v2_pol_wc', 'main.orders', 'insert', 'true', 'amt >= 0');
+SELECT bridge_set_policy('v2_pol_wc', 'main.orders', 'insert', 'amt >= 0');
 
 statement ok
 ATTACH '' AS wc (TYPE virtual_catalog_bridge, ID 'v2_pol_wc', TOKEN 'tok_wc');

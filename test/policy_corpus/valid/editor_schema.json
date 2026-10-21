@@ -1,0 +1,4 @@
+{
+  "$schema": "https://github.com/n6k-io/duckdb-virtual-catalog/docs/policy-v1.schema.json",
+  "policy_version": 1
+}

@@ -1,0 +1,176 @@
+# name: test/sql/bridge/configure_policy.test
+# description: bridge_configure_policy installs a whole policy document, all or nothing, before or after ATTACH.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, tenant INTEGER, name VARCHAR);
+
+statement ok
+INSERT INTO memory.main.users VALUES (1, 1, 'ada'), (2, 2, 'grace');
+
+statement ok
+CREATE TABLE memory.main.orgs(id INTEGER PRIMARY KEY, name VARCHAR);
+
+statement ok
+INSERT INTO memory.main.orgs VALUES (10, 'acme');
+
+statement ok
+CREATE TABLE memory.main.members(id INTEGER PRIMARY KEY, org_id INTEGER REFERENCES orgs(id));
+
+statement ok
+CREATE TABLE memory.main.nopk(x INTEGER, y VARCHAR);
+
+statement ok
+INSERT INTO memory.main.nopk VALUES (1, 'a'), (2, 'b');
+
+statement ok
+CREATE TABLE memory.main."odd.name"(id INTEGER);
+
+statement ok
+SELECT bridge_register_source('cp', 'memory', 'tok_cp');
+
+# --- the document itself ----------------------------------------------------
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1,');
+----
+not valid JSON
+
+statement error
+SELECT bridge_configure_policy('cp', '{"tables": {}}');
+----
+policy_version is required
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 2}');
+----
+supports policy_version 1
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"selct": true}}}');
+----
+tables."main.users": unknown key "selct"
+
+# --- checks against the source name the setting that failed -----------------
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.nosuch": {"select": true}}}');
+----
+tables."main.nosuch": 'main.nosuch' not found
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"select": "tenantt = 1"}}}');
+----
+tables."main.users".select:
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"select": true, "primary_key": ["nosuch"]}}}');
+----
+tables."main.users".primary_key: 'nosuch' is not a column of 'main.users'
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"other.main.users": {"select": true}}}');
+----
+names catalog 'other'
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"select": true, "foreign_keys": ["main.orgs"]}}}');
+----
+has no foreign key to 'main.orgs'
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"select": true}, "main.USERS": {"select": true}}}');
+----
+the key "main.USERS" appears twice
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"select": true}, "memory.main.users": {"select": true}}}');
+----
+configured twice
+
+# --- order inside the document does not matter ------------------------------
+
+statement ok
+SELECT bridge_configure_policy('cp', '{
+  "policy_version": 1,
+  "tables": {
+    "main.members": {"foreign_keys": ["main.orgs"], "insert": true, "select": true},
+    "memory.main.users": {"update": "tenant = 1", "select": "tenant = 1"},
+    "main.nopk": {"primary_key": {"columns": ["x"], "verify_unique": "SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1"}, "select": true, "delete": true},
+    "main.\"odd.name\"": {"select": true}
+  },
+  "schemas": {"main": {"create": true}}
+}');
+
+# A failed document leaves the installed policy as it was.
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.orgs": {"select": true}, "main.nosuch": {"select": true}}}');
+----
+not found
+
+statement ok
+ATTACH '' AS c (TYPE virtual_catalog_bridge, ID 'cp', TOKEN 'tok_cp');
+
+query TTT
+SELECT name, verbs, primary_key FROM bridge_table_permissions('c') ORDER BY name;
+----
+members	[select, insert]	[id]
+nopk	[select, delete]	[x]
+odd.name	[select]	[]
+users	[select, update]	[id]
+
+query IT
+SELECT id, name FROM c.main.users;
+----
+1	ada
+
+statement ok
+DELETE FROM c.main.nopk WHERE x = 1;
+
+# --- after ATTACH, a document replaces the policy for the next statement ----
+
+statement ok
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"select": true}}}');
+
+query I
+SELECT count(*) FROM c.main.users;
+----
+2
+
+statement error
+SELECT * FROM c.main.nopk;
+----
+does not exist
+
+# A table entry must grant a verb.
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"primary_key": ["id"]}}}');
+----
+grants no verb
+
+query I
+SELECT count(*) FROM c.main.users;
+----
+2
+
+statement ok
+SELECT bridge_finalize_policy('cp');
+
+statement error
+SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"select": true}}}');
+----
+finalized
+
+# --- bridge_policy and bridge_primary_key do not exist ----------------------
+
+statement error
+SELECT bridge_policy('cp', 'main.users', 'select', 'true');
+----
+does not exist
+
+statement error
+SELECT bridge_primary_key('cp', 'main.users', ['id']);
+----
+does not exist

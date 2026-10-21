@@ -17,13 +17,13 @@ statement ok
 SELECT bridge_register_source('v2_insert', 'memory', 'tok_insert');
 
 statement ok
-SELECT bridge_policy('v2_insert', 'main.orders', 'select', 'true');
+SELECT bridge_set_policy('v2_insert', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_policy('v2_insert', 'main.orders', 'insert', 'true', 'true');
+SELECT bridge_set_policy('v2_insert', 'main.orders', 'insert', 'true');
 
 statement ok
-SELECT bridge_policy('v2_insert', 'main.readonly', 'select', 'true');
+SELECT bridge_set_policy('v2_insert', 'main.readonly', 'select', 'true');
 
 statement ok
 ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_insert', TOKEN 'tok_insert');

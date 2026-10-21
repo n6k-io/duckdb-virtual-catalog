@@ -1,0 +1,116 @@
+# name: test/sql/bridge/validate_policy_config.test
+# description: bridge_validate_policy_config checks a policy document against a catalog without a bridge.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, tenant INTEGER, name VARCHAR);
+
+statement ok
+CREATE TABLE memory.main.orgs(id INTEGER PRIMARY KEY, name VARCHAR);
+
+statement ok
+CREATE TABLE memory.main.members(id INTEGER PRIMARY KEY, org_id INTEGER REFERENCES orgs(id));
+
+statement ok
+CREATE TABLE memory.main.nopk(x INTEGER, y VARCHAR);
+
+statement ok
+INSERT INTO memory.main.nopk VALUES (1, 'a'), (1, 'b');
+
+statement ok
+CREATE VIEW memory.main.v AS SELECT * FROM memory.main.users;
+
+query I
+SELECT count(*) FROM bridge_validate_policy_config('memory', '{
+  "policy_version": 1,
+  "tables": {
+    "main.members": {"foreign_keys": ["main.orgs"], "insert": true, "select": true},
+    "main.users": {"update": "tenant = 1", "select": "tenant = 1"},
+    "main.v": {"select": true}
+  },
+  "schemas": {"main": {"create": true}}
+}');
+----
+0
+
+# Every failing setting is reported, not just the first.
+query TT
+SELECT path, severity FROM bridge_validate_policy_config('memory', '{
+  "policy_version": 1,
+  "tables": {
+    "main.nosuch": {"select": true},
+    "main.users": {"select": "tenantt = 1", "primary_key": ["nosuch"]},
+    "main.v": {"insert": {"check": true}},
+    "main.nopk": {"select": true, "foreign_keys": ["main.orgs"]},
+    "main.members": {"select": true, "alter": "id = 1"}
+  }
+}') ORDER BY path;
+----
+tables."main.members".alter	error
+tables."main.nopk".foreign_keys	error
+tables."main.nosuch"	error
+tables."main.users".primary_key	error
+tables."main.users".select	error
+tables."main.v".insert	error
+
+query T
+SELECT message FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.nosuch": {"select": true}}}');
+----
+'main.nosuch' not found in catalog 'memory' on source
+
+# An entry that grants no verb fails parsing, so nothing else is checked.
+query TTI
+SELECT path, severity, message LIKE '%grants no verb%' FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"primary_key": ["id"]}}}');
+----
+NULL	error	true
+
+# delete needs no select.
+query I
+SELECT count(*) FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"delete": true}}}');
+----
+0
+
+# Checks that need the whole policy, as ATTACH runs them.
+query TTI
+SELECT path, severity, message LIKE '%has no policies%' FROM bridge_validate_policy_config('memory', '{"policy_version": 1}');
+----
+NULL	error	true
+
+# A predicate over context is parsed but not bound.
+query TT
+SELECT path, severity FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"select": "tenant = $tenant"}}}');
+----
+tables."main.users".select	unchecked
+
+query TT
+SELECT path, severity FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"select": "tenant = $1"}}}');
+----
+tables."main.users".select	error
+
+# A key the source checks with a query depends on the data it holds now.
+query TT
+SELECT path, severity FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.nopk": {"select": true, "primary_key": {"columns": ["x"], "verify_unique": "SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1"}}}}');
+----
+tables."main.nopk".primary_key	data_dependent
+
+query TTI
+SELECT path, severity, message LIKE '%not valid JSON%' FROM bridge_validate_policy_config('memory', '{"policy_version": 1,');
+----
+NULL	error	true
+
+statement error
+SELECT * FROM bridge_validate_policy_config(NULL, '{"policy_version": 1}');
+----
+cannot be NULL
+
+statement error
+SELECT * FROM bridge_validate_policy_config('nosuch', '{"policy_version": 1}');
+----
+source catalog 'nosuch' does not exist
+
+statement error
+SELECT * FROM bridge_validate_policy_config('system', '{"policy_version": 1}');
+----
+temporary or system catalog

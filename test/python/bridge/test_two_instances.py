@@ -110,7 +110,7 @@ def test_only_the_source_drives_a_live_context(source, target):
     bridge_id = unique_id()
     token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
     source.execute("SELECT bridge_set_context(?, 'tenant', 7)", [bridge_id])
-    source.execute("SELECT bridge_policy(?, 'main.orders', 'select', 'tenant = $tenant')", [bridge_id])
+    source.execute("SELECT bridge_set_policy(?, 'main.orders', 'select', 'tenant = $tenant')", [bridge_id])
 
     with pytest.raises(duckdb_error(), match="different source connection"):
         target.execute("SELECT bridge_set_context(?, 'tenant', 9)", [bridge_id])

@@ -16,7 +16,7 @@ inline string DescribeKeyColumns(const vector<string> &pk_cols) {
 }
 
 // Every row counted in `keys_sent` is itself written, so `affected` exceeds it only when a key
-// reached a row the scan did not name -- one the select policy hid. Naming the value would widen
+// reached a row the scan did not name -- one the scan was not shown. Naming the value would widen
 // the write-path existence oracle: the count says a hidden row exists, the value would say which.
 inline void EnsureKeyIsUnique(idx_t affected, idx_t keys_sent, const string &table, const vector<string> &pk_cols,
                               const char *verb) {

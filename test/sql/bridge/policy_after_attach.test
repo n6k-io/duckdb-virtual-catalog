@@ -1,0 +1,230 @@
+# name: test/sql/bridge/policy_after_attach.test
+# description: grants and keys changed after ATTACH reach the next statement; bridge_finalize_policy locks them.
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
+
+statement ok
+INSERT INTO memory.main.users VALUES (1, 'ada'), (2, 'grace');
+
+statement ok
+CREATE TABLE memory.main.extra(id INTEGER PRIMARY KEY, note VARCHAR);
+
+statement ok
+INSERT INTO memory.main.extra VALUES (1, 'x');
+
+statement ok
+CREATE TABLE memory.main.nopk(x INTEGER, y VARCHAR);
+
+statement ok
+INSERT INTO memory.main.nopk VALUES (1, 'a'), (2, 'b');
+
+statement ok
+CREATE SCHEMA memory.side;
+
+statement ok
+CREATE TABLE memory.side.t(id INTEGER PRIMARY KEY);
+
+statement ok
+INSERT INTO memory.side.t VALUES (5);
+
+statement ok
+SELECT bridge_register_source('pa', 'memory', 'tok_pa');
+
+statement ok
+SELECT bridge_set_policy('pa', 'main.users', 'select', 'true');
+
+statement ok
+ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'pa', TOKEN 'tok_pa');
+
+statement error
+SELECT * FROM b.main.extra;
+----
+does not exist
+
+# A new table in a served schema.
+statement ok
+SELECT bridge_set_policy('pa', 'main.extra', 'select', 'true');
+
+query IT
+SELECT id, note FROM b.main.extra;
+----
+1	x
+
+# A new verb on a granted table.
+statement error
+INSERT INTO b.main.extra VALUES (2, 'y');
+----
+does not have 'insert' permission
+
+statement ok
+SELECT bridge_set_policy('pa', 'main.extra', 'insert', 'true');
+
+statement ok
+INSERT INTO b.main.extra VALUES (2, 'y');
+
+query I
+SELECT count(*) FROM memory.main.extra;
+----
+2
+
+# Setting a verb again overwrites it.
+statement ok
+SELECT bridge_set_policy('pa', 'main.extra', 'insert', 'true');
+
+# A new verb with a restricting predicate on a granted table.
+statement ok
+SELECT bridge_set_policy('pa', 'main.extra', 'update', 'id = 1');
+
+statement ok
+UPDATE b.main.extra SET note = 'z';
+
+query IT
+SELECT id, note FROM memory.main.extra ORDER BY id;
+----
+1	z
+2	y
+
+# A schema the bridge did not serve at ATTACH.
+statement ok
+SELECT bridge_set_policy('pa', 'side.t', 'select', 'true');
+
+query I
+SELECT id FROM b.side.t;
+----
+5
+
+# Inside an open transaction the next statement sees a new grant.
+statement ok
+BEGIN;
+
+statement ok
+SELECT bridge_set_policy('pa', 'main.nopk', 'select', 'true');
+
+query I
+SELECT count(*) FROM b.main.nopk;
+----
+2
+
+statement ok
+COMMIT;
+
+statement ok
+CREATE TABLE memory.main.later(id INTEGER PRIMARY KEY);
+
+# delete needs no select; revoking it again removes the table.
+statement ok
+SELECT bridge_set_policy('pa', 'main.later', 'delete', 'true');
+
+statement ok
+SELECT bridge_set_policy('pa', 'main.later', 'delete', false);
+
+statement error
+SELECT bridge_set_policy('pa', 'side.ungranted', 'primary_key', ['id']);
+----
+not found in catalog
+
+statement error
+SELECT bridge_set_policy('pa', 'main.later', 'primary_key', ['id']);
+----
+is not granted in bridge
+
+statement ok
+SELECT bridge_set_policy('pa', 'main.nopk', 'primary_key', ['x']);
+
+statement ok
+SELECT bridge_set_policy('pa', 'main.nopk', 'primary_key', {'columns': ['x'], 'verify_unique': 'SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1'});
+
+statement ok
+SELECT bridge_set_policy('pa', 'main.nopk', 'delete', 'true');
+
+query IT
+SELECT name, primary_key FROM bridge_table_permissions('b', schema := 'main') ORDER BY name;
+----
+extra	[id]
+nopk	[x]
+users	[id]
+
+query IT
+SELECT name, verbs FROM bridge_table_permissions('b', schema := 'side');
+----
+t	[select]
+
+statement ok
+DELETE FROM b.main.nopk WHERE x = 1;
+
+query I
+SELECT count(*) FROM memory.main.nopk;
+----
+1
+
+# bridge_finalize_policy locks a live bridge.
+statement ok
+SELECT bridge_finalize_policy('pa');
+
+statement error
+SELECT bridge_set_policy('pa', 'main.later', 'select', 'true');
+----
+are finalized
+
+statement error
+SELECT bridge_set_policy('pa', 'main.nopk', 'primary_key', ['x']);
+----
+are finalized
+
+statement error
+SELECT bridge_finalize_policy('pa');
+----
+already finalized
+
+query I
+SELECT count(*) FROM b.main.users;
+----
+2
+
+statement ok
+DETACH b;
+
+statement error
+SELECT bridge_finalize_policy('pa');
+----
+no registered source for bridge
+
+# Finalized before ATTACH: the grant set is fixed at finalize.
+statement ok
+SELECT bridge_register_source('pb', 'memory', 'tok_pb');
+
+statement ok
+SELECT bridge_set_policy('pb', 'main.users', 'select', 'true');
+
+statement ok
+SELECT bridge_finalize_policy('pb');
+
+statement error
+SELECT bridge_set_policy('pb', 'main.extra', 'select', 'true');
+----
+are finalized
+
+statement ok
+ATTACH '' AS b2 (TYPE virtual_catalog_bridge, ID 'pb', TOKEN 'tok_pb');
+
+statement error
+SELECT bridge_set_policy('pb', 'main.extra', 'select', 'true');
+----
+are finalized
+
+query I
+SELECT count(*) FROM b2.main.users;
+----
+2
+
+statement error
+SELECT * FROM b2.main.extra;
+----
+does not exist
+
+statement ok
+DETACH b2;

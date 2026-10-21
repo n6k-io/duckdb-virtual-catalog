@@ -48,9 +48,11 @@ def test_a_stolen_bridge_id_buys_nothing(bridged):
         with pytest.raises(duckdb.Error):
             attacker.execute("SELECT bridge_set_context(?, 'tenant', 1)", [stolen_id])
         with pytest.raises(duckdb.Error):
-            attacker.execute("SELECT bridge_policy(?, 'main.customers', 'select', 'true')", [stolen_id])
+            attacker.execute("SELECT bridge_set_policy(?, 'main.customers', 'select', 'true')", [stolen_id])
         with pytest.raises(duckdb.Error):
             attacker.execute("SELECT bridge_finalize_context(?)", [stolen_id])
+        with pytest.raises(duckdb.Error):
+            attacker.execute("SELECT bridge_finalize_policy(?)", [stolen_id])
     finally:
         attacker.close()
 
