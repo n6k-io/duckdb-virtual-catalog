@@ -7,17 +7,18 @@ DatabaseInstances in one process for the bridge, Python UDFs for providers and s
 
 import json
 import pathlib
-import uuid
 
 import duckdb
 import pyarrow as pa
 import pytest
+from dotenv import load_dotenv
+
+from backends import BACKENDS, BRIDGE_EXTENSION, PROVIDER_EXTENSION, new_connection, unique_id  # noqa: F401
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
-BUILT_EXTENSIONS = REPO_ROOT / "build/release/extension"
-BRIDGE_EXTENSION = BUILT_EXTENSIONS / "virtual_catalog_bridge/virtual_catalog_bridge.duckdb_extension"
-PROVIDER_EXTENSION = BUILT_EXTENSIONS / "virtual_catalog_provider/virtual_catalog_provider.duckdb_extension"
+
+load_dotenv(REPO_ROOT / ".env")
 
 VARCHAR = duckdb.sqltype("VARCHAR")
 BLOB = duckdb.sqltype("BLOB")
@@ -29,8 +30,24 @@ VARCHAR_LIST = duckdb.sqltype("VARCHAR[]")
 DIRECTORY_MARKERS = {"bridge": "bridge", "provider": "provider"}
 
 
+def pytest_generate_tests(metafunc):
+    if "backend" not in metafunc.fixturenames:
+        return
+    marker = metafunc.definition.get_closest_marker("backends")
+    wanted = [b for b in BACKENDS if marker is None or b.name in marker.args]
+    metafunc.parametrize("backend", wanted, ids=[b.name for b in wanted], indirect=True)
+
+
 def pytest_collection_modifyitems(items):
     for item in items:
+        callspec = getattr(item, "callspec", None)
+        backend = callspec.params.get("backend") if callspec else None
+        if backend is not None:
+            item.add_marker(f"backend_{backend.name}")
+            for pattern, reason in backend.gaps.items():
+                if pattern in item.nodeid:
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+
         directory = pathlib.Path(item.fspath).resolve().parent
         if directory.parent != HERE:
             continue
@@ -39,20 +56,32 @@ def pytest_collection_modifyitems(items):
             item.add_marker(marker)
 
 
-def new_connection(*, bridge=True, provider=False):
-    """A connection with its own DatabaseInstance and the locally built extensions loaded.
+@pytest.fixture
+def backend(request):
+    if reason := request.param.unavailable():
+        pytest.skip(reason)
+    return request.param
 
-    The two are separate binaries; load only what the test needs, or both where it
-    exercises them side by side in separate catalogs.
-    """
-    wanted = ([BRIDGE_EXTENSION] if bridge else []) + ([PROVIDER_EXTENSION] if provider else [])
-    for extension in wanted:
-        if not extension.exists():
-            pytest.skip(f"extension not built: {extension} -- run `make release`")
-    con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
-    for extension in wanted:
-        con.execute(f"LOAD '{extension}'")
-    return con
+
+@pytest.fixture
+def open_upstream(backend, tmp_path):
+    """Opens a freshly seeded `Source` per call, so a test can hold an oracle beside the bridged one."""
+    opened = []
+
+    def open_():
+        location = tmp_path / str(len(opened))
+        location.mkdir()
+        opened.append(backend.open(location))
+        return opened[-1]
+
+    yield open_
+    for source in opened:
+        backend.close(source)
+
+
+@pytest.fixture
+def upstream(open_upstream):
+    return open_upstream()
 
 
 @pytest.fixture
@@ -76,11 +105,6 @@ def con():
     c = new_connection(bridge=True, provider=True)
     yield c
     c.close()
-
-
-def unique_id(prefix="b"):
-    """Bridge ids and provider probes are process-wide, and pytest reuses one process."""
-    return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
 #: Verb shorthands for the common grant sets. A bare list means every verb unrestricted.
@@ -141,6 +165,10 @@ def bridge(
     # ATTACH options are folded to constants at bind time, so the token cannot be a parameter.
     target.execute(f"ATTACH '' AS {catalog} (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id
+
+
+def bridge_source(source, target, grants, **kwargs):
+    return bridge(source.con, target, grants, schema=source.schema, source_catalog=source.catalog, **kwargs)
 
 
 def unbridge(target, catalog="app"):

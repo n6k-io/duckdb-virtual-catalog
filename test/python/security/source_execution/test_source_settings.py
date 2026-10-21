@@ -1,15 +1,13 @@
 """ATTACK  target pushes a function whose bind reads settings, so it binds again on the source (E5)
 BREACH  a source-only setting value comes back in a row, or changes which rows match
-PASS    the function is refused or evaluated on the target
+PASS    the function is refused or evaluated on the target, or the bridge refuses to attach while a setting the
+        source rebinds with differs from the target's
 """
 
-import subprocess
-import sys
-import textwrap
-
+import duckdb
 import pytest
 
-from conftest import HERE, REPO_ROOT, bridge, new_connection
+from conftest import bridge, new_connection
 from security.world import POLICY, SETUP, outcome
 
 SOURCE_SECRET = "SOURCE_SECRET"
@@ -40,32 +38,21 @@ def test_filter_is_not_a_source_setting_oracle(settings_world):
     assert hit == miss, f"source setting changed the outcome\n  hit  {hit}\n  miss {miss}"
 
 
-#: Run in a child: the breach is the process dying.
-REBOUND_AGGREGATE = f"""
-import sys
-sys.path.insert(0, {str(HERE)!r})
-from conftest import bridge, new_connection
+def test_mismatched_setting_refuses_attach():
+    source, target = new_connection(), new_connection()
+    source.execute("CREATE TABLE people(id INTEGER PRIMARY KEY, name VARCHAR)")
+    source.execute("SET GLOBAL default_collation = 'nocase'")
 
-source, target = new_connection(), new_connection()
-source.execute("CREATE TABLE people(id INTEGER PRIMARY KEY, name VARCHAR)")
-source.execute("INSERT INTO people VALUES (1, 'a'), (2, 'B')")
-source.execute("SET GLOBAL default_collation = 'nocase'")
-bridge(source, target, {{"people": {{"select": "true"}}}})
-try:
-    target.execute("SELECT list_aggregate([name], 'max') FROM app.main.people").fetchall()
-except Exception:
-    pass
-"""
+    with pytest.raises(duckdb.InvalidInputException, match="default_collation"):
+        bridge(source, target, {"people": {"select": "true"}})
 
 
-def test_aggregate_rebound_under_source_collation_does_not_crash():
-    new_connection().close()
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(REBOUND_AGGREGATE)],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=REPO_ROOT,
-    )
+def test_matched_setting_allows_attach():
+    source, target = new_connection(), new_connection()
+    source.execute("CREATE TABLE people(id INTEGER PRIMARY KEY, name VARCHAR)")
+    source.execute("INSERT INTO people VALUES (1, 'a'), (2, 'B')")
+    for con in (source, target):
+        con.execute("SET GLOBAL default_collation = 'nocase'")
+    bridge(source, target, {"people": {"select": "true"}})
 
-    assert result.returncode == 0, f"process died with {result.returncode}\n{result.stderr}"
+    assert target.execute("SELECT id FROM app.main.people ORDER BY id").fetchall() == [(1,), (2,)]

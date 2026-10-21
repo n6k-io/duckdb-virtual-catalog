@@ -617,8 +617,8 @@ CrossingWriteShaper PolicyShaper(const shared_ptr<GrantBook> &grants, const Cros
 		if (reads_rows) {
 			auto visible = UsingFor(*grants, target.schema, target.table, CrossingVerb::SELECT);
 			if (visible) {
-				using_predicate = using_predicate ? And(std::move(visible), std::move(using_predicate))
-				                                  : std::move(visible);
+				using_predicate =
+				    using_predicate ? And(std::move(visible), std::move(using_predicate)) : std::move(visible);
 			}
 		}
 		if (using_predicate) {
@@ -1573,6 +1573,27 @@ void ThrowIfColumnRunsOnSource(const ColumnDefinition &column) {
 	}
 }
 
+Value CurrentSetting(const DatabaseInstance &db, const string &name) {
+	Value value;
+	if (!db.TryGetCurrentSetting(name, value)) {
+		return Value();
+	}
+	return value;
+}
+
+void ThrowUnlessSettingsMatch(const DatabaseInstance &source_db, const DatabaseInstance &target_db,
+                              const string &bridge_id) {
+	for (auto &name : MatchedSettings()) {
+		auto source_value = CurrentSetting(source_db, name);
+		auto target_value = CurrentSetting(target_db, name);
+		if (!Value::NotDistinctFrom(source_value, target_value)) {
+			throw InvalidInputException("virtual_catalog_bridge: bridge '%s' needs setting '%s' to match on source "
+			                            "and target, but the source has %s and the target has %s",
+			                            bridge_id, name, source_value.ToSQLString(), target_value.ToSQLString());
+		}
+	}
+}
+
 } // namespace
 
 unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db) {
@@ -1606,6 +1627,7 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &
 			throw PermissionException("virtual_catalog_bridge: bridge '%s' is already attached", bridge_id);
 		}
 		ValidateGrantSet(it->second.schemas, it->second.create_schemas, bridge_id, true);
+		ThrowUnlessSettingsMatch(*it->second.source_db, target_db, bridge_id);
 		source_db = it->second.source_db;
 		source = it->second.source;
 		grants->tables = std::move(it->second.schemas);

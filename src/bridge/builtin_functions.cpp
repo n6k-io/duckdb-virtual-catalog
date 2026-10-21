@@ -730,4 +730,19 @@ const case_insensitive_set_t &TargetOnlyBuiltins() {
 	return names;
 }
 
+const case_insensitive_set_t &MatchedSettings() {
+	static const case_insensitive_set_t names {
+	    "Calendar",
+	    "default_collation",
+	    "default_null_order",
+	    "default_order",
+	    "disable_timestamptz_casts",
+	    "ieee_floating_point_ops",
+	    "preserve_insertion_order",
+	    "scalar_subquery_error_on_multiple_rows",
+	    "TimeZone",
+	};
+	return names;
+}
+
 } // namespace duckdb

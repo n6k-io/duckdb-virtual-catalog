@@ -9,5 +9,7 @@ const case_insensitive_set_t &PushableBuiltins();
 //! Built-ins that read the instance, session or transaction they run in, so a pushed call would answer for the
 //! source. Every internal scalar or aggregate is in exactly one of the two lists.
 const case_insensitive_set_t &TargetOnlyBuiltins();
+//! Settings the source reads again when it rebinds or runs a pushed plan, so source and target must agree on them.
+const case_insensitive_set_t &MatchedSettings();
 
 } // namespace duckdb
