@@ -242,6 +242,18 @@ optional_ptr<SourceGrant> FindGrant(GrantTables &tables, const string &schema, c
 	return table_it == schema_it->second.end() ? nullptr : &table_it->second;
 }
 
+SourcePin PinSourceCatalog(ClientContext &context, const string &source_catalog) {
+	auto entry = Catalog::GetCatalogEntry(context, source_catalog);
+	if (!entry) {
+		throw CatalogException("virtual_catalog_bridge: source catalog '%s' does not exist", source_catalog);
+	}
+	if (entry->IsTemporaryCatalog() || entry->IsSystemCatalog()) {
+		throw CatalogException("virtual_catalog_bridge: source catalog '%s' is a temporary or system catalog",
+		                       source_catalog);
+	}
+	return SourcePin(entry->GetAttached(), source_catalog);
+}
+
 void ThrowIfAnyNull(DataChunk &args, idx_t columns, const char *function) {
 	for (idx_t c = 0; c < columns; c++) {
 		auto &validity = FlatVector::Validity(args.data[c]);
@@ -272,16 +284,8 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		if (bridge_id.empty()) {
 			throw IOException("virtual_catalog_bridge: bridge id cannot be empty");
 		}
-		auto entry = Catalog::GetCatalogEntry(context, source_catalog);
-		if (!entry) {
-			throw CatalogException("virtual_catalog_bridge: source catalog '%s' does not exist", source_catalog);
-		}
-		if (entry->IsTemporaryCatalog() || entry->IsSystemCatalog()) {
-			throw CatalogException("virtual_catalog_bridge: source catalog '%s' is a temporary or system catalog",
-			                       source_catalog);
-		}
-
 		PendingSource pending;
+		pending.source = PinSourceCatalog(context, source_catalog);
 		pending.source_db = context.db;
 		if (arg_count > 2) {
 			auto chosen = FlatVector::GetData<string_t>(args.data[2])[i].GetString();
@@ -292,7 +296,6 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		} else {
 			pending.token = LoadNonce() + ":" + UUID::ToString(UUID::GenerateRandomUUID());
 		}
-		pending.source = SourcePin(entry->GetAttached(), source_catalog);
 		pending.last_touched = std::chrono::steady_clock::now();
 
 		PendingLock lock;
@@ -531,32 +534,20 @@ unique_ptr<ParsedExpression> GuardWithCheck(unique_ptr<ParsedExpression> check, 
 
 unique_ptr<ParsedExpression> UsingFor(GrantBook &grants, const string &schema, const string &table, CrossingVerb verb) {
 	lock_guard<mutex> guard(grants.lock);
-	auto schema_it = grants.tables.find(schema);
-	if (schema_it == grants.tables.end()) {
-		return nullptr;
-	}
-	auto table_it = schema_it->second.find(table);
-	return table_it == schema_it->second.end() ? nullptr : table_it->second.CopyUsing(verb);
+	auto grant = FindGrant(grants.tables, schema, table);
+	return grant ? grant->CopyUsing(verb) : nullptr;
 }
 
 bool Grants(GrantBook &grants, const string &schema, const string &table, CrossingVerb verb) {
 	lock_guard<mutex> guard(grants.lock);
-	auto schema_it = grants.tables.find(schema);
-	if (schema_it == grants.tables.end()) {
-		return false;
-	}
-	auto table_it = schema_it->second.find(table);
-	return table_it != schema_it->second.end() && table_it->second.Has(verb);
+	auto grant = FindGrant(grants.tables, schema, table);
+	return grant && grant->Has(verb);
 }
 
 unique_ptr<ParsedExpression> CheckFor(GrantBook &grants, const string &schema, const string &table, CrossingVerb verb) {
 	lock_guard<mutex> guard(grants.lock);
-	auto schema_it = grants.tables.find(schema);
-	if (schema_it == grants.tables.end()) {
-		return nullptr;
-	}
-	auto table_it = schema_it->second.find(table);
-	return table_it == schema_it->second.end() ? nullptr : table_it->second.CopyCheck(verb);
+	auto grant = FindGrant(grants.tables, schema, table);
+	return grant ? grant->CopyCheck(verb) : nullptr;
 }
 
 unique_ptr<ParsedExpression> And(unique_ptr<ParsedExpression> left, unique_ptr<ParsedExpression> right) {
@@ -674,17 +665,25 @@ string RequiredAttachOption(AttachInfo &info, const char *key) {
 	return text;
 }
 
-[[noreturn]] void RethrowAt(const std::exception &ex, const string &path) {
-	static const string PREFIX = "virtual_catalog_bridge: ";
-	ErrorData error(ex);
-	auto message = error.RawMessage();
-	if (StringUtil::StartsWith(message, PREFIX)) {
-		message = message.substr(PREFIX.size());
+const string &BridgePrefix() {
+	static const string prefix = "virtual_catalog_bridge: ";
+	return prefix;
+}
+
+string StripBridgePrefix(string message) {
+	if (StringUtil::StartsWith(message, BridgePrefix())) {
+		message = message.substr(BridgePrefix().size());
 	}
+	return message;
+}
+
+[[noreturn]] void RethrowAt(const std::exception &ex, const string &path) {
+	ErrorData error(ex);
+	auto message = StripBridgePrefix(error.RawMessage());
 	if (StringUtil::StartsWith(message, path)) {
 		error.Throw();
 	}
-	ErrorData(error.Type(), PREFIX + path + ": " + message).Throw();
+	ErrorData(error.Type(), BridgePrefix() + path + ": " + message).Throw();
 }
 
 struct PolicyIssue {
@@ -711,11 +710,7 @@ bool Guarded(PolicyIssues issues, const string &path, const char *severity, F &&
 		    error.Type() == ExceptionType::FATAL) {
 			throw;
 		}
-		static const string PREFIX = "virtual_catalog_bridge: ";
-		auto message = error.RawMessage();
-		if (StringUtil::StartsWith(message, PREFIX)) {
-			message = message.substr(PREFIX.size());
-		}
+		auto message = StripBridgePrefix(error.RawMessage());
 		if (!path.empty() && StringUtil::StartsWith(message, path + ": ")) {
 			message = message.substr(path.size() + 2);
 		}
@@ -1326,14 +1321,7 @@ unique_ptr<FunctionData> ValidatePolicyBind(ClientContext &context, TableFunctio
 	}
 	auto source_catalog = StringValue::Get(input.inputs[0]);
 	auto document = StringValue::Get(input.inputs[1]);
-	auto entry = Catalog::GetCatalogEntry(context, source_catalog);
-	if (!entry) {
-		throw CatalogException("virtual_catalog_bridge: source catalog '%s' does not exist", source_catalog);
-	}
-	if (entry->IsTemporaryCatalog() || entry->IsSystemCatalog()) {
-		throw CatalogException("virtual_catalog_bridge: source catalog '%s' is a temporary or system catalog",
-		                       source_catalog);
-	}
+	auto source = PinSourceCatalog(context, source_catalog);
 	auto result = make_uniq<ValidatePolicyBindData>();
 	auto issues = PolicyIssues(&result->issues);
 	PolicyConfig config;
@@ -1341,10 +1329,9 @@ unique_ptr<FunctionData> ValidatePolicyBind(ClientContext &context, TableFunctio
 		return std::move(result);
 	}
 	PolicyState state;
-	WithSourceTransaction(*context.db, SourcePin(entry->GetAttached(), source_catalog),
-	                      [&](Connection &source_conn, const string &catalog) {
-		                      state = ResolvePolicy(context, source_conn, catalog, config, nullptr, issues);
-	                      });
+	WithSourceTransaction(*context.db, source, [&](Connection &source_conn, const string &catalog) {
+		state = ResolvePolicy(context, source_conn, catalog, config, nullptr, issues);
+	});
 	auto empty_document = config.tables.empty() && config.create_schemas.empty();
 	Guarded(issues, "", "error",
 	        [&]() { ValidateGrantSet(state.tables, state.create_schemas, "<unregistered>", empty_document); });
@@ -1462,10 +1449,7 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		}
 		values[name] = value;
 		if (!target.dependents.empty()) {
-			Connection source_conn(*context.db);
-			source_conn.BeginTransaction();
-			try {
-				auto catalog = target.source.Use(*source_conn.context);
+			WithSourceTransaction(*context.db, target.source, [&](Connection &source_conn, const string &catalog) {
 				for (auto &dependent : target.dependents) {
 					EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, dependent.table);
 					auto entry = Catalog::GetEntry(*source_conn.context, catalog, dependent.schema, lookup,
@@ -1477,11 +1461,7 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 					ProbePredicate(source_table, *dependent.predicate, values, dependent.predicate->ToString(),
 					               dependent.clause);
 				}
-			} catch (...) {
-				source_conn.Rollback();
-				throw;
-			}
-			source_conn.Rollback();
+			});
 		}
 		lock_guard<mutex> guard(target.context->lock);
 		if (target.context->finalized) {
@@ -1737,23 +1717,18 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 	bool key_verified;
 	{
 		lock_guard<mutex> guard(grants->lock);
-		auto schema_it = grants->tables.find(schema);
-		if (schema_it == grants->tables.end()) {
-			throw CatalogException("virtual_catalog_bridge: nothing is granted in schema '%s'", schema);
-		}
-		auto table_it = schema_it->second.find(name);
-		if (table_it == schema_it->second.end()) {
+		auto grant = FindGrant(grants->tables, schema, name);
+		if (!grant) {
 			throw CatalogException("virtual_catalog_bridge: '%s.%s' is not granted", schema, name);
 		}
-		verbs = table_it->second.verbs;
-		key = table_it->second.key;
-		key_verified = table_it->second.key_verified;
+		verbs = grant->verbs;
+		key = grant->key;
+		key_verified = grant->key_verified;
 	}
 
 	CrossingTable table;
 	table.name = name;
-	const auto describe = [&](ClientContext &context) {
-		auto catalog = source.Use(context);
+	const auto describe = [&](ClientContext &context, const string &catalog) {
 		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, name);
 		auto entry = Catalog::GetEntry(context, catalog, schema, lookup, OnEntryNotFound::RETURN_NULL);
 		if (!IsGrantable(entry)) {
@@ -1790,17 +1765,10 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 		}
 	}
 	if (shaping) {
-		describe(*shaping->context);
+		describe(*shaping->context, source.Use(*shaping->context));
 	} else {
-		Connection conn(*Database());
-		conn.BeginTransaction();
-		try {
-			describe(*conn.context);
-		} catch (...) {
-			conn.Rollback();
-			throw;
-		}
-		conn.Rollback();
+		WithSourceTransaction(*Database(), source,
+		                      [&](Connection &conn, const string &catalog) { describe(*conn.context, catalog); });
 	}
 
 	for (auto verb : CrossingVerbs()) {
@@ -2073,9 +2041,7 @@ bool DuckDBSession::CreateWouldCreate(Connection &source_conn, const string &cat
 		return false;
 	case OnCreateConflict::REPLACE_ON_CONFLICT: {
 		lock_guard<mutex> guard(grants->lock);
-		auto schema_it = grants->tables.find(ddl.schema);
-		auto granted = schema_it != grants->tables.end() && schema_it->second.count(ddl.table);
-		if (!granted) {
+		if (!FindGrant(grants->tables, ddl.schema, ddl.table)) {
 			throw PermissionException("virtual_catalog_bridge: '%s' does not have '%s' permission", ddl.table,
 			                          CrossingVerbName(CrossingVerb::DROP));
 		}
@@ -2094,16 +2060,12 @@ void DuckDBSession::ThrowUnlessAlterGrantedOverFullTable(ClientContext &source_c
 	unique_ptr<ParsedExpression> select_using;
 	{
 		lock_guard<mutex> guard(grants->lock);
-		auto schema_it = grants->tables.find(ddl.schema);
-		if (schema_it != grants->tables.end()) {
-			auto table_it = schema_it->second.find(ddl.table);
-			if (table_it != schema_it->second.end()) {
-				auto &grant = table_it->second;
-				alter_granted = grant.Has(CrossingVerb::ALTER);
-				select_granted = grant.Has(CrossingVerb::SELECT);
-				alter_using = grant.CopyUsing(CrossingVerb::ALTER);
-				select_using = grant.CopyUsing(CrossingVerb::SELECT);
-			}
+		auto grant = FindGrant(grants->tables, ddl.schema, ddl.table);
+		if (grant) {
+			alter_granted = grant->Has(CrossingVerb::ALTER);
+			select_granted = grant->Has(CrossingVerb::SELECT);
+			alter_using = grant->CopyUsing(CrossingVerb::ALTER);
+			select_using = grant->CopyUsing(CrossingVerb::SELECT);
 		}
 	}
 	auto values = ContextSnapshot(*grants->context);
@@ -2193,15 +2155,11 @@ void DuckDBSession::ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl) {
 		return;
 	}
 	lock_guard<mutex> guard(grants->lock);
-	auto schema_it = grants->tables.find(ddl.schema);
-	if (schema_it == grants->tables.end()) {
+	auto found = FindGrant(grants->tables, ddl.schema, ddl.table);
+	if (!found) {
 		return;
 	}
-	auto table_it = schema_it->second.find(ddl.table);
-	if (table_it == schema_it->second.end()) {
-		return;
-	}
-	auto &grant = table_it->second;
+	auto &grant = *found;
 	bool orphaned = false;
 	for (auto &key_column : grant.key) {
 		orphaned = orphaned || StringUtil::CIEquals(key_column, column);
