@@ -72,6 +72,13 @@ struct PendingSource {
 	shared_ptr<BridgeContext> context = make_shared_ptr<BridgeContext>();
 	bool policy_finalized = false;
 	idx_t token_failures = 0;
+
+	//! MSVC's unordered_map move is not noexcept, so without these vector<PendingSource> falls back to copying.
+	PendingSource() = default;
+	PendingSource(const PendingSource &) = delete;
+	PendingSource &operator=(const PendingSource &) = delete;
+	PendingSource(PendingSource &&) = default;
+	PendingSource &operator=(PendingSource &&) = default;
 };
 
 struct LiveBridge {
