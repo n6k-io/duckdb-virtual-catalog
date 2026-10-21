@@ -72,7 +72,8 @@ struct PolicyEdit {
 	vector<string> functions;
 };
 
-//! Strict SQL identifier components: `a.b`, `"a.b".c`, `"say ""hi"""`. No empty parts; unquoted parts cannot be blank-padded.
+//! Strict SQL identifier components: `a.b`, `"a.b".c`, `"say ""hi"""`. No empty parts; unquoted parts cannot be
+//! blank-padded.
 vector<string> ParsePolicyNameParts(const string &text);
 PolicyName ParsePolicyTableName(const string &text);
 PolicyName ParsePolicySchemaName(const string &text);
