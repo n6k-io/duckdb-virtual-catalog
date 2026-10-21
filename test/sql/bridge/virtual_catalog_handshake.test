@@ -14,8 +14,8 @@ statement ok
 CREATE TABLE memory.main.nopk(x INTEGER, y VARCHAR);
 
 # ---------------------------------------------------------------------------
-# bridge_register_source only mints a token; bridge_set_policy is what validates,
-# one setting at a time, on the source connection.
+# bridge_register_source checks only the catalog and the id; the policy calls validate
+# each setting on the source connection.
 # ---------------------------------------------------------------------------
 
 statement ok
@@ -108,8 +108,7 @@ SELECT bridge_set_policy('v1', 'main.users', 'select', 'NULL');
 ----
 must be BOOLEAN
 
-# INSERT is appended through DuckDB's Appender, which has no WHERE to graft onto, so it has no
-# USING half to set.
+# An insert reads no existing row, so it takes no USING half.
 statement error
 SELECT bridge_set_policy('v1', 'main.users', 'insert', {'using': 'id > 0', 'check': 'true'});
 ----

@@ -42,7 +42,8 @@ void ThrowUnlessFiniteMemoryLimit(const string &text) {
 	}
 }
 
-//! Every function-like set of a DuckSchemaEntry; macros and aggregates share the scalar set.
+//! Sets of a DuckSchemaEntry a drop_functions name is looked up in; aggregates and scalar macros share the scalar
+//! set, table macros the table set.
 const CatalogType FUNCTION_SETS[] = {CatalogType::SCALAR_FUNCTION_ENTRY, CatalogType::TABLE_FUNCTION_ENTRY,
                                      CatalogType::PRAGMA_FUNCTION_ENTRY};
 

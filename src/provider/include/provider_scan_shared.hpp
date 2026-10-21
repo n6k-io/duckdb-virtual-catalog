@@ -166,6 +166,8 @@ inline Value ReadArrowValue(ArrowArray &array, idx_t pos, const LogicalType &typ
 				return Value::TIMESTAMPTZ(timestamp_tz_t(raw));
 			case 'n':
 				return Value::TIMESTAMPTZ(timestamp_tz_t(raw / Interval::NANOS_PER_MICRO));
+			default:
+				break;
 			}
 		}
 		throw IOException("%s: primary key column has Arrow layout '%s' but DuckDB type %s", context, format,

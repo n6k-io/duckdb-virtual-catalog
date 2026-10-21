@@ -135,7 +135,9 @@ private:
 	void ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl);
 	//! The source checks a foreign key over every referenced row, hidden ones included.
 	void ThrowIfCreateDeclaresForeignKey(const CrossingDdl &ddl);
-	//! Defaults, CHECKs and generated columns are stored on the source and run on the owner's later inserts.
+	//! Non-constant defaults, CHECKs and generated columns are stored on the source and run on the owner's later
+	//! inserts; an ALTER COLUMN TYPE ... USING cast runs on the source at once. Each would run over rows the
+	//! target cannot see.
 	void ThrowIfDdlCarriesExpression(const CrossingDdl &ddl);
 	void RecordDdl(const shared_ptr<Connection> &source_conn, const string &catalog, const CrossingDdl &ddl);
 	//! Caller holds the GrantBook's lock.

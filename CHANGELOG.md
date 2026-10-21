@@ -23,7 +23,7 @@
 - Removing a `primary_key` restores the discovered key.
 - Table names may be `catalog.schema.table` when the catalog is the source catalog, and are parsed as SQL identifiers, so a name with a dot can be granted quoted.
 - A table that sets a key or foreign keys but grants no verb fails `ATTACH` instead of being dropped.
-- After `ATTACH`, every policy change is checked against the whole policy, and is refused while a target transaction has uncommitted DDL through the bridge.
+- After `ATTACH`, every policy change is checked against the whole policy, and table and schema changes are refused while a target transaction has uncommitted DDL through the bridge.
 - **Breaking:** an `update` or `delete` reaches the rows its own policy allows; the `select` policy also applies only when the statement reads those rows (`WHERE`, `RETURNING`, or a `SET` over a column), as in Postgres. `DELETE FROM t` and `UPDATE t SET n = 7` now reach rows the `select` policy hides when their own policy allows them.
 - `update` and `delete` can be granted without `select`; a write that reads rows is then refused.
 - An `UPDATE` or `DELETE` keyed on a collated column no longer reaches a hidden row whose key collates equal to a visible one.

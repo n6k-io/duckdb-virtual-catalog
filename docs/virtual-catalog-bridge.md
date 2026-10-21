@@ -63,8 +63,8 @@ the policy, but no connection outside it can. Once the token is redeemed the
 policy stays open, like the [context](#context-values): `bridge_configure_policy`
 and `bridge_set_policy` still work, and the target's next statement — inside an
 open transaction too — sees the change. While a target transaction has DDL
-through the bridge that it has not committed, policy changes are refused; retry
-after it ends. `bridge_finalize_policy(bridge_id)` freezes the policy from that
+through the bridge that it has not committed, table and schema policy changes are
+refused (`:functions` whitelist changes are not); retry after it ends. `bridge_finalize_policy(bridge_id)` freezes the policy from that
 call on, before or after `ATTACH`.
 
 A source that already holds a secret can name the token itself, with the 3-arg
@@ -135,8 +135,8 @@ Two functions set it. They take the same settings under the same names.
   with `op` one of `add`, `remove`, `set`.
 
 `bridge_validate_policy_config(source_catalog, json)` checks a document against
-the source with no bridge registered, and returns a row for every setting that
-would fail; see [SQL API](sql-api.md#policy-validation).
+the source with no bridge registered, and returns a row per failing setting; see
+[SQL API](sql-api.md#policy-validation).
 
 Both work before and after `ATTACH`, until `bridge_finalize_policy`. Before
 `ATTACH` the policy may be built a setting at a time in any order; `ATTACH`
@@ -358,7 +358,8 @@ whitelist starts as the built-ins that answer the same on either side.
 - `"functions": {"add": [...], "remove": [...]}` changes that default. `remove`
   works on built-ins too.
 - `"functions": [...]` sets the whitelist exactly; the built-ins are dropped,
-  including operators, so nothing else is pushed.
+  including function-backed operators (`+`, `*`, `~~` …). Comparisons, AND/OR,
+  casts and CASE are not function calls and still push.
 
 The setter spells these `bridge_set_policy(id, ':functions', 'whitelist', op,
 names)`. A change is live on the target's next statement.
@@ -489,9 +490,8 @@ planning and execution read it rather than consulting the grant map again:
 grants can change after bind, and a second lookup could disagree with the
 first.
 
-**Not yet supported:** `CREATE TABLE` in a *bridge* schema (it works in a plain
-`virtual_catalog_bridge` schema, as a native entry), `ON CONFLICT`, and the
-`RETURNING` clause on INSERT/UPDATE/DELETE.
+**Not yet supported:** `ON CONFLICT`, and the `RETURNING` clause on
+INSERT/UPDATE/DELETE.
 
 ## Introspecting grants
 
@@ -506,7 +506,7 @@ kind:
 |--------|---------|---------------|
 | `native_table` | all five | from table constraints |
 | `native_view` | `select` | empty |
-| `crossing` | the granted verbs (bridge `alter` is reported but not yet implemented, so it currently overstates what the target can do) | discovered from source |
+| `crossing` | the granted verbs | discovered from source |
 
 A `virtual_catalog_provider` catalog reports its own entries as `provider`;
 `provider_table_permissions` is the same function compiled into the provider.

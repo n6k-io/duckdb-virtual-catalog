@@ -161,8 +161,8 @@ def test_policy_refuses_a_source_catalog_detached_after_registration():
 
 def test_cyclic_bridge_reads_fail_instead_of_recursing():
     """The three-hop cycle. Each step is allowed, but re-attaching `app` over a
-    chain that reads from it leaves both of b's hops pinned to the detached original, so the reads fail
-    instead of recursing."""
+    chain that reads from it leaves app2 pinned to the detached original, so reading app2, or the new `app`
+    that reads through it, fails instead of recursing."""
     out = run_probe(
         """
         from conftest import new_connection, unique_id

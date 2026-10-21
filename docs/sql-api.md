@@ -35,12 +35,14 @@ The policy is set with two functions, before or after `ATTACH`, until
 
 `bridge_validate_policy_config(source_catalog, policy)` — run on the source. One
 row per setting that would make `bridge_configure_policy` or `ATTACH` fail; no
-rows when there is none. Every setting is checked, not just the first that fails.
+rows when there is none. Each table and verb is checked, but a malformed document
+returns only its first parse error, and whole-policy checks stop at their first
+failure. `unchecked` rows are not failures.
 
 | Column | Type |
 |---|---|
 | `path` | VARCHAR — the setting, as in `bridge_configure_policy` errors; NULL for the document as a whole |
-| `severity` | VARCHAR — `error`; `unchecked` for a predicate that uses `$context`, which is parsed but not bound; `data_dependent` for a `primary_key` whose `columns_from_query` or `verify_unique` failed against the data as it is now |
+| `severity` | VARCHAR — `error`; `unchecked` for a predicate that uses `$context`, which is parsed but not bound; `data_dependent` for any failure of a `primary_key` that uses `columns_from_query` or `verify_unique` |
 | `message` | VARCHAR |
 
 ## Providers

@@ -6,7 +6,6 @@
 
 namespace duckdb {
 
-//! An unset catalog matches the bridge's source catalog; a set one must equal it.
 struct PolicyName {
 	string catalog;
 	string schema;
@@ -15,7 +14,6 @@ struct PolicyName {
 	string ToString() const;
 };
 
-//! A granted verb. `check` empty on update means the USING predicate is reused as the check.
 struct PolicyVerb {
 	bool granted = false;
 	string using_text;
@@ -30,7 +28,7 @@ struct PolicyKey {
 
 struct PolicyTable {
 	PolicyName name;
-	//! Where the table came from, prefixed to every error about it.
+	//! Where the table came from; the base of every error or issue path about it.
 	string path;
 	vector<PolicyVerb> verbs = vector<PolicyVerb>(CrossingVerbs().size());
 	bool has_key = false;
@@ -74,7 +72,7 @@ struct PolicyEdit {
 	vector<string> functions;
 };
 
-//! Strict SQL identifier components: `a.b`, `"a.b".c`, `"say ""hi"""`. No empty or blank-padded parts.
+//! Strict SQL identifier components: `a.b`, `"a.b".c`, `"say ""hi"""`. No empty parts; unquoted parts cannot be blank-padded.
 vector<string> ParsePolicyNameParts(const string &text);
 PolicyName ParsePolicyTableName(const string &text);
 PolicyName ParsePolicySchemaName(const string &text);

@@ -144,7 +144,7 @@ SELECT * FROM c.main.nopk;
 ----
 does not exist
 
-# After ATTACH every document must hold together on its own.
+# A table entry must grant a verb.
 statement error
 SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.users": {"primary_key": ["id"]}}}');
 ----
@@ -163,7 +163,7 @@ SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.use
 ----
 finalized
 
-# --- the functions it replaced are gone -------------------------------------
+# --- bridge_policy and bridge_primary_key do not exist ----------------------
 
 statement error
 SELECT bridge_policy('cp', 'main.users', 'select', 'true');

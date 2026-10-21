@@ -60,7 +60,7 @@ SELECT message FROM bridge_validate_policy_config('memory', '{"policy_version": 
 ----
 'main.nosuch' not found in catalog 'memory' on source
 
-# Checks that need the whole policy, as ATTACH runs them.
+# An entry that grants no verb fails parsing, so nothing else is checked.
 query TTI
 SELECT path, severity, message LIKE '%grants no verb%' FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"primary_key": ["id"]}}}');
 ----
@@ -72,6 +72,7 @@ SELECT count(*) FROM bridge_validate_policy_config('memory', '{"policy_version":
 ----
 0
 
+# Checks that need the whole policy, as ATTACH runs them.
 query TTI
 SELECT path, severity, message LIKE '%has no policies%' FROM bridge_validate_policy_config('memory', '{"policy_version": 1}');
 ----

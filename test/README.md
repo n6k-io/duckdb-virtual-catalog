@@ -21,7 +21,7 @@ reach the capability bits but not the Arrow payloads.
 uv run pytest
 ```
 
-Needs `make release` first; the tests load the built extensions (paths in `conftest.py`) into the
+Needs `make release` first; the tests load the built extensions (paths in `backends/base.py`) into the
 `duckdb` PyPI package, whose version must match the DuckDB pinned in `pyproject.toml`.
 
 ## Parity

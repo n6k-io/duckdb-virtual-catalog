@@ -81,7 +81,7 @@ struct LiveBridge {
 };
 
 constexpr int64_t PENDING_SOURCE_TTL_SECONDS = 30;
-//! Wrong tokens a pending entry absorbs before it is dropped.
+//! A pending entry is dropped on this many wrong tokens.
 constexpr idx_t MAX_TOKEN_FAILURES = 5;
 
 //! Marks a connection a bridge opened for one autocommit read. A bridge whose source is another bridge
@@ -118,9 +118,8 @@ unordered_map<string, LiveBridge> &LiveBridges() {
 	return *live;
 }
 
-//! Holds PendingMutex. An erased PendingSource may hold the last reference to a DatabaseInstance whose
-//! ~DuckDBSource takes PendingMutex, so erased entries park in `dropped`, which is destroyed after the
-//! mutex is released.
+//! An erased PendingSource may hold the last reference to a DatabaseInstance whose ~DuckDBSource takes
+//! PendingMutex, so erased entries park in `dropped`, declared before `guard` so it is destroyed after the unlock.
 struct PendingLock {
 	vector<PendingSource> dropped;
 	lock_guard<mutex> guard {PendingMutex()};
@@ -207,7 +206,6 @@ struct GrantTarget {
 	bool *policy_finalized = nullptr;
 };
 
-//! Caller holds PendingMutex.
 GrantTarget LookupGrantTarget(PendingLock &lock, const string &bridge_id, ClientContext &context) {
 	GrantTarget target;
 	PurgeExpiredPendingSources(lock);
@@ -227,7 +225,6 @@ GrantTarget LookupGrantTarget(PendingLock &lock, const string &bridge_id, Client
 	return target;
 }
 
-//! Caller holds PendingMutex.
 GrantTarget LookupOpenGrants(PendingLock &lock, const string &bridge_id, ClientContext &context) {
 	auto target = LookupGrantTarget(lock, bridge_id, context);
 	if (*target.policy_finalized) {
@@ -696,10 +693,10 @@ struct PolicyIssue {
 	string message;
 };
 
-//! Null makes every check throw, as configuring does; otherwise each failure is recorded and checking goes on.
 using PolicyIssues = optional_ptr<vector<PolicyIssue>>;
 
-//! Returns whether `f` succeeded.
+//! Null `issues` makes every failure throw; otherwise each failure is recorded and checking goes on, except
+//! INTERRUPT, INTERNAL and FATAL, which always rethrow.
 template <class F>
 bool Guarded(PolicyIssues issues, const string &path, const char *severity, F &&f) {
 	try {
@@ -741,6 +738,7 @@ void WithSourceTransaction(DatabaseInstance &db, const SourcePin &source, F &&f)
 	source_conn.Rollback();
 }
 
+//! An unset catalog matches the bridge's source catalog; a set one must equal it.
 void ThrowIfOtherCatalog(const PolicyName &name, const string &catalog) {
 	if (!name.catalog.empty() && !StringUtil::CIEquals(name.catalog, catalog)) {
 		throw IOException("virtual_catalog_bridge: '%s' names catalog '%s', but this bridge's source catalog is '%s'",
@@ -790,6 +788,7 @@ struct ResolvedVerb {
 	bool unrestricted = false;
 };
 
+//! An empty `check` reuses the USING predicate on update and is an error on insert.
 ResolvedVerb ResolveVerb(Connection &source_conn, CatalogEntry &entry, const string &catalog, const PolicyName &name,
                          CrossingVerb verb, const PolicyVerb &policy,
                          optional_ptr<const case_insensitive_map_t<Value>> values) {
@@ -2108,7 +2107,6 @@ void DuckDBSession::ThrowUnlessAlterGrantedOverFullTable(ClientContext &source_c
 		}
 	}
 	auto values = ContextSnapshot(*grants->context);
-	// A granted verb without a predicate is unrestricted.
 	const auto holds = [&](bool granted, unique_ptr<ParsedExpression> &predicate) {
 		if (!granted || !predicate) {
 			return granted;

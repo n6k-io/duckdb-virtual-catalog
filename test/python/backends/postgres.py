@@ -8,7 +8,7 @@ DSN_VAR = "VC_POSTGRES_DSN"
 
 
 class PostgresBackend(Backend):
-    """One server shared by every test; each test gets its own schema."""
+    """One server shared by every test; each attach gets its own schema."""
 
     name = "postgres"
 

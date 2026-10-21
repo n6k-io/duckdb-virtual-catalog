@@ -55,7 +55,8 @@ class Source:
 
 
 class Backend:
-    """An upstream seeded natively from `seeds/<name>.sql`, then attached through its scanner."""
+    """An upstream seeded natively from `seeds/<name>.sql`, then attached through its scanner (native:
+    seeded in place, no scanner)."""
 
     name: str
 

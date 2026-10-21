@@ -193,7 +193,7 @@ bool IsTrueText(string text) {
 	return StringUtil::CIEquals(text, "true");
 }
 
-//! true, or a string that is literally 'true', as a USING or CHECK predicate.
+//! A USING or CHECK predicate: BOOL true becomes "true", false fails, anything else must be a non-empty string.
 string Predicate(const RawValue &value, const string &path) {
 	if (value.kind == RawValue::Kind::BOOL) {
 		if (!value.boolean) {

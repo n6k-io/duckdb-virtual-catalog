@@ -24,9 +24,10 @@ struct DecodedProviderSchema {
 	vector<string> primary_keys;
 };
 
-// DuckDB matches an Arrow extension by name alone and reads at the registered storage's width, so a
-// tag on narrower storage reads past the buffer. Extensions registered without a format pick their
-// type from the storage and are not checked. Walks children and dictionaries.
+// DuckDB matches an Arrow extension by name (plus vendor/type for arrow.opaque), not by storage format,
+// and reads at the registered storage's width, so a tag on narrower storage reads past the buffer.
+// Extensions registered without a format pick their type from the storage and are not checked. Walks
+// children and dictionaries.
 void ThrowOnMismatchedExtensionStorage(ClientContext &context, const ArrowSchema &schema, const char *what);
 
 // Decode one Arrow IPC schema message (`pa.Schema.serialize()`). `what` names the caller in errors.

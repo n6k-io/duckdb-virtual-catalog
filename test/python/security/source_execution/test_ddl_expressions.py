@@ -128,7 +128,7 @@ def test_alter_type_using_cannot_read_source_setting(ddl_world):
     assert source.execute("SELECT count(*) FROM users WHERE tenant::VARCHAR = 'SOURCE_SECRET'").fetchone() == (0,)
 
 
-#: field path -> the struct-bearing table the target creates
+#: id -> (field path to add, struct-bearing column the target's table declares)
 ADD_FIELD = {
     "struct": ("s.h", "s STRUCT(a INTEGER)"),
     "list_of_struct": ("l.element.h", "l STRUCT(a INTEGER)[]"),
