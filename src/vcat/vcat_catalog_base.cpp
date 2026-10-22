@@ -18,8 +18,9 @@ VirtualCatalogSchemaEntryBase &VirtualCatalogBase::GetOrCreateWrapper(SchemaCata
 	auto it = wrappers.find(target_schema.name);
 	if (it != wrappers.end()) {
 		// Match on address, not name: DROP SCHEMA s; CREATE SCHEMA s; yields a fresh DuckSchemaEntry,
-		// and the old wrapper's target_schema reference now dangles.
-		if (&it->second->TargetSchema() == &target_schema) {
+		// and the old wrapper's target_schema reference now dangles. The fresh entry can reuse the freed
+		// address, so the oid must match too.
+		if (&it->second->TargetSchema() == &target_schema && it->second->oid == target_schema.oid) {
 			return *it->second;
 		}
 		retired_wrappers.push_back(std::move(it->second));
