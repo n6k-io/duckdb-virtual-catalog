@@ -1,0 +1,34 @@
+[project]
+name = "duckdb-virtual-catalog"
+version = "0.1.0"
+description = "Python helpers for the virtual_catalog_bridge and virtual_catalog_provider DuckDB extensions"
+readme = "README.md"
+authors = [
+    { email = "srossross@gmail.com" }
+]
+requires-python = ">=3.9"
+dependencies = ["pyarrow", "numpy"]
+
+[project.optional-dependencies]
+duckdb = ["duckdb>=1.0.0"]
+
+[build-system]
+requires = ["uv_build>=0.9.27,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "virtual_catalog"
+
+[dependency-groups]
+dev = [
+    "pytest>=7",
+    "pytest-asyncio>=0.23",
+    "duckdb>=1.0.0",
+    "python-dotenv>=1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["src"]
+
+[tool.black]
+line-length = 120

@@ -20,6 +20,9 @@ VirtualCatalogSchemaInfoHolder::VirtualCatalogSchemaInfoHolder(const SchemaCatal
 VirtualCatalogSchemaEntryBase::VirtualCatalogSchemaEntryBase(Catalog &catalog, SchemaCatalogEntry &target_schema_p)
     : VirtualCatalogSchemaInfoHolder(target_schema_p), SchemaCatalogEntry(catalog, info),
       target_schema(target_schema_p) {
+	// DependencyManager records the subject oid via Catalog::GetSchema (this wrapper) but verifies it at
+	// commit against the raw schema catalog set (the inner entry); the two must agree.
+	oid = target_schema_p.oid;
 }
 
 bool VirtualCatalogSchemaEntryBase::HasNativeEntry(CatalogTransaction transaction, CatalogType type,

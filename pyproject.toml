@@ -4,7 +4,13 @@ version = "0.1.0"
 description = "Cross-connection test harness for the virtual_catalog DuckDB extension"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = ["duckdb-virtual-catalog[duckdb]"]
+
+[tool.uv.sources]
+duckdb-virtual-catalog = { workspace = true }
+
+[tool.uv.workspace]
+members = ["python-virtual-catalog"]
 
 [tool.pytest.ini_options]
 testpaths = ["test/python"]
@@ -26,7 +32,7 @@ dev = [
     "clang-format==11.0.1",
     "clang-tidy>=22.1.8",
     "cmake-format>=0.6.13",
-    "duckdb==1.5.4",
+    "duckdb==1.5.6",
     "jsonschema>=4.23",
     "numpy>=2.5.2",
     "pyarrow>=25.0.1",
