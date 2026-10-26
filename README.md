@@ -5,6 +5,12 @@ Two DuckDB extensions:
 - **`virtual_catalog_bridge`** — share tables with another DuckDB database, with permissions.
 - **`virtual_catalog_provider`** — make tables from Python functions.
 
+## Quick start
+
+- [Bridge](docs/python-quickstart-bridge.md) — share a table, filtered to one tenant's rows
+- [Bridge over Quack](docs/python-quickstart-quack.md) — serve the shared tables over the network
+- [Provider](docs/python-quickstart-provider.md) — make a table from Python
+
 ## Why
 
 - Give untrusted code — a plugin, a notebook, an LLM agent — only the tables and rows it should see.
