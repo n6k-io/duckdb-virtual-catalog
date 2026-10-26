@@ -13,7 +13,9 @@ from _pytest.fixtures import FixtureRequest
 from virtual_catalog.extension import VIRTUAL_CATALOG_EXT_DIR_ENV
 
 HERE = os.path.dirname(__file__)
-EXT_DIR = os.path.realpath(os.path.join(HERE, "..", "build", "release", "extension"))
+EXT_DIR = os.environ.get(VIRTUAL_CATALOG_EXT_DIR_ENV) or os.path.realpath(
+    os.path.join(HERE, "..", "build", "release", "extension")
+)
 
 
 def pytest_addoption(parser: Parser) -> None:
@@ -32,6 +34,8 @@ def pytest_addoption(parser: Parser) -> None:
 
 def pytest_configure(config: Config) -> None:
     config.addinivalue_line("markers", "external: requires --external flag with a database URL")
+    if not config.getoption("--from-bucket") and not os.path.isdir(EXT_DIR):
+        raise pytest.UsageError(f"Extensions not built: {EXT_DIR}")
 
 
 @pytest.fixture(autouse=True)
@@ -40,8 +44,6 @@ def _extension_source(request: FixtureRequest) -> Iterator[None]:
     if request.config.getoption("--from-bucket"):
         os.environ.pop(VIRTUAL_CATALOG_EXT_DIR_ENV, None)
     else:
-        if not os.path.isdir(EXT_DIR):
-            pytest.skip(f"Extensions not built: {EXT_DIR}")
         os.environ[VIRTUAL_CATALOG_EXT_DIR_ENV] = EXT_DIR
     yield
     if saved is None:
