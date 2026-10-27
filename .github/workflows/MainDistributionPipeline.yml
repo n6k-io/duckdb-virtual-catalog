@@ -16,10 +16,10 @@ concurrency:
 jobs:
   duckdb-stable-build:
     name: Build virtual_catalog extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.4
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.6
     with:
-      duckdb_version: v1.5.4
-      ci_tools_version: v1.5.4
+      duckdb_version: v1.5.6
+      ci_tools_version: v1.5.6
       extension_name: virtual_catalog
       # coi-only: build wasm_threads, never eh/mvp (they can't load a shared-memory
       # extension). On PRs also drop the non-amd64 native arches for speed.
@@ -37,12 +37,43 @@ jobs:
       # job deliberately does not check out the duckdb submodules.
       - run: python3 scripts/check_no_sql.py src
 
+  python-tests:
+    name: Python package tests
+    needs: duckdb-stable-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: virtual_catalog-v1.5.6-extension-linux_amd64
+          path: /tmp/artifact
+      # A missing extension would silently fall back to installing from the bucket.
+      - name: Stage built extensions
+        run: |
+          for name in virtual_catalog_bridge virtual_catalog_provider; do
+            built="$(find /tmp/artifact -name "$name.duckdb_extension" | head -1)"
+            if [ -z "$built" ]; then
+              echo "::error::$name.duckdb_extension not found in artifact"
+              exit 1
+            fi
+            mkdir -p "build/release/extension/$name"
+            cp "$built" "build/release/extension/$name/"
+          done
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - working-directory: python-virtual-catalog
+        run: uv run --frozen --package duckdb-virtual-catalog pytest
+
   code-quality-check:
     name: Code Quality Check
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5.4
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5.6
     with:
-      duckdb_version: v1.5.4
-      ci_tools_version: v1.5.4
+      duckdb_version: v1.5.6
+      ci_tools_version: v1.5.6
       extension_name: virtual_catalog
       format_checks: 'format;tidy'
 
@@ -78,11 +109,11 @@ jobs:
             git clone https://github.com/duckdb/duckdb.git
           fi
           cd duckdb
-          git checkout v1.5.4
+          git checkout v1.5.6
 
       - uses: actions/download-artifact@v4
         with:
-          name: virtual_catalog-v1.5.4-extension-${{ matrix.duckdb_arch }}
+          name: virtual_catalog-v1.5.6-extension-${{ matrix.duckdb_arch }}
           path: /tmp/artifact
 
       - uses: ./.github/actions/setup-gcloud
