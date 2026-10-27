@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "duckdb/common/atomic.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -161,7 +162,14 @@ public:
 
 	DuckDBSource(string bridge_id, const shared_ptr<DatabaseInstance> &source_db, DatabaseInstance &target_db,
 	             SourcePin source, shared_ptr<GrantBook> grants);
+	//! Unbound: every call throws until Bind. The target's main database starts this way, since it opens before
+	//! any token can be redeemed.
+	DuckDBSource();
 	~DuckDBSource();
+
+	//! Once, before any call can pass ThrowUnlessBound. Takes over `redeemed`, leaving it unbound.
+	void Bind(DuckDBSource &redeemed);
+	bool IsBound() const;
 
 	vector<string> Schemas();
 	vector<string> Tables(const string &schema);
@@ -176,6 +184,7 @@ public:
 	// naming another catalog would bind the wrong table under the wrong policy.
 
 private:
+	void ThrowUnlessBound() const;
 	shared_ptr<Connection> PlanningConnection();
 	shared_ptr<DatabaseInstance> Database() const;
 
@@ -189,8 +198,10 @@ private:
 	shared_ptr<DatabaseInstance> source_db_hold;
 	SourcePin source;
 	shared_ptr<GrantBook> grants;
+	atomic<bool> bound;
 };
 
+unique_ptr<DuckDBSource> RedeemBridge(const string &bridge_id, const string &token, DatabaseInstance &target_db);
 unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db);
 
 void RegisterBridgeFunctions(ExtensionLoader &loader);

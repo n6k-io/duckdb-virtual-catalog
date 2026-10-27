@@ -20,11 +20,16 @@ public:
 
 	string GetCatalogType() override;
 
+	bool IsBound();
+	void Bind(const string &bridge_id, const string &token);
+
+	using DuckCatalog::CreateSchema;
 	using DuckCatalog::Initialize;
 	void Initialize(optional_ptr<ClientContext> context, bool load_builtin) override;
 	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
 	                                              OnEntryNotFound if_not_found) override;
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
+	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
 	void OnDetach(ClientContext &context) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
 	                                    PhysicalOperator &plan) override;
@@ -39,8 +44,11 @@ protected:
 
 private:
 	void CreateServedSchemas();
+	void ThrowUnlessBound();
 
 	CrossingAttach attach;
+	mutex bind_lock;
+	bool initialized = false;
 };
 
 class BridgeSchemaEntry : public VirtualCatalogSchemaEntryBase {

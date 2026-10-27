@@ -133,18 +133,13 @@ name = "duckdb-virtual-catalog"
 version = "0.1.0"
 source = { editable = "python-virtual-catalog" }
 dependencies = [
+    { name = "duckdb" },
     { name = "numpy" },
     { name = "pyarrow" },
 ]
 
-[package.optional-dependencies]
-duckdb = [
-    { name = "duckdb" },
-]
-
 [package.dev-dependencies]
 dev = [
-    { name = "duckdb" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "python-dotenv" },
@@ -152,15 +147,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.0.0" },
+    { name = "duckdb", specifier = ">=1.5.6" },
     { name = "numpy" },
     { name = "pyarrow" },
 ]
-provides-extras = ["duckdb"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "duckdb", specifier = ">=1.0.0" },
     { name = "pytest", specifier = ">=7" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "python-dotenv", specifier = ">=1" },
@@ -550,7 +543,7 @@ name = "vcat-standalone"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "duckdb-virtual-catalog", extra = ["duckdb"] },
+    { name = "duckdb-virtual-catalog" },
 ]
 
 [package.dev-dependencies]
@@ -571,7 +564,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "duckdb-virtual-catalog", extras = ["duckdb"], editable = "python-virtual-catalog" }]
+requires-dist = [{ name = "duckdb-virtual-catalog", editable = "python-virtual-catalog" }]
 
 [package.metadata.requires-dev]
 dev = [

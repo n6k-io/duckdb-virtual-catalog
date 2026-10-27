@@ -1588,10 +1588,7 @@ void ThrowUnlessSettingsMatch(const DatabaseInstance &source_db, const DatabaseI
 
 } // namespace
 
-unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db) {
-	auto bridge_id = RequiredAttachOption(info, "id");
-	auto token = RequiredAttachOption(info, "token");
-
+unique_ptr<DuckDBSource> RedeemBridge(const string &bridge_id, const string &token, DatabaseInstance &target_db) {
 	auto colon = token.find(':');
 	if (colon != string::npos && token.substr(0, colon) != LoadNonce()) {
 		throw PermissionException(
@@ -1633,6 +1630,10 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &
 	return make_uniq<DuckDBSource>(bridge_id, source_db, target_db, std::move(source), std::move(grants));
 }
 
+unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db) {
+	return RedeemBridge(RequiredAttachOption(info, "id"), RequiredAttachOption(info, "token"), target_db);
+}
+
 SourcePin::SourcePin(AttachedDatabase &attached_p, string registered_name_p)
     : attached(attached_p.shared_from_this()), registered_name(std::move(registered_name_p)) {
 }
@@ -1656,7 +1657,35 @@ DuckDBSource::DuckDBSource(string bridge_id_p, const shared_ptr<DatabaseInstance
                            DatabaseInstance &target_db, SourcePin source_p, shared_ptr<GrantBook> grants_p)
     : bridge_id(std::move(bridge_id_p)), source_db(source_db_p),
       source_db_hold(source_db_p.get() == &target_db ? nullptr : source_db_p), source(std::move(source_p)),
-      grants(std::move(grants_p)) {
+      grants(std::move(grants_p)), bound(true) {
+}
+
+DuckDBSource::DuckDBSource() : bound(false) {
+}
+
+void DuckDBSource::Bind(DuckDBSource &redeemed) {
+	if (bound) {
+		throw InternalException("virtual_catalog_bridge: bridge is already bound");
+	}
+	bridge_id = std::move(redeemed.bridge_id);
+	source_db = redeemed.source_db;
+	redeemed.source_db.reset();
+	source_db_hold = std::move(redeemed.source_db_hold);
+	source = std::move(redeemed.source);
+	grants = std::move(redeemed.grants);
+	redeemed.bound = false;
+	bound = true;
+}
+
+bool DuckDBSource::IsBound() const {
+	return bound;
+}
+
+void DuckDBSource::ThrowUnlessBound() const {
+	if (!bound) {
+		throw PermissionException(
+		    "virtual_catalog_bridge: not initialized; call virtual_catalog_bridge_init(bridge_id, token)");
+	}
 }
 
 shared_ptr<DatabaseInstance> DuckDBSource::Database() const {
@@ -1668,6 +1697,9 @@ shared_ptr<DatabaseInstance> DuckDBSource::Database() const {
 }
 
 DuckDBSource::~DuckDBSource() {
+	if (!grants) {
+		return;
+	}
 	lock_guard<mutex> lock(PendingMutex());
 	auto it = LiveBridges().find(bridge_id);
 	if (it != LiveBridges().end() && it->second.grants.lock() == grants) {
@@ -1676,11 +1708,15 @@ DuckDBSource::~DuckDBSource() {
 }
 
 void DuckDBSource::SetTarget(optional_ptr<CrossingAttach> target) {
+	if (!grants) {
+		return;
+	}
 	lock_guard<mutex> guard(grants->lock);
 	grants->target = target;
 }
 
 vector<string> DuckDBSource::Schemas() {
+	ThrowUnlessBound();
 	lock_guard<mutex> guard(grants->lock);
 	case_insensitive_set_t names;
 	for (auto &schema : grants->tables) {
@@ -1695,6 +1731,7 @@ vector<string> DuckDBSource::Schemas() {
 }
 
 vector<string> DuckDBSource::Tables(const string &schema) {
+	ThrowUnlessBound();
 	lock_guard<mutex> guard(grants->lock);
 	vector<string> out;
 	auto it = grants->tables.find(schema);
@@ -1709,6 +1746,7 @@ vector<string> DuckDBSource::Tables(const string &schema) {
 }
 
 CrossingSchema DuckDBSource::DescribeSchema(const string &schema) {
+	ThrowUnlessBound();
 	lock_guard<mutex> guard(grants->lock);
 	CrossingSchema described;
 	described.name = schema;
@@ -1719,6 +1757,7 @@ CrossingSchema DuckDBSource::DescribeSchema(const string &schema) {
 }
 
 CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
+	ThrowUnlessBound();
 	uint8_t verbs;
 	vector<string> key;
 	bool key_verified;
@@ -1875,6 +1914,7 @@ void DuckDBSession::Rollback() {
 }
 
 unique_ptr<DuckDBSession> DuckDBSource::Begin(ClientContext &context) {
+	ThrowUnlessBound();
 	auto autocommit = context.transaction.IsAutoCommit() ||
 	                  context.registered_state->Get<StreamingReadMarker>(StreamingReadMarkerKey()) != nullptr;
 	return make_uniq<DuckDBSession>(Database(), source, grants, autocommit);
@@ -1887,6 +1927,7 @@ shared_ptr<Connection> DuckDBSource::PlanningConnection() {
 }
 
 CrossingPlan DuckDBSource::Plan(const CrossingPlanRequest &request) {
+	ThrowUnlessBound();
 	if (request.verb == CrossingVerb::SELECT) {
 		auto &described = *request.described;
 		return CrossingPlan::Of(
@@ -1905,6 +1946,7 @@ bool DuckDBSource::SourceHasFunction(const Function &function, CatalogType type)
 }
 
 CrossingVerdict DuckDBSource::AcceptsCall(const Expression &expr) {
+	ThrowUnlessBound();
 	optional_ptr<const Function> function;
 	CatalogType type;
 	switch (expr.GetExpressionClass()) {
@@ -1949,6 +1991,7 @@ CrossingVerdict DuckDBSource::AcceptsCall(const Expression &expr) {
 }
 
 CrossingVerdict DuckDBSource::AcceptsType(const LogicalType &type) {
+	ThrowUnlessBound();
 	return CrossingVerdict::Yes();
 }
 

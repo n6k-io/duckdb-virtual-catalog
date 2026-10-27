@@ -4,6 +4,8 @@
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/main/database_manager.hpp"
+#include "duckdb/main/settings.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
@@ -34,8 +36,44 @@ string BridgeCatalog::GetCatalogType() {
 
 void BridgeCatalog::Initialize(optional_ptr<ClientContext>, bool load_builtin) {
 	DuckCatalog::Initialize(load_builtin);
+	initialized = true;
+	if (!IsBound()) {
+		return;
+	}
 	// Not in the attach callback: the transaction manager does not exist until after it returns.
 	CreateServedSchemas();
+}
+
+bool BridgeCatalog::IsBound() {
+	return attach.Source<DuckDBSource>().IsBound();
+}
+
+void BridgeCatalog::ThrowUnlessBound() {
+	if (!IsBound()) {
+		throw PermissionException(
+		    "virtual_catalog_bridge: not initialized; call virtual_catalog_bridge_init(bridge_id, token)");
+	}
+}
+
+void BridgeCatalog::Bind(const string &bridge_id, const string &token) {
+	lock_guard<mutex> guard(bind_lock);
+	if (IsBound()) {
+		throw PermissionException("virtual_catalog_bridge: the main database is already initialized");
+	}
+	auto redeemed = RedeemBridge(bridge_id, token, GetDatabase());
+	auto &source = attach.Source<DuckDBSource>();
+	source.Bind(*redeemed);
+	source.SetTarget(&attach);
+	attach.Refresh();
+	CreateServedSchemas();
+}
+
+optional_ptr<CatalogEntry> BridgeCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
+	// DuckCatalog::Initialize creates the default schema through here.
+	if (initialized) {
+		ThrowUnlessBound();
+	}
+	return VirtualCatalogBase::CreateSchema(transaction, info);
 }
 
 void BridgeCatalog::CreateServedSchemas() {
@@ -53,6 +91,13 @@ void BridgeCatalog::CreateServedSchemas() {
 optional_ptr<SchemaCatalogEntry> BridgeCatalog::LookupSchema(CatalogTransaction transaction,
                                                              const EntryLookupInfo &schema_lookup,
                                                              OnEntryNotFound if_not_found) {
+	// Unqualified function lookups walk the default catalog, so an unbound bridge answers "not here" to those.
+	if (!IsBound()) {
+		if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+			return nullptr;
+		}
+		ThrowUnlessBound();
+	}
 	auto entry = VirtualCatalogBase::LookupSchema(transaction, schema_lookup, OnEntryNotFound::RETURN_NULL);
 	if (entry) {
 		return entry;
@@ -67,6 +112,9 @@ optional_ptr<SchemaCatalogEntry> BridgeCatalog::LookupSchema(CatalogTransaction 
 }
 
 void BridgeCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {
+	if (!IsBound()) {
+		return;
+	}
 	CreateServedSchemas();
 	VirtualCatalogBase::ScanSchemas(context, std::move(callback));
 }
@@ -210,7 +258,14 @@ void BridgeTransactionManager::RollbackTransaction(Transaction &transaction) {
 namespace {
 
 unique_ptr<Catalog> AttachBridge(optional_ptr<StorageExtensionInfo>, ClientContext &context, AttachedDatabase &db,
-                                 const string &, AttachInfo &info, AttachOptions &) {
+                                 const string &, AttachInfo &info, AttachOptions &options) {
+	if (options.is_main_database) {
+		if (!info.path.empty() || !info.options.empty()) {
+			throw IOException("virtual_catalog_bridge: open the main database as 'virtual_catalog_bridge:' with no "
+			                  "path, then call virtual_catalog_bridge_init(bridge_id, token)");
+		}
+		return make_uniq<BridgeCatalog>(db, make_uniq<DuckDBSource>());
+	}
 	auto source = RedeemBridgeAttach(info, db.GetDatabase());
 	info.path = string();
 	return make_uniq<BridgeCatalog>(db, std::move(source));
@@ -219,6 +274,44 @@ unique_ptr<Catalog> AttachBridge(optional_ptr<StorageExtensionInfo>, ClientConte
 unique_ptr<TransactionManager> CreateBridgeTransactionManager(optional_ptr<StorageExtensionInfo>, AttachedDatabase &db,
                                                               Catalog &catalog) {
 	return make_uniq<BridgeTransactionManager>(db, CrossingAttach::Of(catalog));
+}
+
+void BridgeInitFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &context = state.GetContext();
+	auto &db = DatabaseInstance::GetDatabase(context);
+	auto count = args.size();
+	if (count == 0) {
+		return;
+	}
+	if (!context.transaction.IsAutoCommit()) {
+		throw PermissionException("virtual_catalog_bridge_init: cannot run inside a transaction");
+	}
+	if (count > 1) {
+		throw InvalidInputException("virtual_catalog_bridge_init: call it once, not once per row");
+	}
+	auto bridge_id = args.data[0].GetValue(0);
+	auto token = args.data[1].GetValue(0);
+	if (bridge_id.IsNull() || token.IsNull()) {
+		throw InvalidInputException("virtual_catalog_bridge_init: bridge_id and token must not be NULL");
+	}
+	if (Settings::Get<LockConfigurationSetting>(DBConfig::GetConfig(db))) {
+		throw PermissionException("virtual_catalog_bridge_init: the configuration is locked; call it before "
+		                          "virtual_catalog_lockdown");
+	}
+	optional_ptr<BridgeCatalog> main;
+	for (auto &attached : db.GetDatabaseManager().GetDatabases()) {
+		if (attached->IsInitialDatabase() && attached->GetCatalog().GetCatalogType() == VIRTUAL_CATALOG_BRIDGE_TYPE) {
+			main = &attached->GetCatalog().Cast<BridgeCatalog>();
+		}
+	}
+	if (!main) {
+		throw InvalidInputException("virtual_catalog_bridge_init: the main database is not a bridge; open it as "
+		                            "'virtual_catalog_bridge:'");
+	}
+	main->Bind(bridge_id.ToString(), token.ToString());
+
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	ConstantVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ok");
 }
 
 } // namespace
@@ -230,6 +323,12 @@ void RegisterBridgeCatalog(ExtensionLoader &loader) {
 	auto &db = loader.GetDatabaseInstance();
 	StorageExtension::Register(DBConfig::GetConfig(db), VIRTUAL_CATALOG_BRIDGE_TYPE, std::move(ext));
 	Crossing<DuckDBSource>::RegisterPass(db);
+
+	ScalarFunction init("virtual_catalog_bridge_init", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                    LogicalType::VARCHAR, BridgeInitFunc);
+	init.stability = FunctionStability::VOLATILE;
+	init.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	loader.RegisterFunction(init);
 }
 
 } // namespace duckdb

@@ -129,11 +129,25 @@ def bridge(
 
     # ATTACH options fold to constants at bind time, so neither can be a parameter.
     quoted = name.replace('"', '""')
+    quoted_id = bridge_id.replace("'", "''")
+    quoted_token = token.replace("'", "''")
     target.execute(
-        f"ATTACH '' AS \"{quoted}\" (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')",
+        f"ATTACH '' AS \"{quoted}\" (TYPE virtual_catalog_bridge, ID '{quoted_id}', TOKEN '{quoted_token}')",
     )
     log.debug("bridge(%s): attached as %s", name, bridge_id)
     return bridge_id
+
+
+def connect_main(bridge_id: str, token: str, **config: str) -> duckdb.DuckDBPyConnection:
+    """A new database whose main database is the bridge. The extension loads by name as it opens, so it must
+    already be installed, and the source must have loaded that same installed copy."""
+    target = duckdb.connect("virtual_catalog_bridge:", config=config)
+    try:
+        target.execute("SELECT virtual_catalog_bridge_init($1, $2)", [bridge_id, token])
+    except BaseException:
+        target.close()
+        raise
+    return target
 
 
 def unbridge(target: duckdb.DuckDBPyConnection, name: str) -> None:
