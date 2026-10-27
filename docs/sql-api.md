@@ -16,9 +16,11 @@ the source has granted, and released by `DETACH`. Both options are required, and
 neither may be a `?` parameter or a subquery: DuckDB folds ATTACH options to
 constants at bind time.
 
-Both can instead go in the path, `ATTACH 'bridge_id?token=token' AS … (TYPE
-virtual_catalog_bridge)`, which also opens the bridge as a database's main
-database: `duckdb.connect('virtual_catalog_bridge:bridge_id?token=token')`.
+To open the bridge as a database's main database, connect to
+`'virtual_catalog_bridge:'` with no path, then call
+`virtual_catalog_bridge_init(bridge_id, token)` once, before
+`virtual_catalog_lockdown`. Both arguments may be parameters. Until then the
+main database refuses every lookup.
 
 The policy is set with two functions, before or after `ATTACH`, until
 `bridge_finalize_policy`; see [policy](virtual-catalog-bridge.md#policy).
@@ -33,6 +35,7 @@ The policy is set with two functions, before or after `ATTACH`, until
 | `bridge_set_policy` | `bridge_id, target, setting, op, value ANY` — changes a list setting. `op` is `add`, `remove` or `set`; `value` is a name or a list of names (`set` takes a list) |
 | `bridge_finalize_context` | `bridge_id` — optional; freezes the context, before or after `ATTACH` |
 | `bridge_finalize_policy` | `bridge_id` — optional; freezes the policy, before or after `ATTACH`. Every later `bridge_configure_policy` and `bridge_set_policy` is refused |
+| `virtual_catalog_bridge_init` | `bridge_id, token` — run on a target opened as `'virtual_catalog_bridge:'`; redeems the token into its main database. Refused inside an explicit transaction, on NULL, after `virtual_catalog_lockdown`, when the main database is not a bridge or is already initialized, or when evaluated for more than one row |
 | `virtual_catalog_lockdown` | `memory_limit, threads BIGINT[, drop_functions VARCHAR[]]` — run on the target; locks its whole `DatabaseInstance`. First drops each named function from the system catalog (every scalar, aggregate, macro, table and pragma entry of that name, e.g. `['quack_serve', 'quack_stop']`). Sets `memory_limit` and `threads`, disables spilling (`temp_directory = ''`), extension autoload/autoinstall, community extensions, persistent secrets, the local filesystem and external access, then `lock_configuration`. Bridges attach, read, write and detach as before. Refused inside an explicit transaction, when the configuration is already locked, on NULL (including a NULL list element), when a name matches no system function, or when evaluated for more than one row |
 
 ### Policy validation

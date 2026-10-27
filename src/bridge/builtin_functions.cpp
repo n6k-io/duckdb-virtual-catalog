@@ -724,6 +724,7 @@ const case_insensitive_set_t &TargetOnlyBuiltins() {
 	    "uuidv4",
 	    "uuidv7",
 	    "version",
+	    "virtual_catalog_bridge_init",
 	    "virtual_catalog_lockdown",
 	    "write_log",
 	};

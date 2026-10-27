@@ -136,6 +136,18 @@ def bridge(
     return bridge_id
 
 
+def connect_main(bridge_id: str, token: str, **config: str) -> duckdb.DuckDBPyConnection:
+    """A new database whose main database is the bridge. The extension loads by name as it opens, so it must
+    already be installed, and the source must have loaded that same installed copy."""
+    target = duckdb.connect("virtual_catalog_bridge:", config=config)
+    try:
+        target.execute("SELECT virtual_catalog_bridge_init($1, $2)", [bridge_id, token])
+    except BaseException:
+        target.close()
+        raise
+    return target
+
+
 def unbridge(target: duckdb.DuckDBPyConnection, name: str) -> None:
     quoted = name.replace('"', '""')
     target.execute(f'DETACH "{quoted}"')

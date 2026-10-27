@@ -672,25 +672,6 @@ string RequiredAttachOption(AttachInfo &info, const char *key) {
 	return text;
 }
 
-//! The main database gets no ATTACH options, so `virtual_catalog_bridge:<id>?token=<token>` carries them.
-pair<string, string> BridgeCredentials(AttachInfo &info) {
-	auto has_id = info.options.find("id") != info.options.end();
-	auto has_token = info.options.find("token") != info.options.end();
-	if (info.path.empty() || has_id || has_token) {
-		if (!info.path.empty()) {
-			throw IOException("virtual_catalog_bridge: give the bridge id and token either as ATTACH options or as "
-			                  "the path '<id>?token=<token>', not both");
-		}
-		return {RequiredAttachOption(info, "id"), RequiredAttachOption(info, "token")};
-	}
-	static const string token_param = "?token=";
-	auto query = info.path.find(token_param);
-	if (query == string::npos || query == 0 || query + token_param.size() == info.path.size()) {
-		throw IOException("virtual_catalog_bridge: the path must be '<id>?token=<token>'");
-	}
-	return {info.path.substr(0, query), info.path.substr(query + token_param.size())};
-}
-
 const string &BridgePrefix() {
 	static const string prefix = "virtual_catalog_bridge: ";
 	return prefix;
@@ -1597,10 +1578,6 @@ void ThrowUnlessSettingsMatch(const DatabaseInstance &source_db, const DatabaseI
 	for (auto &name : MatchedSettings()) {
 		auto source_value = CurrentSetting(source_db, name);
 		auto target_value = CurrentSetting(target_db, name);
-		//! NULL when the bridge is the target's main database: it attaches before extensions register settings.
-		if (target_value.IsNull()) {
-			continue;
-		}
 		if (!Value::NotDistinctFrom(source_value, target_value)) {
 			throw InvalidInputException("virtual_catalog_bridge: bridge '%s' needs setting '%s' to match on source "
 			                            "and target, but the source has %s and the target has %s",
@@ -1611,20 +1588,12 @@ void ThrowUnlessSettingsMatch(const DatabaseInstance &source_db, const DatabaseI
 
 } // namespace
 
-unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db) {
-	auto credentials = BridgeCredentials(info);
-	auto &bridge_id = credentials.first;
-	auto &token = credentials.second;
-
+unique_ptr<DuckDBSource> RedeemBridge(const string &bridge_id, const string &token, DatabaseInstance &target_db) {
 	auto colon = token.find(':');
 	if (colon != string::npos && token.substr(0, colon) != LoadNonce()) {
 		throw PermissionException(
 		    "virtual_catalog_bridge: source and target loaded different copies of the virtual_catalog extension. "
 		    "Ensure both connections use the same extension installation.");
-	}
-	if (StringUtil::Contains(DBConfig::GetConfig(target_db).options.temporary_directory, token)) {
-		throw InvalidInputException("virtual_catalog_bridge: the default temp_directory is derived from the path and "
-		                            "would contain the token; pass 'temp_directory' in the connect config");
 	}
 
 	shared_ptr<DatabaseInstance> source_db;
@@ -1661,6 +1630,10 @@ unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &
 	return make_uniq<DuckDBSource>(bridge_id, source_db, target_db, std::move(source), std::move(grants));
 }
 
+unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db) {
+	return RedeemBridge(RequiredAttachOption(info, "id"), RequiredAttachOption(info, "token"), target_db);
+}
+
 SourcePin::SourcePin(AttachedDatabase &attached_p, string registered_name_p)
     : attached(attached_p.shared_from_this()), registered_name(std::move(registered_name_p)) {
 }
@@ -1684,7 +1657,35 @@ DuckDBSource::DuckDBSource(string bridge_id_p, const shared_ptr<DatabaseInstance
                            DatabaseInstance &target_db, SourcePin source_p, shared_ptr<GrantBook> grants_p)
     : bridge_id(std::move(bridge_id_p)), source_db(source_db_p),
       source_db_hold(source_db_p.get() == &target_db ? nullptr : source_db_p), source(std::move(source_p)),
-      grants(std::move(grants_p)) {
+      grants(std::move(grants_p)), bound(true) {
+}
+
+DuckDBSource::DuckDBSource() : bound(false) {
+}
+
+void DuckDBSource::Bind(DuckDBSource &redeemed) {
+	if (bound) {
+		throw InternalException("virtual_catalog_bridge: bridge is already bound");
+	}
+	bridge_id = std::move(redeemed.bridge_id);
+	source_db = redeemed.source_db;
+	redeemed.source_db.reset();
+	source_db_hold = std::move(redeemed.source_db_hold);
+	source = std::move(redeemed.source);
+	grants = std::move(redeemed.grants);
+	redeemed.bound = false;
+	bound = true;
+}
+
+bool DuckDBSource::IsBound() const {
+	return bound;
+}
+
+void DuckDBSource::ThrowUnlessBound() const {
+	if (!bound) {
+		throw PermissionException(
+		    "virtual_catalog_bridge: not initialized; call virtual_catalog_bridge_init(bridge_id, token)");
+	}
 }
 
 shared_ptr<DatabaseInstance> DuckDBSource::Database() const {
@@ -1696,6 +1697,9 @@ shared_ptr<DatabaseInstance> DuckDBSource::Database() const {
 }
 
 DuckDBSource::~DuckDBSource() {
+	if (!grants) {
+		return;
+	}
 	lock_guard<mutex> lock(PendingMutex());
 	auto it = LiveBridges().find(bridge_id);
 	if (it != LiveBridges().end() && it->second.grants.lock() == grants) {
@@ -1704,11 +1708,15 @@ DuckDBSource::~DuckDBSource() {
 }
 
 void DuckDBSource::SetTarget(optional_ptr<CrossingAttach> target) {
+	if (!grants) {
+		return;
+	}
 	lock_guard<mutex> guard(grants->lock);
 	grants->target = target;
 }
 
 vector<string> DuckDBSource::Schemas() {
+	ThrowUnlessBound();
 	lock_guard<mutex> guard(grants->lock);
 	case_insensitive_set_t names;
 	for (auto &schema : grants->tables) {
@@ -1723,6 +1731,7 @@ vector<string> DuckDBSource::Schemas() {
 }
 
 vector<string> DuckDBSource::Tables(const string &schema) {
+	ThrowUnlessBound();
 	lock_guard<mutex> guard(grants->lock);
 	vector<string> out;
 	auto it = grants->tables.find(schema);
@@ -1737,6 +1746,7 @@ vector<string> DuckDBSource::Tables(const string &schema) {
 }
 
 CrossingSchema DuckDBSource::DescribeSchema(const string &schema) {
+	ThrowUnlessBound();
 	lock_guard<mutex> guard(grants->lock);
 	CrossingSchema described;
 	described.name = schema;
@@ -1747,6 +1757,7 @@ CrossingSchema DuckDBSource::DescribeSchema(const string &schema) {
 }
 
 CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
+	ThrowUnlessBound();
 	uint8_t verbs;
 	vector<string> key;
 	bool key_verified;
@@ -1903,6 +1914,7 @@ void DuckDBSession::Rollback() {
 }
 
 unique_ptr<DuckDBSession> DuckDBSource::Begin(ClientContext &context) {
+	ThrowUnlessBound();
 	auto autocommit = context.transaction.IsAutoCommit() ||
 	                  context.registered_state->Get<StreamingReadMarker>(StreamingReadMarkerKey()) != nullptr;
 	return make_uniq<DuckDBSession>(Database(), source, grants, autocommit);
@@ -1915,6 +1927,7 @@ shared_ptr<Connection> DuckDBSource::PlanningConnection() {
 }
 
 CrossingPlan DuckDBSource::Plan(const CrossingPlanRequest &request) {
+	ThrowUnlessBound();
 	if (request.verb == CrossingVerb::SELECT) {
 		auto &described = *request.described;
 		return CrossingPlan::Of(
@@ -1933,6 +1946,7 @@ bool DuckDBSource::SourceHasFunction(const Function &function, CatalogType type)
 }
 
 CrossingVerdict DuckDBSource::AcceptsCall(const Expression &expr) {
+	ThrowUnlessBound();
 	optional_ptr<const Function> function;
 	CatalogType type;
 	switch (expr.GetExpressionClass()) {
@@ -1977,6 +1991,7 @@ CrossingVerdict DuckDBSource::AcceptsCall(const Expression &expr) {
 }
 
 CrossingVerdict DuckDBSource::AcceptsType(const LogicalType &type) {
+	ThrowUnlessBound();
 	return CrossingVerdict::Yes();
 }
 

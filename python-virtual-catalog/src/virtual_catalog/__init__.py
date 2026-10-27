@@ -1,4 +1,4 @@
-from virtual_catalog.bridge import Policy, bridge, unbridge
+from virtual_catalog.bridge import Policy, bridge, connect_main, unbridge
 from virtual_catalog.extension import load_virtual_catalog_bridge, load_virtual_catalog_provider
 from virtual_catalog.filters import filter_and_project
 from virtual_catalog.provider import PK_METADATA_KEY, Provider, TableNotFound, register_provider
@@ -10,6 +10,7 @@ __all__ = [
     "Provider",
     "TableNotFound",
     "bridge",
+    "connect_main",
     "filter_and_project",
     "load_virtual_catalog_bridge",
     "load_virtual_catalog_provider",

@@ -52,18 +52,19 @@ ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'NONCE:UUID'
 constant at bind time, so neither can be a `?` parameter or a subquery — a host
 formats the token into the statement text.
 
-To open the bridge as the target's main database, put both in the path:
+To open the bridge as the target's main database, open it with no path and
+redeem the token with `virtual_catalog_bridge_init`:
 
 ```python
-target = duckdb.connect("virtual_catalog_bridge:b1?token=NONCE:UUID",
-                        config={"allow_unsigned_extensions": "true",
-                                "temp_directory": "/var/tmp/b1"})
+target = duckdb.connect("virtual_catalog_bridge:", config={"allow_unsigned_extensions": "true"})
+target.execute("SELECT virtual_catalog_bridge_init($1, $2)", ["b1", token])
 ```
 
 The extension then loads by name as the database opens, so it must already be
-installed, and the source must load that same installed copy. `temp_directory`
-is required: its default is derived from the path, which holds the token. Quack clients see
-the main database on `ATTACH 'quack:...'`.
+installed, and the source must load that same installed copy. Until init, the
+main database refuses every lookup; init runs once, and not after
+`virtual_catalog_lockdown`. Quack clients see the main database on
+`ATTACH 'quack:...'`.
 
 The token contains a nonce unique to the loaded extension binary — mismatched
 extension versions are rejected. Tokens expire after **30 seconds** if not

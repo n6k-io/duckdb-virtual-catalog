@@ -1,10 +1,10 @@
 # Python quick start: bridge over Quack
 
-[Quack](https://duckdb.org/quack/) serves a DuckDB database over the network. Its permission hook
-sees only each query's SQL text — no per-table or per-row grants.
+[Quack](https://duckdb.org/quack/) lets clients query a DuckDB database over the network, but it
+can't limit which tables or rows they see.
 
-Serve Quack from a bridge target instead: clients reach only the tables and rows the policy
-grants, and the source database is never served.
+The bridge can. You keep your data in a private source database, and Quack serves a bridge in front
+of it. Clients only see the tables and rows you share.
 
 ## 1. Install
 
@@ -20,7 +20,6 @@ REPO = "https://storage.googleapis.com/n6k-duckdb-release"
 
 
 def connect():
-    # A new, separate DuckDB database
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
 
     con.execute(f"INSTALL virtual_catalog_bridge FROM '{REPO}'")
@@ -30,7 +29,7 @@ def connect():
 
 ## 2. Source: data and policy
 
-Imagine a source database with two tables:
+Say your source database has two tables:
 
 `users`
 
@@ -40,7 +39,7 @@ Imagine a source database with two tables:
 | 2  | 42        | grace |
 | 3  | 7         | linus |
 
-`secrets` — must never be served.
+`secrets`, which clients must never see.
 
 <details>
 <summary>Create them to follow along</summary>
@@ -56,47 +55,40 @@ source.execute("""
 
 </details>
 
-Share `users` with tenant 42: read, insert and update its own rows, no delete. `secrets` is not
-granted.
+Share `users` with tenant 42. They can read, insert and update their own rows, but not delete.
+`secrets` isn't shared, so clients can't see it.
 
 ```python
-# Register the bridge; returns a one-time token for the target's ATTACH
+# Create bridge b1; the token lets the target connect once
 token = source.execute("""
     SELECT bridge_register_source('b1', 'memory')
 """).fetchone()[0]
 
-# $tenant, used by the row filters below
+# The tenant this bridge is for
 source.execute("""
     SELECT bridge_set_context('b1', 'tenant', 42)
 """)
 
-# Each verb only reaches rows where tenant_id = $tenant
+# Each action only touches tenant 42's rows
 for verb in ["select", "insert", "update"]:
     source.execute(f"""
         SELECT bridge_set_policy('b1', 'main.users', '{verb}', 'tenant_id = $tenant')
     """)
 ```
 
-## 3. Target: attach
+## 3. Target: open the bridge
 
-Open the bridge as the target's main database, so Quack clients see it on `ATTACH`.
+The target is the database Quack will serve. Open it as a bridge, then connect it to the source with
+the token.
 
 ```python
-# Redeem the token: granted tables become the main database, b1
-target = duckdb.connect(
-    f"virtual_catalog_bridge:b1?token={token}",
-    config={"allow_unsigned_extensions": "true", "temp_directory": "/var/tmp/b1"},
-)
+target = duckdb.connect("virtual_catalog_bridge:", config={"allow_unsigned_extensions": "true"})
+target.execute("SELECT virtual_catalog_bridge_init('b1', $1)", [token])
 ```
-
-The extension loads by name when the database opens, so it must already be installed; `connect()` in
-step 1 did that. `temp_directory` is required: its default is derived from the path, which holds the
-token.
 
 ## 4. Serve the target over Quack
 
 ```python
-# httpfs must be loaded before lockdown (see below)
 target.execute("""
     INSTALL quack;  LOAD quack;
     INSTALL httpfs; LOAD httpfs;
@@ -107,8 +99,7 @@ target.execute("""
 """)
 ```
 
-The Quack server loads `httpfs` on demand. After lockdown it can't, and every request would fail
-with HTTP 500.
+Load `httpfs` now: Quack needs it, and after lockdown it can't be loaded.
 
 ## 5. Lock down the target
 
@@ -122,11 +113,12 @@ target.execute("""
 """)
 ```
 
-Keep this process running.
+Lockdown stops clients from reading files, changing settings or loading extensions. Keep this
+process running.
 
 ## 6. Query from a client
 
-In another process, plain SQL.
+In another terminal, start `duckdb` and run:
 
 ```sql
 INSTALL quack;
@@ -135,7 +127,7 @@ CREATE SECRET (TYPE quack, TOKEN 'super_secret');
 ATTACH 'quack:localhost:9494' AS app;
 
 -- Only tenant 42's rows
-FROM app.users;
+SELECT * FROM app.users;
 -- (1, 42, 'ada'), (2, 42, 'grace')
 
 -- Insert for tenant 42: allowed
@@ -171,8 +163,8 @@ FROM quack_query('quack:localhost:9494', 'CALL quack_stop(''quack:localhost:9494
 -- Invalid Input Error: Table Function with name "quack_stop" is not in the catalog, ...
 ```
 
-Quack's `ATTACH` doesn't support `UPDATE` or `DELETE`, with or without the bridge (`Binder Error: Can
-only update base table`); send those through `quack_query`.
+Quack's `ATTACH` can't run `UPDATE` or `DELETE`, bridge or not, so send those through
+`quack_query`.
 
 Next: [python-quickstart-bridge.md](python-quickstart-bridge.md),
 [virtual-catalog-bridge.md](virtual-catalog-bridge.md), [sql-api.md](sql-api.md).
