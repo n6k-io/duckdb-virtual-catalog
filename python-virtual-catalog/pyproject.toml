@@ -7,10 +7,7 @@ authors = [
     { email = "srossross@gmail.com" }
 ]
 requires-python = ">=3.9"
-dependencies = ["pyarrow", "numpy"]
-
-[project.optional-dependencies]
-duckdb = ["duckdb>=1.0.0"]
+dependencies = ["duckdb>=1.5.6", "pyarrow", "numpy"]
 
 [build-system]
 requires = ["uv_build>=0.9.27,<0.10.0"]
@@ -23,7 +20,6 @@ module-name = "virtual_catalog"
 dev = [
     "pytest>=7",
     "pytest-asyncio>=0.23",
-    "duckdb>=1.0.0",
     "python-dotenv>=1",
 ]
 

@@ -129,8 +129,10 @@ def bridge(
 
     # ATTACH options fold to constants at bind time, so neither can be a parameter.
     quoted = name.replace('"', '""')
+    quoted_id = bridge_id.replace("'", "''")
+    quoted_token = token.replace("'", "''")
     target.execute(
-        f"ATTACH '' AS \"{quoted}\" (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')",
+        f"ATTACH '' AS \"{quoted}\" (TYPE virtual_catalog_bridge, ID '{quoted_id}', TOKEN '{quoted_token}')",
     )
     log.debug("bridge(%s): attached as %s", name, bridge_id)
     return bridge_id

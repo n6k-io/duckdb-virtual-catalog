@@ -9,7 +9,7 @@ of it. Clients only see the tables and rows you share.
 ## 1. Install
 
 ```sh
-pip install duckdb==1.5.4
+pip install duckdb==1.5.6
 ```
 
 ```python

@@ -21,7 +21,6 @@ public:
 	string GetCatalogType() override;
 
 	bool IsBound();
-	//! Redeems the token into this unbound catalog. Throws when already bound.
 	void Bind(const string &bridge_id, const string &token);
 
 	using DuckCatalog::CreateSchema;
