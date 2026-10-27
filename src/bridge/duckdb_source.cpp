@@ -672,6 +672,25 @@ string RequiredAttachOption(AttachInfo &info, const char *key) {
 	return text;
 }
 
+//! The main database gets no ATTACH options, so `virtual_catalog_bridge:<id>?token=<token>` carries them.
+pair<string, string> BridgeCredentials(AttachInfo &info) {
+	auto has_id = info.options.find("id") != info.options.end();
+	auto has_token = info.options.find("token") != info.options.end();
+	if (info.path.empty() || has_id || has_token) {
+		if (!info.path.empty()) {
+			throw IOException("virtual_catalog_bridge: give the bridge id and token either as ATTACH options or as "
+			                  "the path '<id>?token=<token>', not both");
+		}
+		return {RequiredAttachOption(info, "id"), RequiredAttachOption(info, "token")};
+	}
+	static const string token_param = "?token=";
+	auto query = info.path.find(token_param);
+	if (query == string::npos || query == 0 || query + token_param.size() == info.path.size()) {
+		throw IOException("virtual_catalog_bridge: the path must be '<id>?token=<token>'");
+	}
+	return {info.path.substr(0, query), info.path.substr(query + token_param.size())};
+}
+
 const string &BridgePrefix() {
 	static const string prefix = "virtual_catalog_bridge: ";
 	return prefix;
@@ -1578,6 +1597,10 @@ void ThrowUnlessSettingsMatch(const DatabaseInstance &source_db, const DatabaseI
 	for (auto &name : MatchedSettings()) {
 		auto source_value = CurrentSetting(source_db, name);
 		auto target_value = CurrentSetting(target_db, name);
+		//! NULL when the bridge is the target's main database: it attaches before extensions register settings.
+		if (target_value.IsNull()) {
+			continue;
+		}
 		if (!Value::NotDistinctFrom(source_value, target_value)) {
 			throw InvalidInputException("virtual_catalog_bridge: bridge '%s' needs setting '%s' to match on source "
 			                            "and target, but the source has %s and the target has %s",
@@ -1589,14 +1612,19 @@ void ThrowUnlessSettingsMatch(const DatabaseInstance &source_db, const DatabaseI
 } // namespace
 
 unique_ptr<DuckDBSource> RedeemBridgeAttach(AttachInfo &info, DatabaseInstance &target_db) {
-	auto bridge_id = RequiredAttachOption(info, "id");
-	auto token = RequiredAttachOption(info, "token");
+	auto credentials = BridgeCredentials(info);
+	auto &bridge_id = credentials.first;
+	auto &token = credentials.second;
 
 	auto colon = token.find(':');
 	if (colon != string::npos && token.substr(0, colon) != LoadNonce()) {
 		throw PermissionException(
 		    "virtual_catalog_bridge: source and target loaded different copies of the virtual_catalog extension. "
 		    "Ensure both connections use the same extension installation.");
+	}
+	if (StringUtil::Contains(DBConfig::GetConfig(target_db).options.temporary_directory, token)) {
+		throw InvalidInputException("virtual_catalog_bridge: the default temp_directory is derived from the path and "
+		                            "would contain the token; pass 'temp_directory' in the connect config");
 	}
 
 	shared_ptr<DatabaseInstance> source_db;

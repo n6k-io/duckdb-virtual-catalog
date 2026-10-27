@@ -16,6 +16,10 @@ the source has granted, and released by `DETACH`. Both options are required, and
 neither may be a `?` parameter or a subquery: DuckDB folds ATTACH options to
 constants at bind time.
 
+Both can instead go in the path, `ATTACH 'bridge_id?token=token' AS … (TYPE
+virtual_catalog_bridge)`, which also opens the bridge as a database's main
+database: `duckdb.connect('virtual_catalog_bridge:bridge_id?token=token')`.
+
 The policy is set with two functions, before or after `ATTACH`, until
 `bridge_finalize_policy`; see [policy](virtual-catalog-bridge.md#policy).
 

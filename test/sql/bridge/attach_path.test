@@ -1,0 +1,55 @@
+# name: test/sql/bridge/attach_path.test
+# description: bridge id and token given as the ATTACH path '<id>?token=<token>'
+# group: [bridge]
+
+require virtual_catalog_bridge
+
+statement ok
+CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, tenant_id INTEGER, name VARCHAR);
+
+statement ok
+INSERT INTO memory.main.users VALUES (1, 42, 'ada'), (2, 7, 'linus');
+
+statement ok
+SELECT bridge_register_source('p1', 'memory', 'tok_p1');
+
+statement ok
+SELECT bridge_set_policy('p1', 'main.users', 'select', 'tenant_id = 42');
+
+statement error
+ATTACH 'p1' AS app (TYPE virtual_catalog_bridge);
+----
+the path must be '<id>?token=<token>'
+
+statement error
+ATTACH 'p1?token=' AS app (TYPE virtual_catalog_bridge);
+----
+the path must be '<id>?token=<token>'
+
+statement error
+ATTACH '?token=tok_p1' AS app (TYPE virtual_catalog_bridge);
+----
+the path must be '<id>?token=<token>'
+
+statement error
+ATTACH 'p1?token=tok_p1' AS app (TYPE virtual_catalog_bridge, ID 'p1', TOKEN 'tok_p1');
+----
+not both
+
+statement error
+ATTACH 'p1?token=wrong' AS app (TYPE virtual_catalog_bridge);
+----
+invalid setup token for bridge 'p1'
+
+statement ok
+ATTACH 'p1?token=tok_p1' AS app (TYPE virtual_catalog_bridge);
+
+query III
+SELECT * FROM app.main.users ORDER BY id;
+----
+1	42	ada
+
+query I
+SELECT count(*) FROM duckdb_databases() WHERE path LIKE '%tok_p1%';
+----
+0

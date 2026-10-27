@@ -79,18 +79,19 @@ for verb in ["select", "insert", "update"]:
 
 ## 3. Target: attach
 
-```python
-target = connect()
+Open the bridge as the target's main database, so Quack clients see it on `ATTACH`.
 
-# Redeem the token: granted tables appear under app
-target.execute(f"""
-    ATTACH '' AS app (
-        TYPE virtual_catalog_bridge,
-        ID 'b1',
-        TOKEN '{token}'
-    )
-""")
+```python
+# Redeem the token: granted tables become the main database, b1
+target = duckdb.connect(
+    f"virtual_catalog_bridge:b1?token={token}",
+    config={"allow_unsigned_extensions": "true", "temp_directory": "/var/tmp/b1"},
+)
 ```
+
+The extension loads by name when the database opens, so it must already be installed; `connect()` in
+step 1 did that. `temp_directory` is required: its default is derived from the path, which holds the
+token.
 
 ## 4. Serve the target over Quack
 
@@ -125,40 +126,41 @@ Keep this process running.
 
 ## 6. Query from a client
 
-In another process, plain SQL. `quack_query` runs its SQL on the server.
+In another process, plain SQL.
 
 ```sql
 INSTALL quack;
 LOAD quack;
 CREATE SECRET (TYPE quack, TOKEN 'super_secret');
+ATTACH 'quack:localhost:9494' AS app;
 
 -- Only tenant 42's rows
-FROM quack_query('quack:localhost:9494', 'SELECT * FROM app.main.users');
+FROM app.users;
 -- (1, 42, 'ada'), (2, 42, 'grace')
 
 -- Insert for tenant 42: allowed
-FROM quack_query('quack:localhost:9494', 'INSERT INTO app.main.users VALUES (4, 42, ''barbara'')');
+INSERT INTO app.users VALUES (4, 42, 'barbara');
 -- 1
 
 -- Insert for another tenant: refused
-FROM quack_query('quack:localhost:9494', 'INSERT INTO app.main.users VALUES (5, 7, ''mallory'')');
--- Invalid Input Error: virtual_catalog_bridge: row violates the check predicate on this table
+INSERT INTO app.users VALUES (5, 7, 'mallory');
+-- Invalid Input Error: Failed to append: virtual_catalog_bridge: row violates the check predicate on this table
 
 -- Update tenant 42's row
-FROM quack_query('quack:localhost:9494', 'UPDATE app.main.users SET name = ''Ada'' WHERE id = 1');
+FROM quack_query('quack:localhost:9494', 'UPDATE users SET name = ''Ada'' WHERE id = 1');
 -- 1
 
 -- Update another tenant's row: not visible, nothing changes
-FROM quack_query('quack:localhost:9494', 'UPDATE app.main.users SET name = ''Linus'' WHERE id = 3');
+FROM quack_query('quack:localhost:9494', 'UPDATE users SET name = ''Linus'' WHERE id = 3');
 -- 0
 
 -- Delete: not granted
-FROM quack_query('quack:localhost:9494', 'DELETE FROM app.main.users WHERE id = 2');
+FROM quack_query('quack:localhost:9494', 'DELETE FROM users WHERE id = 2');
 -- Invalid Input Error: crossing: 'users' does not have 'delete' permission
 
 -- Not granted: doesn't exist
-FROM quack_query('quack:localhost:9494', 'SELECT * FROM app.main.secrets');
--- Invalid Input Error: Table with name secrets does not exist!
+FROM app.secrets;
+-- Catalog Error: Table with name secrets does not exist!
 
 -- Locked down: no file access
 FROM quack_query('quack:localhost:9494', 'SELECT * FROM read_csv(''/etc/passwd'')');
@@ -169,8 +171,8 @@ FROM quack_query('quack:localhost:9494', 'CALL quack_stop(''quack:localhost:9494
 -- Invalid Input Error: Table Function with name "quack_stop" is not in the catalog, ...
 ```
 
-Use `quack_query`, not `ATTACH 'quack:...'`: `ATTACH` only exposes the server's default catalog,
-not `app` ([duckdb-quack#185](https://github.com/duckdb/duckdb-quack/issues/185)).
+Quack's `ATTACH` doesn't support `UPDATE` or `DELETE`, with or without the bridge (`Binder Error: Can
+only update base table`); send those through `quack_query`.
 
 Next: [python-quickstart-bridge.md](python-quickstart-bridge.md),
 [virtual-catalog-bridge.md](virtual-catalog-bridge.md), [sql-api.md](sql-api.md).
