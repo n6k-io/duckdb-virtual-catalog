@@ -2,7 +2,7 @@
 # description: a MERGE INTO a bridged table crosses what it can, the target's own scan included
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.target(id INTEGER PRIMARY KEY, tenant INTEGER, amt INTEGER);
@@ -17,19 +17,19 @@ statement ok
 INSERT INTO memory.main.feed VALUES (1,100,true),(2,200,false),(3,300,true);
 
 statement ok
-SELECT bridge_register_source('mg', 'memory', 'tok_mg');
+SELECT vcatbridge_register_source('mg', 'memory', 'tok_mg');
 
 statement ok
-SELECT bridge_set_policy('mg', 'main.target', 'select', 'true');
+SELECT vcatbridge_set_policy('mg', 'main.target', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('mg', 'main.target', 'update', {'using': 'true', 'check': 'true'});
+SELECT vcatbridge_set_policy('mg', 'main.target', 'update', {'using': 'true', 'check': 'true'});
 
 statement ok
-SELECT bridge_set_policy('mg', 'main.feed', 'select', 'true');
+SELECT vcatbridge_set_policy('mg', 'main.feed', 'select', 'true');
 
 statement ok
-ATTACH '' AS m (TYPE virtual_catalog_bridge, ID 'mg', TOKEN 'tok_mg');
+ATTACH '' AS m (TYPE vcatbridge, ID 'mg', TOKEN 'tok_mg');
 
 # The feed is a bridged table the merge only reads, so its filter crosses and the source returns the
 # two live rows rather than all three. Before the pass learned about merge it was skipped outright

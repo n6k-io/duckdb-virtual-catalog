@@ -4,7 +4,7 @@
 
 - **Source instance.** Declares the policy and the context. Every policy and context function
   refuses a connection whose `DatabaseInstance` is not the one that called
-  `bridge_register_source`. The policy is the owner's input: a primary key's `columns_from_query`
+  `vcatbridge_register_source`. The policy is the owner's input: a primary key's `columns_from_query`
   and `verify_unique` run on the source as written.
 - **Provider host.** Registers its UDFs on the same `DatabaseInstance` as the catalog, so it
   already owns everything there.
@@ -26,7 +26,7 @@ loading a native library) belong to whoever owns the process and are out of scop
 - **Pushed calls.** A call crosses to the source only when it is on the bridge's function
   whitelist: the built-in list, as the owner changed it. Built-ins that read the instance they run
   in, such as `current_setting`, are not on the built-in list and stay on the target.
-- **`virtual_catalog_lockdown`** hardens the target instance: no files, network, extensions or
+- **`vcatbridge_lockdown`** hardens the target instance: no files, network, extensions or
   config changes; memory and thread caps.
 
 ## Assets the attacker must not reach

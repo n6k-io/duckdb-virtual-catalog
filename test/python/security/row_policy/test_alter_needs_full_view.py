@@ -64,14 +64,14 @@ def test_alter_allowed_when_nothing_is_hidden(pair):
 def gated_bridge(source, target, user):
     """select `$user = 'admin' OR tenant = $tenant`, alter `$user = 'admin'`. Returns the bridge id."""
     bridge_id = unique_id()
-    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute("SELECT bridge_set_context(?, 'user', ?)", [bridge_id, user])
-    source.execute("SELECT bridge_set_context(?, 'tenant', 1)", [bridge_id])
+    token = source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT vcatbridge_set_context(?, 'user', ?)", [bridge_id, user])
+    source.execute("SELECT vcatbridge_set_context(?, 'tenant', 1)", [bridge_id])
     source.execute(
-        "SELECT bridge_set_policy(?, 'main.users', 'select', '$user = ''admin'' OR tenant = $tenant')", [bridge_id]
+        "SELECT vcatbridge_set_policy(?, 'main.users', 'select', '$user = ''admin'' OR tenant = $tenant')", [bridge_id]
     )
-    source.execute("SELECT bridge_set_policy(?, 'main.users', 'alter', '$user = ''admin''')", [bridge_id])
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    source.execute("SELECT vcatbridge_set_policy(?, 'main.users', 'alter', '$user = ''admin''')", [bridge_id])
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id
 
 
@@ -97,7 +97,7 @@ def test_context_gated_alter_refused_for_other_user(pair):
 def test_context_is_read_at_alter_time(pair):
     source, target = pair
     bridge_id = gated_bridge(source, target, "admin")
-    source.execute("SELECT bridge_set_context(?, 'user', 'bob')", [bridge_id])
+    source.execute("SELECT vcatbridge_set_context(?, 'user', 'bob')", [bridge_id])
 
     with pytest.raises(duckdb.PermissionException):
         target.execute(PLAIN_ALTER)
@@ -108,7 +108,7 @@ def test_context_is_read_at_alter_time(pair):
 def test_alter_grant_may_not_reference_a_column(pair):
     source, _ = pair
     bridge_id = unique_id()
-    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id])
 
     with pytest.raises(duckdb.Error, match="column"):
-        source.execute("SELECT bridge_set_policy(?, 'main.users', 'alter', 'tenant = 1')", [bridge_id])
+        source.execute("SELECT vcatbridge_set_policy(?, 'main.users', 'alter', 'tenant = 1')", [bridge_id])

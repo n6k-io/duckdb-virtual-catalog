@@ -105,7 +105,7 @@ class ProviderBackend(Backend):
     def __init__(self):
         self.con = new_connection(bridge=False, provider=True)
         self._owned = [self.con]
-        self.con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+        self.con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
         self.provider = FakeProvider(self.con)
         self.provider.add_table(
             "t",

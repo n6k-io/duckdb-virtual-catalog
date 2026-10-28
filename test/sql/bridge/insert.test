@@ -2,7 +2,7 @@
 # description: S5 -- INSERT crosses a chunk at a time and lands on the source.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
@@ -14,19 +14,19 @@ statement ok
 CREATE TABLE memory.main.readonly(id INTEGER, note VARCHAR);
 
 statement ok
-SELECT bridge_register_source('v2_insert', 'memory', 'tok_insert');
+SELECT vcatbridge_register_source('v2_insert', 'memory', 'tok_insert');
 
 statement ok
-SELECT bridge_set_policy('v2_insert', 'main.orders', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_insert', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_insert', 'main.orders', 'insert', 'true');
+SELECT vcatbridge_set_policy('v2_insert', 'main.orders', 'insert', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_insert', 'main.readonly', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_insert', 'main.readonly', 'select', 'true');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_insert', TOKEN 'tok_insert');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_insert', TOKEN 'tok_insert');
 
 statement ok
 INSERT INTO b.main.orders VALUES (2,'grace',150,7);

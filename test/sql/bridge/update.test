@@ -2,7 +2,7 @@
 # description: S6 -- UPDATE carries the key and the new values, under the USING policy.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
@@ -11,16 +11,16 @@ statement ok
 INSERT INTO memory.main.orders VALUES (1,'ada',50,7),(2,'grace',150,7),(3,'alan',250,9),(4,'edsger',350,7);
 
 statement ok
-SELECT bridge_register_source('v2_update', 'memory', 'tok_update');
+SELECT vcatbridge_register_source('v2_update', 'memory', 'tok_update');
 
 statement ok
-SELECT bridge_set_policy('v2_update', 'main.orders', 'select', 'tenant = 7');
+SELECT vcatbridge_set_policy('v2_update', 'main.orders', 'select', 'tenant = 7');
 
 statement ok
-SELECT bridge_set_policy('v2_update', 'main.orders', 'update', 'tenant = 7');
+SELECT vcatbridge_set_policy('v2_update', 'main.orders', 'update', 'tenant = 7');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_update', TOKEN 'tok_update');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_update', TOKEN 'tok_update');
 
 statement ok
 UPDATE b.main.orders SET amt = 0 WHERE id = 1;

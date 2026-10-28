@@ -1,4 +1,4 @@
-"""bridge_table_describe: one fully-typed row per table.
+"""vcatbridge_table_describe: one fully-typed row per table.
 
 Returns columns (name/type/nullable/default), primary_key, verbs,
 and enum domains in a single call — what useTableMeta needs without stitching
@@ -9,21 +9,21 @@ from typing import Any
 
 import duckdb
 
-from virtual_catalog.extension import load_virtual_catalog_bridge
+from virtual_catalog.extension import load_vcatbridge
 
 CONN_CONFIG: dict[str, str | bool | int | float | list[str]] = {"allow_unsigned_extensions": "true"}
 
 
 def _conn() -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect(config=CONN_CONFIG)
-    load_virtual_catalog_bridge(conn)
+    load_vcatbridge(conn)
     return conn
 
 
 def _describe(conn: duckdb.DuckDBPyConnection, catalog: str, schema: str, table: str) -> dict[str, Any]:
     row = conn.sql(
         "SELECT columns, primary_key, verbs, enums "
-        f"FROM bridge_table_describe('{catalog}', schema := '{schema}', \"table\" := '{table}')"
+        f"FROM vcatbridge_table_describe('{catalog}', schema := '{schema}', \"table\" := '{table}')"
     ).fetchone()
     assert row is not None
     cols, pk, verbs, enums = row
@@ -73,7 +73,7 @@ def test_describe_bridge_readwrite_table() -> None:
     source.sql("CREATE TABLE rw(id INTEGER PRIMARY KEY, label VARCHAR)")
 
     target = _conn()
-    load_virtual_catalog_bridge(target)
+    load_vcatbridge(target)
     bridge(
         source,
         target,

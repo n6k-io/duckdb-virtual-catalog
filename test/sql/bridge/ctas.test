@@ -2,7 +2,7 @@
 # description: CREATE TABLE AS in a schema with a create policy creates on the source and inserts the rows.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER);
@@ -11,16 +11,16 @@ statement ok
 INSERT INTO memory.main.orders VALUES (1, 'ada', 50), (2, 'grace', 150), (3, 'alan', 250);
 
 statement ok
-SELECT bridge_register_source('ctas', 'memory', 'tok_ctas');
+SELECT vcatbridge_register_source('ctas', 'memory', 'tok_ctas');
 
 statement ok
-SELECT bridge_set_policy('ctas', 'main', 'create', 'true');
+SELECT vcatbridge_set_policy('ctas', 'main', 'create', 'true');
 
 statement ok
-SELECT bridge_set_policy('ctas', 'main.orders', 'select', 'amt > 100');
+SELECT vcatbridge_set_policy('ctas', 'main.orders', 'select', 'amt > 100');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ctas', TOKEN 'tok_ctas');
+ATTACH '' AS b (TYPE vcatbridge, ID 'ctas', TOKEN 'tok_ctas');
 
 # From a bridged table: the select policy applies to what is copied.
 query I
@@ -41,7 +41,7 @@ SELECT id, name FROM b.main.big ORDER BY id;
 3	alan
 
 query I
-SELECT verbs FROM bridge_table_permissions('b') WHERE name = 'big';
+SELECT verbs FROM vcatbridge_table_permissions('b') WHERE name = 'big';
 ----
 [select, insert, create, alter, drop]
 
@@ -111,6 +111,6 @@ SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_na
 0
 
 query I
-SELECT count(*) FROM bridge_table_permissions('b') WHERE name = 'gone';
+SELECT count(*) FROM vcatbridge_table_permissions('b') WHERE name = 'gone';
 ----
 0

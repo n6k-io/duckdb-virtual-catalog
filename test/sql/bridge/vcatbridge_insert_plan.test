@@ -1,23 +1,23 @@
-# name: test/sql/bridge/virtual_catalog_insert_plan.test
+# name: test/sql/bridge/vcatbridge_insert_plan.test
 # description: INSERT executes the plan the write fence carries, and that plan is visible to EXPLAIN
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.t(id INTEGER PRIMARY KEY, amt INTEGER, note VARCHAR);
 
 statement ok
-SELECT bridge_register_source('ins_plan', 'memory', 'tok_ins_plan');
+SELECT vcatbridge_register_source('ins_plan', 'memory', 'tok_ins_plan');
 
 statement ok
-SELECT bridge_set_policy('ins_plan', 'main.t', 'select', 'true');
+SELECT vcatbridge_set_policy('ins_plan', 'main.t', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('ins_plan', 'main.t', 'insert', 'true');
+SELECT vcatbridge_set_policy('ins_plan', 'main.t', 'insert', 'true');
 
 statement ok
-ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ins_plan', TOKEN 'tok_ins_plan');
+ATTACH '' AS w (TYPE vcatbridge, ID 'ins_plan', TOKEN 'tok_ins_plan');
 
 # ---------------------------------------------------------------------------
 # EXPLAIN says where the rows are going, and how. A literal VALUES list is rows the target holds, so
@@ -75,16 +75,16 @@ statement ok
 CREATE TABLE memory.main.c(id INTEGER PRIMARY KEY, amt INTEGER);
 
 statement ok
-SELECT bridge_register_source('ins_check', 'memory', 'tok_ins_check');
+SELECT vcatbridge_register_source('ins_check', 'memory', 'tok_ins_check');
 
 statement ok
-SELECT bridge_set_policy('ins_check', 'main.c', 'select', 'true');
+SELECT vcatbridge_set_policy('ins_check', 'main.c', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('ins_check', 'main.c', 'insert', 'amt < 100');
+SELECT vcatbridge_set_policy('ins_check', 'main.c', 'insert', 'amt < 100');
 
 statement ok
-ATTACH '' AS ck (TYPE virtual_catalog_bridge, ID 'ins_check', TOKEN 'tok_ins_check');
+ATTACH '' AS ck (TYPE vcatbridge, ID 'ins_check', TOKEN 'tok_ins_check');
 
 statement error
 INSERT INTO ck.main.c VALUES (1, 500);

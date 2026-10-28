@@ -142,13 +142,14 @@ def test_primary_key_query_supplies_a_key_discovery_cannot_find(source, target):
     source.executemany("INSERT INTO q VALUES (?, ?, ?)", [("a", 1, "x"), ("b", 2, "hidden")])
 
     bridge_id = unique_id()
-    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    token = source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
     source.execute(
-        "SELECT bridge_set_policy(?, 'main.q', 'primary_key', {'columns_from_query': ?})", [bridge_id, "SELECT 'code'"]
+        "SELECT vcatbridge_set_policy(?, 'main.q', 'primary_key', {'columns_from_query': ?})",
+        [bridge_id, "SELECT 'code'"],
     )
-    source.execute("SELECT bridge_set_policy(?, 'main.q', 'select', 'tenant = 1')", [bridge_id])
-    source.execute("SELECT bridge_set_policy(?, 'main.q', 'update', 'true')", [bridge_id])
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    source.execute("SELECT vcatbridge_set_policy(?, 'main.q', 'select', 'tenant = 1')", [bridge_id])
+    source.execute("SELECT vcatbridge_set_policy(?, 'main.q', 'update', 'true')", [bridge_id])
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
 
     assert target.execute("UPDATE app.main.q SET v = 'P' WHERE v = 'x'").fetchall() == [(1,)]
     assert source.execute("SELECT * FROM q ORDER BY code").fetchall() == [
@@ -160,11 +161,11 @@ def test_primary_key_query_supplies_a_key_discovery_cannot_find(source, target):
 def test_primary_key_check_rejects_a_bad_key_before_any_write(source, target):
     fanout_source(source)
     bridge_id = unique_id()
-    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id])
 
     with pytest.raises(Exception, match="not unique on the source"):
         source.execute(
-            "SELECT bridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['grp'], 'verify_unique': ?})",
+            "SELECT vcatbridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['grp'], 'verify_unique': ?})",
             [bridge_id, "SELECT grp FROM t1 GROUP BY grp HAVING count(*) > 1"],
         )
 
@@ -174,11 +175,11 @@ def test_primary_key_check_rejects_a_bad_key_before_any_write(source, target):
 def test_primary_key_check_that_fails_at_runtime_is_an_error(source):
     fanout_source(source)
     bridge_id = unique_id()
-    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id])
 
     with pytest.raises(duckdb.ConversionException, match="verify_unique for 'main.t1' failed"):
         source.execute(
-            "SELECT bridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['id'], 'verify_unique': ?})",
+            "SELECT vcatbridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['id'], 'verify_unique': ?})",
             [bridge_id, "SELECT CAST(secret AS INTEGER) FROM t1"],
         )
 
@@ -186,11 +187,11 @@ def test_primary_key_check_that_fails_at_runtime_is_an_error(source):
 def test_primary_key_query_that_fails_at_runtime_is_an_error(source):
     fanout_source(source)
     bridge_id = unique_id()
-    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id])
 
     with pytest.raises(duckdb.ConversionException, match="columns_from_query for 'main.t1' failed"):
         source.execute(
-            "SELECT bridge_set_policy(?, 'main.t1', 'primary_key', {'columns_from_query': ?})",
+            "SELECT vcatbridge_set_policy(?, 'main.t1', 'primary_key', {'columns_from_query': ?})",
             [bridge_id, "SELECT CAST(secret AS INTEGER)::VARCHAR FROM t1"],
         )
 
@@ -198,41 +199,41 @@ def test_primary_key_query_that_fails_at_runtime_is_an_error(source):
 @pytest.mark.parametrize(
     "sql, params",
     [
-        ("SELECT bridge_register_source(x, 'memory') FROM (VALUES (NULL::VARCHAR)) t(x)", []),
-        ("SELECT bridge_set_policy(?, x, 'select', 'true') FROM (VALUES (NULL::VARCHAR)) t(x)", None),
-        ("SELECT bridge_set_policy(?, 'main.t1', x, 'true') FROM (VALUES (NULL::VARCHAR)) t(x)", None),
+        ("SELECT vcatbridge_register_source(x, 'memory') FROM (VALUES (NULL::VARCHAR)) t(x)", []),
+        ("SELECT vcatbridge_set_policy(?, x, 'select', 'true') FROM (VALUES (NULL::VARCHAR)) t(x)", None),
+        ("SELECT vcatbridge_set_policy(?, 'main.t1', x, 'true') FROM (VALUES (NULL::VARCHAR)) t(x)", None),
         (
-            "SELECT bridge_set_policy(?, 'main.t1', 'foreign_keys', x, 'main.t2') FROM (VALUES (NULL::VARCHAR)) t(x)",
+            "SELECT vcatbridge_set_policy(?, 'main.t1', 'foreign_keys', x, 'main.t2') FROM (VALUES (NULL::VARCHAR)) t(x)",
             None,
         ),
-        ("SELECT bridge_set_policy(?, x, 'primary_key', ['id']) FROM (VALUES (NULL::VARCHAR)) t(x)", None),
+        ("SELECT vcatbridge_set_policy(?, x, 'primary_key', ['id']) FROM (VALUES (NULL::VARCHAR)) t(x)", None),
         (
-            "SELECT bridge_set_policy(?, 'main.t1', 'primary_key', {'columns_from_query': x}) FROM (VALUES (NULL::VARCHAR)) t(x)",
+            "SELECT vcatbridge_set_policy(?, 'main.t1', 'primary_key', {'columns_from_query': x}) FROM (VALUES (NULL::VARCHAR)) t(x)",
             None,
         ),
         (
-            "SELECT bridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['id'], 'verify_unique': x}) FROM (VALUES (NULL::VARCHAR)) t(x)",
+            "SELECT vcatbridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['id'], 'verify_unique': x}) FROM (VALUES (NULL::VARCHAR)) t(x)",
             None,
         ),
-        ("SELECT bridge_finalize_context(x) FROM (VALUES (NULL::VARCHAR)) t(x)", []),
-        ("SELECT bridge_register_source(NULL, 'memory')", []),
-        ("SELECT bridge_register_source(NULL::VARCHAR, 'memory')", []),
-        ("SELECT bridge_register_source(?, 'memory', NULL)", None),
-        ("SELECT bridge_set_policy(?, NULL, 'select', 'true')", None),
-        ("SELECT bridge_set_policy(?, 'main.t1', 'insert', {'check': NULL})", None),
-        ("SELECT bridge_set_policy(?, 'main.t1', 'foreign_keys', 'add', NULL)", None),
-        ("SELECT bridge_configure_policy(?, NULL)", None),
-        ("SELECT bridge_set_policy(?, NULL, 'primary_key', ['id'])", None),
-        ("SELECT bridge_set_policy(?, 'main.t1', 'primary_key', {'columns_from_query': NULL})", None),
-        ("SELECT bridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['id'], 'verify_unique': NULL})", None),
-        ("SELECT bridge_finalize_context(NULL)", []),
+        ("SELECT vcatbridge_finalize_context(x) FROM (VALUES (NULL::VARCHAR)) t(x)", []),
+        ("SELECT vcatbridge_register_source(NULL, 'memory')", []),
+        ("SELECT vcatbridge_register_source(NULL::VARCHAR, 'memory')", []),
+        ("SELECT vcatbridge_register_source(?, 'memory', NULL)", None),
+        ("SELECT vcatbridge_set_policy(?, NULL, 'select', 'true')", None),
+        ("SELECT vcatbridge_set_policy(?, 'main.t1', 'insert', {'check': NULL})", None),
+        ("SELECT vcatbridge_set_policy(?, 'main.t1', 'foreign_keys', 'add', NULL)", None),
+        ("SELECT vcatbridge_configure_policy(?, NULL)", None),
+        ("SELECT vcatbridge_set_policy(?, NULL, 'primary_key', ['id'])", None),
+        ("SELECT vcatbridge_set_policy(?, 'main.t1', 'primary_key', {'columns_from_query': NULL})", None),
+        ("SELECT vcatbridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['id'], 'verify_unique': NULL})", None),
+        ("SELECT vcatbridge_finalize_context(NULL)", []),
     ],
 )
 def test_a_null_setup_argument_is_refused(source, sql, params):
     fanout_source(source)
     bridge_id = unique_id()
-    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
-    source.execute("SELECT bridge_set_policy(?, 'main.t1', 'primary_key', ['id'])", [bridge_id])
+    source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT vcatbridge_set_policy(?, 'main.t1', 'primary_key', ['id'])", [bridge_id])
 
     with pytest.raises(duckdb.IOException, match="cannot be NULL"):
         source.execute(sql, [bridge_id] if params is None else params)
@@ -241,9 +242,9 @@ def test_a_null_setup_argument_is_refused(source, sql, params):
 def test_primary_key_check_accepts_a_key_that_holds(source):
     fanout_source(source)
     bridge_id = unique_id()
-    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id])
 
     assert source.execute(
-        "SELECT bridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['id'], 'verify_unique': ?})",
+        "SELECT vcatbridge_set_policy(?, 'main.t1', 'primary_key', {'columns': ['id'], 'verify_unique': ?})",
         [bridge_id, "SELECT id FROM t1 GROUP BY id HAVING count(*) > 1"],
     ).fetchone() == ("ok",)

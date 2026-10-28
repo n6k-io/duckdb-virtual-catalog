@@ -36,7 +36,7 @@ class Users(Provider):
 
 async def main():
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     register_provider(con, catalog="app", schema_name="public", provider=Users())
 
 asyncio.run(main())
@@ -47,7 +47,7 @@ asyncio.run(main())
 `list_tables`, `schema`, and `scan` are required. `insert`, `update`, `delete`,
 and `alter` are **optional** — a provider supports an operation only by
 implementing the method. An unimplemented op is rejected at plan time and
-left out of the table's `verbs` reported by the `provider_table_permissions` SQL
+left out of the table's `verbs` reported by the `vcatprovider_table_permissions` SQL
 function.
 
 ## Limitations
@@ -86,7 +86,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.ipc as ipc
 
-from virtual_catalog.extension import load_virtual_catalog_provider
+from virtual_catalog.extension import load_vcatprovider
 from virtual_catalog.filters import Filters, filters_from_wire
 
 _VARCHAR = duckdb.sqltype("VARCHAR")
@@ -341,14 +341,14 @@ class _CatalogProviders:
         self.registered_ops = wanted
         with con.cursor() as cur:
             cur.sql(
-                "SELECT provider_register($1,$2,$3,$4,$5,$6,$7,$8)",
+                "SELECT vcatprovider_register($1,$2,$3,$4,$5,$6,$7,$8)",
                 params=[self.catalog] + [self.udf_name(op) if op in wanted else "" for op in _ALL_OPS],
             ).fetchone()
 
     def close(self) -> None:
         con = self.con
         with con.cursor() as cur:
-            cur.sql("SELECT provider_unregister($1)", params=[self.catalog]).fetchone()
+            cur.sql("SELECT vcatprovider_unregister($1)", params=[self.catalog]).fetchone()
         for op in self.registered_ops:
             con.remove_function(self.udf_name(op))
         self.registered_ops = set()
@@ -369,7 +369,7 @@ def register_provider(
 ) -> None:
     """Bind `provider` to `(con, catalog, schema_name)`.
 
-    The target catalog must be `TYPE virtual_catalog_provider`; the schema is
+    The target catalog must be `TYPE vcatprovider`; the schema is
     materialised by the extension when the provider lists tables in it.
 
     Provider coroutines run on `main_loop` (default: the loop running at
@@ -382,7 +382,7 @@ def register_provider(
     if main_loop is None:
         main_loop = asyncio.get_running_loop()
 
-    load_virtual_catalog_provider(con)
+    load_vcatprovider(con)
     entries = _catalogs.setdefault(con, {})
     entry = entries.get(catalog)
     if entry is None:
@@ -414,7 +414,7 @@ async def invalidate_provider_tables(con: duckdb.DuckDBPyConnection, *, catalog:
 
     def _call() -> None:
         with con.cursor() as cur:
-            cur.sql("SELECT provider_invalidate_tables($1)", params=[catalog]).fetchone()
+            cur.sql("SELECT vcatprovider_invalidate_tables($1)", params=[catalog]).fetchone()
 
     await asyncio.to_thread(_call)
 
@@ -449,7 +449,7 @@ async def unregister_provider(
             if entry.providers:
                 entry.sync()
                 with con.cursor() as cur:
-                    cur.sql("SELECT provider_invalidate_tables($1)", params=[catalog]).fetchone()
+                    cur.sql("SELECT vcatprovider_invalidate_tables($1)", params=[catalog]).fetchone()
             else:
                 entry.close()
         except BaseException:

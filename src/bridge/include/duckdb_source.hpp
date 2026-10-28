@@ -15,7 +15,7 @@ namespace duckdb {
 class CrossingAttach;
 class ExtensionLoader;
 
-static constexpr const char *VIRTUAL_CATALOG_BRIDGE_TYPE = "virtual_catalog_bridge";
+static constexpr const char *VCATBRIDGE_TYPE = "vcatbridge";
 
 struct SourceGrant {
 	uint8_t verbs = 0;

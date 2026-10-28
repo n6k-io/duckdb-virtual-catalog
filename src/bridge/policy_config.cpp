@@ -23,7 +23,7 @@ struct RawValue {
 };
 
 [[noreturn]] void Fail(const string &path, const string &message) {
-	throw IOException("virtual_catalog_bridge: %s: %s", path, message);
+	throw IOException("vcatbridge: %s: %s", path, message);
 }
 
 string Describe(const RawValue &value) {
@@ -388,11 +388,10 @@ vector<string> ParsePolicyNameParts(const string &text) {
 	idx_t i = 0;
 	const auto finish = [&]() {
 		if (part.empty()) {
-			throw IOException("virtual_catalog_bridge: '%s' has an empty name part", text);
+			throw IOException("vcatbridge: '%s' has an empty name part", text);
 		}
 		if (!quoted_part && (StringUtil::CharacterIsSpace(part.front()) || StringUtil::CharacterIsSpace(part.back()))) {
-			throw IOException("virtual_catalog_bridge: '%s' has spaces around a name part; quote it if they belong",
-			                  text);
+			throw IOException("vcatbridge: '%s' has spaces around a name part; quote it if they belong", text);
 		}
 		parts.push_back(std::move(part));
 		part.clear();
@@ -405,7 +404,7 @@ vector<string> ParsePolicyNameParts(const string &text) {
 			i++;
 			while (true) {
 				if (i >= text.size()) {
-					throw IOException("virtual_catalog_bridge: '%s' has an unterminated quote", text);
+					throw IOException("vcatbridge: '%s' has an unterminated quote", text);
 				}
 				if (text[i] == '"') {
 					if (i + 1 < text.size() && text[i + 1] == '"') {
@@ -419,26 +418,26 @@ vector<string> ParsePolicyNameParts(const string &text) {
 				part += text[i++];
 			}
 			if (part.empty()) {
-				throw IOException("virtual_catalog_bridge: '%s' has an empty name part", text);
+				throw IOException("vcatbridge: '%s' has an empty name part", text);
 			}
 			if (i < text.size() && text[i] != '.') {
-				throw IOException("virtual_catalog_bridge: '%s' has text after a quoted name part", text);
+				throw IOException("vcatbridge: '%s' has text after a quoted name part", text);
 			}
 			continue;
 		}
 		if (c == '"') {
-			throw IOException("virtual_catalog_bridge: '%s' has a quote inside a name part", text);
+			throw IOException("vcatbridge: '%s' has a quote inside a name part", text);
 		}
 		if (c == '.') {
 			finish();
 			i++;
 			if (i == text.size()) {
-				throw IOException("virtual_catalog_bridge: '%s' has an empty name part", text);
+				throw IOException("vcatbridge: '%s' has an empty name part", text);
 			}
 			continue;
 		}
 		if (quoted_part) {
-			throw IOException("virtual_catalog_bridge: '%s' has text after a quoted name part", text);
+			throw IOException("vcatbridge: '%s' has text after a quoted name part", text);
 		}
 		part += c;
 		i++;
@@ -458,8 +457,7 @@ PolicyName ParsePolicyTableName(const string &text) {
 		name.schema = parts[1];
 		name.name = parts[2];
 	} else {
-		throw IOException("virtual_catalog_bridge: table name '%s' must be 'schema.table' or 'catalog.schema.table'",
-		                  text);
+		throw IOException("vcatbridge: table name '%s' must be 'schema.table' or 'catalog.schema.table'", text);
 	}
 	return name;
 }
@@ -467,7 +465,7 @@ PolicyName ParsePolicyTableName(const string &text) {
 PolicyName ParsePolicySchemaName(const string &text) {
 	auto parts = ParsePolicyNameParts(text);
 	if (parts.size() != 1) {
-		throw IOException("virtual_catalog_bridge: 'create' takes a schema name like 'main', not '%s'", text);
+		throw IOException("vcatbridge: 'create' takes a schema name like 'main', not '%s'", text);
 	}
 	PolicyName name;
 	name.schema = parts[0];
@@ -480,14 +478,14 @@ PolicyConfig ParsePolicyJson(const string &json) {
 	auto doc =
 	    duckdb_yyjson::yyjson_read_opts(&text[0], text.size(), duckdb_yyjson::YYJSON_READ_NOFLAG, nullptr, &error);
 	if (!doc) {
-		throw IOException("virtual_catalog_bridge: the policy is not valid JSON: %s at byte %llu", error.msg,
+		throw IOException("vcatbridge: the policy is not valid JSON: %s at byte %llu", error.msg,
 		                  static_cast<uint64_t>(error.pos));
 	}
 	RawValue root;
 	try {
 		auto root_val = duckdb_yyjson::yyjson_doc_get_root(doc);
 		if (!duckdb_yyjson::yyjson_is_obj(root_val)) {
-			throw IOException("virtual_catalog_bridge: the policy must be a JSON object");
+			throw IOException("vcatbridge: the policy must be a JSON object");
 		}
 		root = FromJson(root_val, "");
 	} catch (...) {
@@ -550,11 +548,11 @@ PolicyEdit ParsePolicyEdit(const string &target, const string &setting, const st
 	auto raw = FromSql(value, edit.path);
 	const auto require_op = [&](bool is_list) {
 		if (is_list && !op) {
-			Fail(edit.path, "is a list setting; pass an operation: bridge_set_policy(id, '" + target + "', '" +
+			Fail(edit.path, "is a list setting; pass an operation: vcatbridge_set_policy(id, '" + target + "', '" +
 			                    setting + "', 'add' | 'remove' | 'set', value)");
 		}
 		if (!is_list && op) {
-			Fail(edit.path, "takes a single value; call bridge_set_policy(id, '" + target + "', '" + setting +
+			Fail(edit.path, "takes a single value; call vcatbridge_set_policy(id, '" + target + "', '" + setting +
 			                    "', value) without an operation");
 		}
 		if (!op) {

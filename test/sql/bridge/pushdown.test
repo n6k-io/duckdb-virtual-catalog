@@ -2,7 +2,7 @@
 # description: S3 -- work the source can run moves into the fragment, and the answers stay right.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
@@ -17,16 +17,16 @@ statement ok
 INSERT INTO memory.main.customers VALUES (1,'london'),(2,'nyc'),(3,'paris'),(4,'delft');
 
 statement ok
-SELECT bridge_register_source('v2_pushdown', 'memory', 'tok_pushdown');
+SELECT vcatbridge_register_source('v2_pushdown', 'memory', 'tok_pushdown');
 
 statement ok
-SELECT bridge_set_policy('v2_pushdown', 'main.orders', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_pushdown', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_pushdown', 'main.customers', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_pushdown', 'main.customers', 'select', 'true');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_pushdown', TOKEN 'tok_pushdown');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_pushdown', TOKEN 'tok_pushdown');
 
 # A filter the source can run reaches the fragment, and shows up in the plan the scan carries.
 query II

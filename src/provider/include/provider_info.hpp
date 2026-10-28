@@ -27,7 +27,7 @@ struct ProviderInfo {
 	shared_ptr<DatabaseInstance> Database() const {
 		auto db = db_instance.lock();
 		if (!db) {
-			throw ConnectionException("virtual_catalog_provider: database for catalog '%s' is closed", catalog_name);
+			throw ConnectionException("vcatprovider: database for catalog '%s' is closed", catalog_name);
 		}
 		return db;
 	}

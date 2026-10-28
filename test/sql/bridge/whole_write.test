@@ -2,7 +2,7 @@
 # description: a write the source can run alone crosses whole, and EXPLAIN says which path it took
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, tenant INTEGER, amt INTEGER);
@@ -11,19 +11,19 @@ statement ok
 INSERT INTO memory.main.orders VALUES (1,1,10),(2,1,20),(3,2,30);
 
 statement ok
-SELECT bridge_register_source('ww', 'memory', 'tok_ww');
+SELECT vcatbridge_register_source('ww', 'memory', 'tok_ww');
 
 statement ok
-SELECT bridge_set_policy('ww', 'main.orders', 'select', 'true');
+SELECT vcatbridge_set_policy('ww', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('ww', 'main.orders', 'update', {'using': 'true', 'check': 'true'});
+SELECT vcatbridge_set_policy('ww', 'main.orders', 'update', {'using': 'true', 'check': 'true'});
 
 statement ok
-SELECT bridge_set_policy('ww', 'main.orders', 'delete', 'true');
+SELECT vcatbridge_set_policy('ww', 'main.orders', 'delete', 'true');
 
 statement ok
-ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ww', TOKEN 'tok_ww');
+ATTACH '' AS w (TYPE vcatbridge, ID 'ww', TOKEN 'tok_ww');
 
 # ---------------------------------------------------------------------------
 # Everything the statement holds is something the source can compute, so the source runs it alone.
@@ -77,16 +77,16 @@ statement ok
 INSERT INTO memory.main.scoped VALUES (1,1,10),(2,2,20);
 
 statement ok
-SELECT bridge_register_source('ws', 'memory', 'tok_ws');
+SELECT vcatbridge_register_source('ws', 'memory', 'tok_ws');
 
 statement ok
-SELECT bridge_set_policy('ws', 'main.scoped', 'select', 'true');
+SELECT vcatbridge_set_policy('ws', 'main.scoped', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('ws', 'main.scoped', 'update', 'tenant = 1');
+SELECT vcatbridge_set_policy('ws', 'main.scoped', 'update', 'tenant = 1');
 
 statement ok
-ATTACH '' AS s (TYPE virtual_catalog_bridge, ID 'ws', TOKEN 'tok_ws');
+ATTACH '' AS s (TYPE vcatbridge, ID 'ws', TOKEN 'tok_ws');
 
 query II
 EXPLAIN UPDATE s.main.scoped SET amt = 99;

@@ -71,9 +71,9 @@ def test_target_detach_then_reattach():
     bridge_id = bridge(source, target, {"users": READ})
     target.execute("DETACH app")
 
-    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute("SELECT bridge_set_policy(?, 'main.users', 'select', 'true')", [bridge_id])
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    token = source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT vcatbridge_set_policy(?, 'main.users', 'select', 'true')", [bridge_id])
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     assert target.execute("SELECT count(*) FROM app.main.users").fetchone() == (1,)
     source.close()
     target.close()
@@ -85,9 +85,9 @@ def test_process_exits_cleanly_with_a_bridge_still_bound():
         source = connect()
         target = connect()
         source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY)")
-        source.execute("SELECT bridge_register_source('leak', 'memory', 'tok_leak')")
-        source.execute("SELECT bridge_set_policy('leak', 'main.users', 'select', 'true')")
-        target.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'leak', TOKEN 'tok_leak')")
+        source.execute("SELECT vcatbridge_register_source('leak', 'memory', 'tok_leak')")
+        source.execute("SELECT vcatbridge_set_policy('leak', 'main.users', 'select', 'true')")
+        target.execute("ATTACH '' AS app (TYPE vcatbridge, ID 'leak', TOKEN 'tok_leak')")
         print(target.execute("SELECT count(*) FROM app.main.users").fetchone()[0])
     """
     )
@@ -101,9 +101,9 @@ def test_process_exits_cleanly_after_unregister():
         source = connect()
         target = connect()
         source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY)")
-        source.execute("SELECT bridge_register_source('tidy', 'memory', 'tok_tidy')")
-        source.execute("SELECT bridge_set_policy('tidy', 'main.users', 'select', 'true')")
-        target.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'tidy', TOKEN 'tok_tidy')")
+        source.execute("SELECT vcatbridge_register_source('tidy', 'memory', 'tok_tidy')")
+        source.execute("SELECT vcatbridge_set_policy('tidy', 'main.users', 'select', 'true')")
+        target.execute("ATTACH '' AS app (TYPE vcatbridge, ID 'tidy', TOKEN 'tok_tidy')")
         target.execute("DETACH app")
         source.close()
         target.close()
@@ -120,9 +120,9 @@ def test_process_exits_cleanly_with_the_source_closed_first():
         source = connect()
         target = connect()
         source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY); INSERT INTO users VALUES (1)")
-        source.execute("SELECT bridge_register_source('orphan', 'memory', 'tok_orphan')")
-        source.execute("SELECT bridge_set_policy('orphan', 'main.users', 'select', 'true')")
-        target.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'orphan', TOKEN 'tok_orphan')")
+        source.execute("SELECT vcatbridge_register_source('orphan', 'memory', 'tok_orphan')")
+        source.execute("SELECT vcatbridge_set_policy('orphan', 'main.users', 'select', 'true')")
+        target.execute("ATTACH '' AS app (TYPE vcatbridge, ID 'orphan', TOKEN 'tok_orphan')")
         source.close()
         print(target.execute("SELECT count(*) FROM app.main.users").fetchone()[0])
     """
@@ -138,14 +138,14 @@ def test_process_exits_cleanly_with_a_provider_still_registered():
         VARCHAR = duckdb.sqltype("VARCHAR")
         BLOB = duckdb.sqltype("BLOB")
         con = connect()
-        con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+        con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
         schema = pa.schema([pa.field("id", pa.int32())])
         con.create_function("l", lambda: "main.t", [], VARCHAR)
         con.create_function("s", lambda n: schema.serialize().to_pybytes(), [VARCHAR], BLOB)
         con.execute(
-            "SELECT provider_register('app', 'l', 's', 'sc', '', '', '', '')"
+            "SELECT vcatprovider_register('app', 'l', 's', 'sc', '', '', '', '')"
         ).fetchall()
-        print(con.execute("SELECT count(*) FROM provider_table_permissions('app', schema := 'main')").fetchone()[0])
+        print(con.execute("SELECT count(*) FROM vcatprovider_table_permissions('app', schema := 'main')").fetchone()[0])
     """
     )
     assert result.returncode == 0, result.stderr
@@ -164,12 +164,12 @@ def test_closing_a_connection_with_a_provider_registered_frees_its_database(tmp_
         path = {str(tmp_path / "host.duckdb")!r}
         con = duckdb.connect(path, **con_kwargs)
         con.execute("LOAD '{PROVIDER_EXTENSION}'")
-        con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+        con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
         schema = pa.schema([pa.field("id", pa.int32())])
         con.create_function("l", lambda: "main.t", [], VARCHAR)
         con.create_function("s", lambda n: schema.serialize().to_pybytes(), [VARCHAR], BLOB)
-        con.execute("SELECT provider_register('app', 'l', 's', 'sc', '', '', '', '')").fetchall()
-        con.execute("SELECT count(*) FROM provider_table_permissions('app', schema := 'main')").fetchall()
+        con.execute("SELECT vcatprovider_register('app', 'l', 's', 'sc', '', '', '', '')").fetchall()
+        con.execute("SELECT count(*) FROM vcatprovider_table_permissions('app', schema := 'main')").fetchall()
         con.close()
         del con
         gc.collect()
@@ -191,9 +191,9 @@ def test_closing_a_connection_with_a_same_instance_bridge_frees_its_database(tmp
         con = duckdb.connect(path, **con_kwargs)
         con.execute("LOAD '{BRIDGE_EXTENSION}'")
         con.execute("CREATE TABLE users(id INTEGER PRIMARY KEY); INSERT INTO users VALUES (1)")
-        token = con.execute("SELECT bridge_register_source('b1', 'host')").fetchone()[0]
-        con.execute("SELECT bridge_set_policy('b1', 'main.users', 'select', 'true')").fetchall()
-        con.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'b1', TOKEN '{{token}}')")
+        token = con.execute("SELECT vcatbridge_register_source('b1', 'host')").fetchone()[0]
+        con.execute("SELECT vcatbridge_set_policy('b1', 'main.users', 'select', 'true')").fetchall()
+        con.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID 'b1', TOKEN '{{token}}')")
         assert con.execute("SELECT count(*) FROM app.main.users").fetchone() == (1,)
         con.close()
         del con
@@ -227,9 +227,9 @@ def test_bridge_id_is_reusable_after_detach():
     bridge_id = bridge(source, target, {"users": READ})
     unbridge(target)
 
-    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute("SELECT bridge_set_policy(?, 'main.users', 'select', 'true')", [bridge_id])
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    token = source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT vcatbridge_set_policy(?, 'main.users', 'select', 'true')", [bridge_id])
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     assert target.execute("SELECT count(*) FROM app.main.users").fetchone() == (1,)
     unbridge(target)
     source.close()
@@ -237,7 +237,7 @@ def test_bridge_id_is_reusable_after_detach():
 
 
 def test_a_schema_dropped_and_recreated_gets_a_fresh_wrapper(source, target):
-    """The dynamic-load counterpart of test/sql/virtual_catalog_schema_recreate.test, which does not
+    """The dynamic-load counterpart of test/sql/bridge/vcatbridge_schema_recreate.test, which does not
     fault in the statically-linked unittest binary. VirtualCatalog memoises one wrapper per schema
     NAME and never erases, so without an identity check the wrapper outlives the DuckSchemaEntry it
     holds a reference to."""

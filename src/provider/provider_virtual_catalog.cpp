@@ -79,7 +79,7 @@ shared_ptr<ProviderInfo> ProviderFromAttachOptions(ClientContext &context, Attac
 		return nullptr;
 	}
 	if (info->list_udf.empty() || info->schema_udf.empty() || info->scan_udf.empty()) {
-		throw BinderException("virtual_catalog_provider: ATTACH takes LIST, SCHEMA and SCAN together, or none of them");
+		throw BinderException("vcatprovider: ATTACH takes LIST, SCHEMA and SCAN together, or none of them");
 	}
 	info->catalog_name = catalog_name;
 	info->db_instance = context.db;
@@ -154,7 +154,7 @@ void VirtualCatalogProvider::RefreshProviderNames() {
 	Connection conn(*snapshot->Database());
 	auto result = conn.Query(vcat::UdfCallWithConstants(snapshot->list_udf, {}));
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("virtual_catalog_provider: list UDF failed: ");
+		result->GetErrorObject().Throw("vcatprovider: list UDF failed: ");
 	}
 	auto chunk = result->Fetch();
 	if (chunk && chunk->size() > 0) {
@@ -171,8 +171,8 @@ void VirtualCatalogProvider::RefreshProviderNames() {
 	for (auto &entry : qualified) {
 		auto dot = entry.find('.');
 		if (dot == string::npos || dot == 0 || dot + 1 == entry.size()) {
-			throw InvalidInputException(
-			    "virtual_catalog_provider: list UDF returned '%s'; names must be qualified as schema.table", entry);
+			throw InvalidInputException("vcatprovider: list UDF returned '%s'; names must be qualified as schema.table",
+			                            entry);
 		}
 		grouped[entry.substr(0, dot)].push_back(entry.substr(dot + 1));
 	}
@@ -299,7 +299,7 @@ VirtualCatalogProviderSchemaEntry::GetOrQueryProviderEntry(const VirtualCatalogP
 	Connection conn(*info.Database());
 	auto result = conn.Query(vcat::UdfCallWithConstants(info.schema_udf, {Value(qualified)}));
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("virtual_catalog_provider: schema UDF failed: ");
+		result->GetErrorObject().Throw("vcatprovider: schema UDF failed: ");
 	}
 	auto chunk = result->Fetch();
 	if (!chunk || chunk->size() == 0) {
@@ -311,8 +311,8 @@ VirtualCatalogProviderSchemaEntry::GetOrQueryProviderEntry(const VirtualCatalogP
 	}
 	// One Arrow IPC schema message, straight from `pa.Schema.serialize()`: column names, DuckDB types
 	// and the primary keys all come out of it, so the provider declares its shape once.
-	auto decoded = vcat_provider::DecodeSchemaMessage(*conn.context, StringValue::Get(payload),
-	                                                  "virtual_catalog_provider: schema UDF");
+	auto decoded =
+	    vcat_provider::DecodeSchemaMessage(*conn.context, StringValue::Get(payload), "vcatprovider: schema UDF");
 	auto &column_names = decoded.column_names;
 	auto &column_types = decoded.column_types;
 
@@ -388,7 +388,7 @@ void VirtualCatalogProviderSchemaEntry::ThrowIfExtensionOwnedOnDrop(const string
 	shared_ptr<ProviderInfo> owning;
 	if (TryGetProviderForTable(entry_name, owning)) {
 		throw BinderException("Table '%s' is provider-managed; modify the backing store and call "
-		                      "provider_invalidate_tables() instead of DROP TABLE",
+		                      "vcatprovider_invalidate_tables() instead of DROP TABLE",
 		                      entry_name);
 	}
 }
@@ -444,7 +444,7 @@ bool VirtualCatalogProviderSchemaEntry::TryAlterExtensionEntry(CatalogTransactio
 	auto udf_result = udf_conn.Query(vcat::UdfCallWithConstants(
 	    owning->alter_udf, {Value(QualifiedName(alter.name)), Value(kind), Value(details_json)}));
 	if (udf_result->HasError()) {
-		udf_result->GetErrorObject().Throw("virtual_catalog_provider: alter UDF failed: ");
+		udf_result->GetErrorObject().Throw("vcatprovider: alter UDF failed: ");
 	}
 
 	// Evict only this table's cached entry; retire (don't free) it since a concurrent scan may hold its pointer.

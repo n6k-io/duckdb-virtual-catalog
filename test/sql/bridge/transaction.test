@@ -2,7 +2,7 @@
 # description: the source resolves with the target's transaction.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER);
@@ -11,22 +11,22 @@ statement ok
 INSERT INTO memory.main.orders VALUES (1,'ada',50);
 
 statement ok
-SELECT bridge_register_source('v2_transaction', 'memory', 'tok_transaction');
+SELECT vcatbridge_register_source('v2_transaction', 'memory', 'tok_transaction');
 
 statement ok
-SELECT bridge_set_policy('v2_transaction', 'main.orders', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_transaction', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_transaction', 'main.orders', 'insert', 'true');
+SELECT vcatbridge_set_policy('v2_transaction', 'main.orders', 'insert', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_transaction', 'main.orders', 'update', 'true');
+SELECT vcatbridge_set_policy('v2_transaction', 'main.orders', 'update', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_transaction', 'main.orders', 'delete', 'true');
+SELECT vcatbridge_set_policy('v2_transaction', 'main.orders', 'delete', 'true');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_transaction', TOKEN 'tok_transaction');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_transaction', TOKEN 'tok_transaction');
 
 # A statement outside an explicit transaction is a transaction of its own, and commits with it.
 statement ok

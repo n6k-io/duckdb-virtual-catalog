@@ -98,8 +98,7 @@ class StreamingReadMarker : public ClientContextState {};
 
 const string &StreamingReadMarkerKey() {
 	static const int anchor = 0;
-	static const string key =
-	    "virtual_catalog_bridge/streaming_read/" + std::to_string(reinterpret_cast<uintptr_t>(&anchor));
+	static const string key = "vcatbridge/streaming_read/" + std::to_string(reinterpret_cast<uintptr_t>(&anchor));
 	return key;
 }
 
@@ -170,13 +169,12 @@ void PurgeExpiredPendingSources(PendingLock &lock) {
 PendingSource &LookupPendingForGrant(const string &bridge_id, ClientContext &context) {
 	auto it = PendingSources().find(bridge_id);
 	if (it == PendingSources().end()) {
-		throw PermissionException("virtual_catalog_bridge: no registered source for bridge '%s'. "
-		                          "Call bridge_register_source on the source connection first.",
+		throw PermissionException("vcatbridge: no registered source for bridge '%s'. "
+		                          "Call vcatbridge_register_source on the source connection first.",
 		                          bridge_id);
 	}
 	if (it->second.source_db.get() != context.db.get()) {
-		throw PermissionException("virtual_catalog_bridge: bridge '%s' was registered by a different source connection",
-		                          bridge_id);
+		throw PermissionException("vcatbridge: bridge '%s' was registered by a different source connection", bridge_id);
 	}
 	it->second.last_touched = std::chrono::steady_clock::now();
 	return it->second;
@@ -190,11 +188,10 @@ shared_ptr<GrantBook> LookupLive(const string &bridge_id, ClientContext &context
 		grants = it->second.grants.lock();
 	}
 	if (!grants) {
-		throw PermissionException("virtual_catalog_bridge: no registered source for bridge '%s'", bridge_id);
+		throw PermissionException("vcatbridge: no registered source for bridge '%s'", bridge_id);
 	}
 	if (it->second.source_db != context.db.get()) {
-		throw PermissionException("virtual_catalog_bridge: bridge '%s' was registered by a different source connection",
-		                          bridge_id);
+		throw PermissionException("vcatbridge: bridge '%s' was registered by a different source connection", bridge_id);
 	}
 	source = it->second.source;
 	return grants;
@@ -235,7 +232,7 @@ GrantTarget LookupGrantTarget(PendingLock &lock, const string &bridge_id, Client
 GrantTarget LookupOpenGrants(PendingLock &lock, const string &bridge_id, ClientContext &context) {
 	auto target = LookupGrantTarget(lock, bridge_id, context);
 	if (*target.policy_finalized) {
-		throw PermissionException("virtual_catalog_bridge: the policies of bridge '%s' are finalized", bridge_id);
+		throw PermissionException("vcatbridge: the policies of bridge '%s' are finalized", bridge_id);
 	}
 	return target;
 }
@@ -252,11 +249,10 @@ optional_ptr<SourceGrant> FindGrant(GrantTables &tables, const string &schema, c
 SourcePin PinSourceCatalog(ClientContext &context, const string &source_catalog) {
 	auto entry = Catalog::GetCatalogEntry(context, source_catalog);
 	if (!entry) {
-		throw CatalogException("virtual_catalog_bridge: source catalog '%s' does not exist", source_catalog);
+		throw CatalogException("vcatbridge: source catalog '%s' does not exist", source_catalog);
 	}
 	if (entry->IsTemporaryCatalog() || entry->IsSystemCatalog()) {
-		throw CatalogException("virtual_catalog_bridge: source catalog '%s' is a temporary or system catalog",
-		                       source_catalog);
+		throw CatalogException("vcatbridge: source catalog '%s' is a temporary or system catalog", source_catalog);
 	}
 	return SourcePin(entry->GetAttached(), source_catalog);
 }
@@ -266,8 +262,8 @@ void ThrowIfAnyNull(DataChunk &args, idx_t columns, const char *function) {
 		auto &validity = FlatVector::Validity(args.data[c]);
 		for (idx_t i = 0; i < args.size(); i++) {
 			if (!validity.RowIsValid(i)) {
-				throw IOException("virtual_catalog_bridge: argument %llu of %s cannot be NULL",
-				                  static_cast<uint64_t>(c + 1), function);
+				throw IOException("vcatbridge: argument %llu of %s cannot be NULL", static_cast<uint64_t>(c + 1),
+				                  function);
 			}
 		}
 	}
@@ -280,7 +276,7 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 	for (idx_t c = 0; c < arg_count; c++) {
 		args.data[c].Flatten(count);
 	}
-	ThrowIfAnyNull(args, arg_count, "bridge_register_source");
+	ThrowIfAnyNull(args, arg_count, "vcatbridge_register_source");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto source_catalogs = FlatVector::GetData<string_t>(args.data[1]);
 	auto result_data = FlatVector::GetData<string_t>(result);
@@ -289,7 +285,7 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		auto bridge_id = bridge_ids[i].GetString();
 		auto source_catalog = source_catalogs[i].GetString();
 		if (bridge_id.empty()) {
-			throw IOException("virtual_catalog_bridge: bridge id cannot be empty");
+			throw IOException("vcatbridge: bridge id cannot be empty");
 		}
 		PendingSource pending;
 		pending.source = PinSourceCatalog(context, source_catalog);
@@ -297,7 +293,7 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		if (arg_count > 2) {
 			auto chosen = FlatVector::GetData<string_t>(args.data[2])[i].GetString();
 			if (chosen.empty()) {
-				throw IOException("virtual_catalog_bridge: the token cannot be empty");
+				throw IOException("vcatbridge: the token cannot be empty");
 			}
 			pending.token = std::move(chosen);
 		} else {
@@ -308,7 +304,7 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		PendingLock lock;
 		PurgeExpiredPendingSources(lock);
 		if (PendingSources().find(bridge_id) != PendingSources().end() || IsLiveBridge(bridge_id)) {
-			throw IOException("virtual_catalog_bridge: a source is already registered for bridge '%s'", bridge_id);
+			throw IOException("vcatbridge: a source is already registered for bridge '%s'", bridge_id);
 		}
 		result_data[i] = StringVector::AddString(result, pending.token);
 		PendingSources()[bridge_id] = std::move(pending);
@@ -370,7 +366,7 @@ void FillContext(unique_ptr<ParsedExpression> &expr, const case_insensitive_map_
 		auto &name = expr->Cast<ParameterExpression>().identifier;
 		auto it = values.find(name);
 		if (it == values.end()) {
-			throw InternalException("virtual_catalog_bridge: context '$%s' is not set", name);
+			throw InternalException("vcatbridge: context '$%s' is not set", name);
 		}
 		expr = make_uniq<ConstantExpression>(it->second);
 		return;
@@ -395,16 +391,16 @@ void ProbePredicate(const shared_ptr<Relation> &source_table, const ParsedExpres
 		projection.push_back(expr->Copy());
 		probe = source_table->Project(std::move(projection), vector<string> {"policy"});
 	} catch (const std::exception &ex) {
-		throw IOException("virtual_catalog_bridge: the %s predicate '%s' is not a valid WHERE clause on the "
+		throw IOException("vcatbridge: the %s predicate '%s' is not a valid WHERE clause on the "
 		                  "source: %s",
 		                  clause, text, ex.what());
 	}
 	auto &columns = probe->Columns();
 	if (columns.size() != 1) {
-		throw IOException("virtual_catalog_bridge: the %s predicate '%s' must be a single expression", clause, text);
+		throw IOException("vcatbridge: the %s predicate '%s' must be a single expression", clause, text);
 	}
 	if (columns[0].Type().id() != LogicalTypeId::BOOLEAN) {
-		throw IOException("virtual_catalog_bridge: the %s predicate '%s' must be BOOLEAN, but it is %s", clause, text,
+		throw IOException("vcatbridge: the %s predicate '%s' must be BOOLEAN, but it is %s", clause, text,
 		                  columns[0].Type().ToString());
 	}
 }
@@ -415,20 +411,20 @@ unique_ptr<ParsedExpression> ParseAndValidatePredicate(const shared_ptr<Relation
                                                        optional_ptr<const case_insensitive_map_t<Value>> values) {
 	auto parsed = Parser::ParseExpressionList(text);
 	if (parsed.size() != 1) {
-		throw IOException("virtual_catalog_bridge: the %s predicate must be a single expression", clause);
+		throw IOException("vcatbridge: the %s predicate must be a single expression", clause);
 	}
 	auto expr = std::move(parsed[0]);
 	case_insensitive_set_t names;
 	ContextNames(*expr, names);
 	for (auto &name : names) {
 		if (std::all_of(name.begin(), name.end(), StringUtil::CharacterIsDigit)) {
-			throw IOException("virtual_catalog_bridge: the %s predicate '%s' may only use named context "
+			throw IOException("vcatbridge: the %s predicate '%s' may only use named context "
 			                  "parameters ($name), not positional ones",
 			                  clause, text);
 		}
 		if (values && !values->count(name)) {
-			throw IOException("virtual_catalog_bridge: the %s predicate '%s' uses context '$%s', which is not set; "
-			                  "call bridge_set_context before setting a policy that uses it",
+			throw IOException("vcatbridge: the %s predicate '%s' uses context '$%s', which is not set; "
+			                  "call vcatbridge_set_context before setting a policy that uses it",
 			                  clause, text, name);
 		}
 	}
@@ -492,7 +488,7 @@ void ThrowIfForeignKeyOracle(GrantTables &tables, const string &schema, const st
 			continue;
 		}
 		throw PermissionException(
-		    "virtual_catalog_bridge: table '%s.%s' in bridge '%s' grants '%s' over a foreign key to '%s.%s', which "
+		    "vcatbridge: table '%s.%s' in bridge '%s' grants '%s' over a foreign key to '%s.%s', which "
 		    "is not granted 'select' with USING 'true'; the write would reveal which keys exist in it. To accept "
 		    "this, add '%s.%s' to the foreign_keys of '%s.%s'",
 		    schema, table, bridge_id, CrossingVerbName(verb), schema, parent, schema, parent, schema, table);
@@ -529,7 +525,7 @@ void QualifyColumns(unique_ptr<ParsedExpression> &expr, const string &table, con
 unique_ptr<ParsedExpression> GuardWithCheck(unique_ptr<ParsedExpression> check, unique_ptr<ParsedExpression> value) {
 	vector<unique_ptr<ParsedExpression>> error_args;
 	error_args.push_back(
-	    make_uniq<ConstantExpression>(Value("virtual_catalog_bridge: row violates the check predicate on this table")));
+	    make_uniq<ConstantExpression>(Value("vcatbridge: row violates the check predicate on this table")));
 	auto guard = make_uniq<CaseExpression>();
 	CaseCheck branch;
 	branch.when_expr = std::move(check);
@@ -571,7 +567,7 @@ CrossingFloorResolver PolicyResolver(const shared_ptr<GrantBook> &grants, const 
 	auto values = ContextSnapshot(*grants->context);
 	return [grants, source_catalog, values](const CrossingFloor &floor) -> unique_ptr<TableRef> {
 		if (!Grants(*grants, floor.schema, floor.table, CrossingVerb::SELECT)) {
-			throw PermissionException("virtual_catalog_bridge: '%s.%s' does not have 'select' permission", floor.schema,
+			throw PermissionException("vcatbridge: '%s.%s' does not have 'select' permission", floor.schema,
 			                          floor.table);
 		}
 		auto using_predicate = UsingFor(*grants, floor.schema, floor.table, CrossingVerb::SELECT);
@@ -604,8 +600,7 @@ CrossingWriteShaper PolicyShaper(const shared_ptr<GrantBook> &grants, const Cros
 	auto values = ContextSnapshot(*grants->context);
 	auto reads_rows = target.reads_rows && target.verb != CrossingVerb::INSERT;
 	if (reads_rows && !Grants(*grants, target.schema, target.table, CrossingVerb::SELECT)) {
-		throw PermissionException("virtual_catalog_bridge: '%s.%s' does not have 'select' permission", target.schema,
-		                          target.table);
+		throw PermissionException("vcatbridge: '%s.%s' does not have 'select' permission", target.schema, target.table);
 	}
 	return [grants, target, values, reads_rows](CrossingWriteStatement &built) {
 		auto using_predicate = UsingFor(*grants, target.schema, target.table, target.verb);
@@ -662,18 +657,17 @@ CrossingWriteShaper PolicyShaper(const shared_ptr<GrantBook> &grants, const Cros
 string RequiredAttachOption(AttachInfo &info, const char *key) {
 	auto it = info.options.find(key);
 	if (it == info.options.end()) {
-		throw IOException("virtual_catalog_bridge: ATTACH (TYPE %s) requires a '%s' option",
-		                  VIRTUAL_CATALOG_BRIDGE_TYPE, key);
+		throw IOException("vcatbridge: ATTACH (TYPE %s) requires a '%s' option", VCATBRIDGE_TYPE, key);
 	}
 	auto text = StringValue::Get(it->second.DefaultCastAs(LogicalType::VARCHAR));
 	if (text.empty()) {
-		throw IOException("virtual_catalog_bridge: the '%s' ATTACH option cannot be empty", key);
+		throw IOException("vcatbridge: the '%s' ATTACH option cannot be empty", key);
 	}
 	return text;
 }
 
 const string &BridgePrefix() {
-	static const string prefix = "virtual_catalog_bridge: ";
+	static const string prefix = "vcatbridge: ";
 	return prefix;
 }
 
@@ -743,7 +737,7 @@ void WithSourceTransaction(DatabaseInstance &db, const SourcePin &source, F &&f)
 //! An unset catalog matches the bridge's source catalog; a set one must equal it.
 void ThrowIfOtherCatalog(const PolicyName &name, const string &catalog) {
 	if (!name.catalog.empty() && !StringUtil::CIEquals(name.catalog, catalog)) {
-		throw IOException("virtual_catalog_bridge: '%s' names catalog '%s', but this bridge's source catalog is '%s'",
+		throw IOException("vcatbridge: '%s' names catalog '%s', but this bridge's source catalog is '%s'",
 		                  name.ToString(), name.catalog, catalog);
 	}
 }
@@ -753,8 +747,8 @@ CatalogEntry &GrantableEntry(Connection &source_conn, const string &catalog, con
 	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, name.name);
 	auto entry = Catalog::GetEntry(*source_conn.context, catalog, name.schema, lookup, OnEntryNotFound::RETURN_NULL);
 	if (!IsGrantable(entry)) {
-		throw CatalogException("virtual_catalog_bridge: '%s.%s' not found in catalog '%s' on source", name.schema,
-		                       name.name, catalog);
+		throw CatalogException("vcatbridge: '%s.%s' not found in catalog '%s' on source", name.schema, name.name,
+		                       catalog);
 	}
 	return *entry;
 }
@@ -763,8 +757,7 @@ void ThrowUnlessSchemaExists(Connection &source_conn, const string &catalog, con
 	ThrowIfOtherCatalog(name, catalog);
 	EntryLookupInfo lookup(CatalogType::SCHEMA_ENTRY, name.schema);
 	if (!Catalog::GetSchema(*source_conn.context, catalog, lookup, OnEntryNotFound::RETURN_NULL)) {
-		throw CatalogException("virtual_catalog_bridge: schema '%s' not found in catalog '%s' on source", name.schema,
-		                       catalog);
+		throw CatalogException("vcatbridge: schema '%s' not found in catalog '%s' on source", name.schema, catalog);
 	}
 }
 
@@ -797,25 +790,24 @@ ResolvedVerb ResolveVerb(Connection &source_conn, CatalogEntry &entry, const str
 	ResolvedVerb resolved;
 	resolved.granted = true;
 	if (entry.type == CatalogType::VIEW_ENTRY && verb != CrossingVerb::SELECT) {
-		throw IOException("virtual_catalog_bridge: '%s.%s' is a view; a view can only be granted 'select', not '%s'",
-		                  name.schema, name.name, CrossingVerbName(verb));
+		throw IOException("vcatbridge: '%s.%s' is a view; a view can only be granted 'select', not '%s'", name.schema,
+		                  name.name, CrossingVerbName(verb));
 	}
 	if (((IsDdlVerb(verb) && verb != CrossingVerb::ALTER) || verb == CrossingVerb::INSERT) &&
 	    !IsUnrestricted(policy.using_text)) {
-		throw IOException("virtual_catalog_bridge: the USING predicate for '%s' must be literally 'true'",
-		                  CrossingVerbName(verb));
+		throw IOException("vcatbridge: the USING predicate for '%s' must be literally 'true'", CrossingVerbName(verb));
 	}
 	auto source_table = SourceRelation(source_conn, entry, catalog, name.schema, name.name);
 	resolved.using_predicate = ParseAndValidatePredicate(source_table, policy.using_text, "USING", values);
 	if (!policy.check_text.empty()) {
 		resolved.check_predicate = ParseAndValidatePredicate(source_table, policy.check_text, "WITH CHECK", values);
 	} else if (verb == CrossingVerb::INSERT) {
-		throw IOException("virtual_catalog_bridge: an 'insert' grant must state a check predicate");
+		throw IOException("vcatbridge: an 'insert' grant must state a check predicate");
 	} else if (verb == CrossingVerb::UPDATE) {
 		resolved.check_predicate = resolved.using_predicate->Copy();
 	}
 	if (verb == CrossingVerb::ALTER && MentionsColumn(*resolved.using_predicate)) {
-		throw IOException("virtual_catalog_bridge: the 'alter' predicate '%s' may only use context ($name), not a "
+		throw IOException("vcatbridge: the 'alter' predicate '%s' may only use context ($name), not a "
 		                  "column",
 		                  policy.using_text);
 	}
@@ -832,8 +824,7 @@ vector<string> RunKeyQuery(ClientContext &context, const string &query, const st
 	vector<string> key;
 	while (true) {
 		if (key_result->HasError()) {
-			key_result->GetErrorObject().Throw("virtual_catalog_bridge: columns_from_query for '" + qualified +
-			                                   "' failed: ");
+			key_result->GetErrorObject().Throw("vcatbridge: columns_from_query for '" + qualified + "' failed: ");
 		}
 		auto chunk = key_result->Fetch();
 		if (key_result->HasError()) {
@@ -845,7 +836,7 @@ vector<string> RunKeyQuery(ClientContext &context, const string &query, const st
 		for (idx_t row = 0; row < chunk->size(); row++) {
 			auto value = chunk->GetValue(0, row);
 			if (value.IsNull() || value.ToString().empty()) {
-				throw IOException("virtual_catalog_bridge: columns_from_query for '%s' returned an empty or NULL "
+				throw IOException("vcatbridge: columns_from_query for '%s' returned an empty or NULL "
 				                  "column name",
 				                  qualified);
 			}
@@ -853,7 +844,7 @@ vector<string> RunKeyQuery(ClientContext &context, const string &query, const st
 		}
 	}
 	if (key.empty()) {
-		throw IOException("virtual_catalog_bridge: columns_from_query for '%s' returned no columns", qualified);
+		throw IOException("vcatbridge: columns_from_query for '%s' returned no columns", qualified);
 	}
 	return key;
 }
@@ -863,14 +854,14 @@ void RunVerifyUnique(ClientContext &context, const string &query, const string &
 	Connection source_conn(*context.db);
 	auto check_result = source_conn.SendQuery(query);
 	if (check_result->HasError()) {
-		check_result->GetErrorObject().Throw("virtual_catalog_bridge: verify_unique for '" + qualified + "' failed: ");
+		check_result->GetErrorObject().Throw("vcatbridge: verify_unique for '" + qualified + "' failed: ");
 	}
 	auto chunk = check_result->Fetch();
 	if (check_result->HasError()) {
-		check_result->GetErrorObject().Throw("virtual_catalog_bridge: verify_unique for '" + qualified + "' failed: ");
+		check_result->GetErrorObject().Throw("vcatbridge: verify_unique for '" + qualified + "' failed: ");
 	}
 	if (chunk && chunk->size() > 0) {
-		throw ConstraintException("virtual_catalog_bridge: verify_unique for '%s' returned rows; the key is not "
+		throw ConstraintException("vcatbridge: verify_unique for '%s' returned rows; the key is not "
 		                          "unique on the source",
 		                          qualified);
 	}
@@ -887,7 +878,7 @@ ResolvedKey ResolveKey(ClientContext &context, CatalogEntry &entry, const Policy
 	resolved.set = true;
 	auto qualified = name.schema + "." + name.name;
 	if (entry.type != CatalogType::TABLE_ENTRY) {
-		throw IOException("virtual_catalog_bridge: '%s' is a view; a view has no primary key", qualified);
+		throw IOException("vcatbridge: '%s' is a view; a view has no primary key", qualified);
 	}
 	if (key.columns_from_query.empty()) {
 		resolved.columns = key.columns;
@@ -897,7 +888,7 @@ ResolvedKey ResolveKey(ClientContext &context, CatalogEntry &entry, const Policy
 	auto &columns = entry.Cast<TableCatalogEntry>().GetColumns();
 	for (auto &column : resolved.columns) {
 		if (!columns.ColumnExists(column)) {
-			throw IOException("virtual_catalog_bridge: '%s' is not a column of '%s'", column, qualified);
+			throw IOException("vcatbridge: '%s' is not a column of '%s'", column, qualified);
 		}
 	}
 	resolved.verified = false;
@@ -912,16 +903,15 @@ void ThrowUnlessForeignKey(Connection &source_conn, CatalogEntry &entry, const s
                            const PolicyName &parent) {
 	ThrowIfOtherCatalog(parent, catalog);
 	if (entry.type != CatalogType::TABLE_ENTRY) {
-		throw IOException("virtual_catalog_bridge: '%s.%s' is a view; a view has no foreign keys", child.schema,
-		                  child.name);
+		throw IOException("vcatbridge: '%s.%s' is a view; a view has no foreign keys", child.schema, child.name);
 	}
 	auto parents = DiscoverForeignKeyParents(entry.Cast<TableCatalogEntry>());
 	auto references = [&](const string &table) {
 		return StringUtil::CIEquals(table, parent.name);
 	};
 	if (std::none_of(parents.begin(), parents.end(), references)) {
-		throw IOException("virtual_catalog_bridge: '%s.%s' has no foreign key to '%s.%s'", child.schema, child.name,
-		                  parent.schema, parent.name);
+		throw IOException("vcatbridge: '%s.%s' has no foreign key to '%s.%s'", child.schema, child.name, parent.schema,
+		                  parent.name);
 	}
 }
 
@@ -977,7 +967,7 @@ void ValidateGrantSet(GrantTables &tables, const case_insensitive_set_t &create_
 		for (auto &table_entry : schema_entry.second) {
 			auto &grant = table_entry.second;
 			if (grant.verbs == 0) {
-				throw PermissionException("virtual_catalog_bridge: '%s.%s' in bridge '%s' sets primary_key or "
+				throw PermissionException("vcatbridge: '%s.%s' in bridge '%s' sets primary_key or "
 				                          "foreign_keys but grants no verb",
 				                          schema_entry.first, table_entry.first, bridge_id);
 			}
@@ -991,8 +981,8 @@ void ValidateGrantSet(GrantTables &tables, const case_insensitive_set_t &create_
 		}
 	}
 	if (attaching && table_count == 0) {
-		throw PermissionException("virtual_catalog_bridge: bridge '%s' has no policies; call bridge_configure_policy "
-		                          "or bridge_set_policy on the source connection before attaching",
+		throw PermissionException("vcatbridge: bridge '%s' has no policies; call vcatbridge_configure_policy "
+		                          "or vcatbridge_set_policy on the source connection before attaching",
 		                          bridge_id);
 	}
 }
@@ -1015,7 +1005,7 @@ void CommitPolicy(const string &bridge_id, ClientContext &context, bool touches_
 	auto &book = *target.live;
 	lock_guard<mutex> guard(book.lock);
 	if (touches_tables && book.uncommitted_ddl > 0) {
-		throw PermissionException("virtual_catalog_bridge: a target transaction has uncommitted DDL on bridge '%s'; "
+		throw PermissionException("vcatbridge: a target transaction has uncommitted DDL on bridge '%s'; "
 		                          "change the policy after it ends",
 		                          bridge_id);
 	}
@@ -1037,8 +1027,8 @@ SourceGrant &GrantToConfigure(PolicyState &state, const PolicyName &name, bool l
 	}
 	auto grant = FindGrant(state.tables, name.schema, name.name);
 	if (!grant) {
-		throw CatalogException("virtual_catalog_bridge: '%s.%s' is not granted in bridge '%s'; grant it a verb first",
-		                       name.schema, name.name, bridge_id);
+		throw CatalogException("vcatbridge: '%s.%s' is not granted in bridge '%s'; grant it a verb first", name.schema,
+		                       name.name, bridge_id);
 	}
 	return *grant;
 }
@@ -1207,8 +1197,7 @@ PolicyState ResolvePolicy(ClientContext &context, Connection &source_conn, const
 		optional_ptr<CatalogEntry> entry;
 		auto found = Guarded(issues, table.path, "error", [&]() {
 			if (FindGrant(state.tables, table.name.schema, table.name.name)) {
-				throw IOException("virtual_catalog_bridge: '%s.%s' is configured twice", table.name.schema,
-				                  table.name.name);
+				throw IOException("vcatbridge: '%s.%s' is configured twice", table.name.schema, table.name.name);
 			}
 			entry = &GrantableEntry(source_conn, catalog, table.name);
 		});
@@ -1272,7 +1261,7 @@ void SetPolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		auto value_column = has_op ? 4 : 3;
 		for (idx_t c = 0; c < static_cast<idx_t>(value_column); c++) {
 			if (args.data[c].GetValue(i).IsNull()) {
-				throw IOException("virtual_catalog_bridge: argument %llu of bridge_set_policy cannot be NULL",
+				throw IOException("vcatbridge: argument %llu of vcatbridge_set_policy cannot be NULL",
 				                  static_cast<uint64_t>(c + 1));
 			}
 		}
@@ -1298,7 +1287,7 @@ void ConfigurePolicyFunc(DataChunk &args, ExpressionState &state, Vector &result
 	auto count = args.size();
 	args.data[0].Flatten(count);
 	args.data[1].Flatten(count);
-	ThrowIfAnyNull(args, 2, "bridge_configure_policy");
+	ThrowIfAnyNull(args, 2, "vcatbridge_configure_policy");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto documents = FlatVector::GetData<string_t>(args.data[1]);
 	auto result_data = FlatVector::GetData<string_t>(result);
@@ -1322,7 +1311,7 @@ unique_ptr<FunctionData> ValidatePolicyBind(ClientContext &context, TableFunctio
 	return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
 	for (idx_t c = 0; c < input.inputs.size(); c++) {
 		if (input.inputs[c].IsNull()) {
-			throw IOException("virtual_catalog_bridge: argument %llu of bridge_validate_policy_config cannot be NULL",
+			throw IOException("vcatbridge: argument %llu of vcatbridge_validate_policy_config cannot be NULL",
 			                  static_cast<uint64_t>(c + 1));
 		}
 	}
@@ -1435,15 +1424,15 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		auto name_value = args.data[1].GetValue(i);
 		auto value = args.data[2].GetValue(i);
 		if (id_value.IsNull() || name_value.IsNull()) {
-			throw IOException("virtual_catalog_bridge: bridge_set_context needs a bridge id and a context name");
+			throw IOException("vcatbridge: vcatbridge_set_context needs a bridge id and a context name");
 		}
 		auto bridge_id = StringValue::Get(id_value);
 		auto name = StringValue::Get(name_value);
 		if (name.empty()) {
-			throw IOException("virtual_catalog_bridge: the context name cannot be empty");
+			throw IOException("vcatbridge: the context name cannot be empty");
 		}
 		if (value.IsNull()) {
-			throw IOException("virtual_catalog_bridge: context '%s' cannot be NULL", name);
+			throw IOException("vcatbridge: context '%s' cannot be NULL", name);
 		}
 		ContextTarget target;
 		{
@@ -1452,7 +1441,7 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		}
 		auto values = ContextSnapshot(*target.context);
 		if (target.context->finalized) {
-			throw PermissionException("virtual_catalog_bridge: the context of bridge '%s' is finalized", bridge_id);
+			throw PermissionException("vcatbridge: the context of bridge '%s' is finalized", bridge_id);
 		}
 		values[name] = value;
 		if (!target.dependents.empty()) {
@@ -1472,7 +1461,7 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		}
 		lock_guard<mutex> guard(target.context->lock);
 		if (target.context->finalized) {
-			throw PermissionException("virtual_catalog_bridge: the context of bridge '%s' is finalized", bridge_id);
+			throw PermissionException("vcatbridge: the context of bridge '%s' is finalized", bridge_id);
 		}
 		target.context->values[name] = std::move(value);
 		result_data[i] = StringVector::AddString(result, "ok");
@@ -1483,7 +1472,7 @@ void FinalizeContextFunc(DataChunk &args, ExpressionState &state, Vector &result
 	auto &context = state.GetContext();
 	auto count = args.size();
 	args.data[0].Flatten(count);
-	ThrowIfAnyNull(args, 1, "bridge_finalize_context");
+	ThrowIfAnyNull(args, 1, "vcatbridge_finalize_context");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto result_data = FlatVector::GetData<string_t>(result);
 
@@ -1493,8 +1482,7 @@ void FinalizeContextFunc(DataChunk &args, ExpressionState &state, Vector &result
 		auto target = LookupContext(lock, bridge_id, context, string());
 		lock_guard<mutex> guard(target.context->lock);
 		if (target.context->finalized) {
-			throw PermissionException("virtual_catalog_bridge: the context of bridge '%s' is already finalized",
-			                          bridge_id);
+			throw PermissionException("vcatbridge: the context of bridge '%s' is already finalized", bridge_id);
 		}
 		target.context->finalized = true;
 		result_data[i] = StringVector::AddString(result, "ok");
@@ -1505,7 +1493,7 @@ void FinalizePolicyFunc(DataChunk &args, ExpressionState &state, Vector &result)
 	auto &context = state.GetContext();
 	auto count = args.size();
 	args.data[0].Flatten(count);
-	ThrowIfAnyNull(args, 1, "bridge_finalize_policy");
+	ThrowIfAnyNull(args, 1, "vcatbridge_finalize_policy");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto result_data = FlatVector::GetData<string_t>(result);
 
@@ -1514,8 +1502,7 @@ void FinalizePolicyFunc(DataChunk &args, ExpressionState &state, Vector &result)
 		PendingLock lock;
 		auto target = LookupGrantTarget(lock, bridge_id, context);
 		if (*target.policy_finalized) {
-			throw PermissionException("virtual_catalog_bridge: the policies of bridge '%s' are already finalized",
-			                          bridge_id);
+			throw PermissionException("vcatbridge: the policies of bridge '%s' are already finalized", bridge_id);
 		}
 		*target.policy_finalized = true;
 		result_data[i] = StringVector::AddString(result, "ok");
@@ -1535,7 +1522,7 @@ bool IsConstant(const ParsedExpression &expr) {
 
 void ThrowUnlessConstantDefault(const ParsedExpression &expr) {
 	if (!IsConstant(expr)) {
-		throw PermissionException("virtual_catalog_bridge: a default from the target must be a constant, not '%s'",
+		throw PermissionException("vcatbridge: a default from the target must be a constant, not '%s'",
 		                          expr.ToString());
 	}
 }
@@ -1549,14 +1536,14 @@ void ThrowIfTypeChangeHasUsing(const ChangeColumnTypeInfo &change) {
 			return;
 		}
 	}
-	throw PermissionException("virtual_catalog_bridge: a type change from the target cannot take a USING "
+	throw PermissionException("vcatbridge: a type change from the target cannot take a USING "
 	                          "expression, not '%s'",
 	                          expr.ToString());
 }
 
 void ThrowIfColumnRunsOnSource(const ColumnDefinition &column) {
 	if (column.Generated()) {
-		throw PermissionException("virtual_catalog_bridge: a table from the target cannot declare a generated "
+		throw PermissionException("vcatbridge: a table from the target cannot declare a generated "
 		                          "column ('%s')",
 		                          column.GetName());
 	}
@@ -1579,7 +1566,7 @@ void ThrowUnlessSettingsMatch(const DatabaseInstance &source_db, const DatabaseI
 		auto source_value = CurrentSetting(source_db, name);
 		auto target_value = CurrentSetting(target_db, name);
 		if (!Value::NotDistinctFrom(source_value, target_value)) {
-			throw InvalidInputException("virtual_catalog_bridge: bridge '%s' needs setting '%s' to match on source "
+			throw InvalidInputException("vcatbridge: bridge '%s' needs setting '%s' to match on source "
 			                            "and target, but the source has %s and the target has %s",
 			                            bridge_id, name, source_value.ToSQLString(), target_value.ToSQLString());
 		}
@@ -1592,7 +1579,7 @@ unique_ptr<DuckDBSource> RedeemBridge(const string &bridge_id, const string &tok
 	auto colon = token.find(':');
 	if (colon != string::npos && token.substr(0, colon) != LoadNonce()) {
 		throw PermissionException(
-		    "virtual_catalog_bridge: source and target loaded different copies of the virtual_catalog extension. "
+		    "vcatbridge: source and target loaded different copies of the virtual_catalog extension. "
 		    "Ensure both connections use the same extension installation.");
 	}
 
@@ -1604,16 +1591,16 @@ unique_ptr<DuckDBSource> RedeemBridge(const string &bridge_id, const string &tok
 		PurgeExpiredPendingSources(lock);
 		auto it = PendingSources().find(bridge_id);
 		if (it == PendingSources().end()) {
-			throw PermissionException("virtual_catalog_bridge: no registered source for bridge '%s'", bridge_id);
+			throw PermissionException("vcatbridge: no registered source for bridge '%s'", bridge_id);
 		}
 		if (!ConstantTimeEquals(it->second.token, token)) {
 			if (++it->second.token_failures >= MAX_TOKEN_FAILURES) {
 				lock.Drop(it);
 			}
-			throw PermissionException("virtual_catalog_bridge: invalid setup token for bridge '%s'", bridge_id);
+			throw PermissionException("vcatbridge: invalid setup token for bridge '%s'", bridge_id);
 		}
 		if (IsLiveBridge(bridge_id)) {
-			throw PermissionException("virtual_catalog_bridge: bridge '%s' is already attached", bridge_id);
+			throw PermissionException("vcatbridge: bridge '%s' is already attached", bridge_id);
 		}
 		ValidateGrantSet(it->second.schemas, it->second.create_schemas, bridge_id, true);
 		ThrowUnlessSettingsMatch(*it->second.source_db, target_db, bridge_id);
@@ -1641,13 +1628,13 @@ SourcePin::SourcePin(AttachedDatabase &attached_p, string registered_name_p)
 string SourcePin::Use(ClientContext &source_context) const {
 	auto pinned = attached.lock();
 	if (!pinned || DatabaseManager::Get(source_context).GetDatabase(pinned->GetName()) != pinned) {
-		throw CatalogException("virtual_catalog_bridge: source catalog '%s' was detached", registered_name);
+		throw CatalogException("vcatbridge: source catalog '%s' was detached", registered_name);
 	}
 	auto name = pinned->GetName();
 	auto &transaction = MetaTransaction::Get(source_context);
 	auto referenced = transaction.GetReferencedDatabase(name);
 	if (referenced && referenced.get() != pinned.get()) {
-		throw CatalogException("virtual_catalog_bridge: source catalog '%s' was detached", registered_name);
+		throw CatalogException("vcatbridge: source catalog '%s' was detached", registered_name);
 	}
 	transaction.UseDatabase(pinned);
 	return name;
@@ -1665,7 +1652,7 @@ DuckDBSource::DuckDBSource() : bound(false) {
 
 void DuckDBSource::Bind(DuckDBSource &redeemed) {
 	if (bound) {
-		throw InternalException("virtual_catalog_bridge: bridge is already bound");
+		throw InternalException("vcatbridge: bridge is already bound");
 	}
 	bridge_id = std::move(redeemed.bridge_id);
 	source_db = redeemed.source_db;
@@ -1683,15 +1670,14 @@ bool DuckDBSource::IsBound() const {
 
 void DuckDBSource::ThrowUnlessBound() const {
 	if (!bound) {
-		throw PermissionException(
-		    "virtual_catalog_bridge: not initialized; call virtual_catalog_bridge_init(bridge_id, token)");
+		throw PermissionException("vcatbridge: not initialized; call vcatbridge_init(bridge_id, token)");
 	}
 }
 
 shared_ptr<DatabaseInstance> DuckDBSource::Database() const {
 	auto db = source_db.lock();
 	if (!db) {
-		throw ConnectionException("virtual_catalog_bridge: the source database of bridge '%s' is closed", bridge_id);
+		throw ConnectionException("vcatbridge: the source database of bridge '%s' is closed", bridge_id);
 	}
 	return db;
 }
@@ -1765,7 +1751,7 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 		lock_guard<mutex> guard(grants->lock);
 		auto grant = FindGrant(grants->tables, schema, name);
 		if (!grant) {
-			throw CatalogException("virtual_catalog_bridge: '%s.%s' is not granted", schema, name);
+			throw CatalogException("vcatbridge: '%s.%s' is not granted", schema, name);
 		}
 		verbs = grant->verbs;
 		key = grant->key;
@@ -1778,7 +1764,7 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, name);
 		auto entry = Catalog::GetEntry(context, catalog, schema, lookup, OnEntryNotFound::RETURN_NULL);
 		if (!IsGrantable(entry)) {
-			throw CatalogException("virtual_catalog_bridge: '%s.%s' is no longer on the source", schema, name);
+			throw CatalogException("vcatbridge: '%s.%s' is no longer on the source", schema, name);
 		}
 		if (entry->type == CatalogType::VIEW_ENTRY) {
 			auto &view = entry->Cast<ViewCatalogEntry>();
@@ -2056,7 +2042,7 @@ void DuckDBSession::Ddl(ClientContext &, const CrossingDdl &ddl) {
 		break;
 	}
 	default:
-		throw InternalException("virtual_catalog_bridge: '%s' is not a DDL verb", CrossingVerbName(ddl.verb));
+		throw InternalException("vcatbridge: '%s' is not a DDL verb", CrossingVerbName(ddl.verb));
 	}
 
 	auto creates = ddl.verb != CrossingVerb::CREATE || CreateWouldCreate(source_conn, catalog, ddl);
@@ -2069,11 +2055,11 @@ void DuckDBSession::Ddl(ClientContext &, const CrossingDdl &ddl) {
 
 	auto pending = source_conn.context->PendingQuery(std::move(statement), QueryParameters(false));
 	if (pending->HasError()) {
-		pending->GetErrorObject().Throw("virtual_catalog_bridge: ddl on source failed: ");
+		pending->GetErrorObject().Throw("vcatbridge: ddl on source failed: ");
 	}
 	auto result = pending->Execute();
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("virtual_catalog_bridge: ddl on source failed: ");
+		result->GetErrorObject().Throw("vcatbridge: ddl on source failed: ");
 	}
 	if (creates) {
 		RecordDdl(ddl_conn, catalog, ddl);
@@ -2092,7 +2078,7 @@ bool DuckDBSession::CreateWouldCreate(Connection &source_conn, const string &cat
 	case OnCreateConflict::REPLACE_ON_CONFLICT: {
 		lock_guard<mutex> guard(grants->lock);
 		if (!FindGrant(grants->tables, ddl.schema, ddl.table)) {
-			throw PermissionException("virtual_catalog_bridge: '%s' does not have '%s' permission", ddl.table,
+			throw PermissionException("vcatbridge: '%s' does not have '%s' permission", ddl.table,
 			                          CrossingVerbName(CrossingVerb::DROP));
 		}
 		return true;
@@ -2127,11 +2113,11 @@ void DuckDBSession::ThrowUnlessAlterGrantedOverFullTable(ClientContext &source_c
 		return PredicateFoldsToTrue(source_context, catalog, ddl.schema, ddl.table, *predicate);
 	};
 	if (!holds(alter_granted, alter_using)) {
-		throw PermissionException("virtual_catalog_bridge: '%s' does not have '%s' permission", ddl.table,
+		throw PermissionException("vcatbridge: '%s' does not have '%s' permission", ddl.table,
 		                          CrossingVerbName(CrossingVerb::ALTER));
 	}
 	if (!holds(select_granted, select_using)) {
-		throw PermissionException("virtual_catalog_bridge: the select policy on '%s.%s' hides rows, so the target "
+		throw PermissionException("vcatbridge: the select policy on '%s.%s' hides rows, so the target "
 		                          "cannot see the full table and cannot alter it",
 		                          ddl.schema, ddl.table);
 	}
@@ -2143,8 +2129,7 @@ void DuckDBSession::ThrowIfCreateDeclaresForeignKey(const CrossingDdl &ddl) {
 	}
 	for (auto &constraint : ddl.create->Cast<CreateTableInfo>().constraints) {
 		if (constraint->type == ConstraintType::FOREIGN_KEY) {
-			throw PermissionException(
-			    "virtual_catalog_bridge: a table created from the target cannot declare a foreign key");
+			throw PermissionException("vcatbridge: a table created from the target cannot declare a foreign key");
 		}
 	}
 }
@@ -2158,7 +2143,7 @@ void DuckDBSession::ThrowIfDdlCarriesExpression(const CrossingDdl &ddl) {
 		for (auto &constraint : create.constraints) {
 			if (constraint->type == ConstraintType::CHECK) {
 				throw PermissionException(
-				    "virtual_catalog_bridge: a table created from the target cannot declare a CHECK constraint");
+				    "vcatbridge: a table created from the target cannot declare a CHECK constraint");
 			}
 		}
 		return;
@@ -2231,8 +2216,7 @@ void DuckDBSession::ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl) {
 		           (grant.check_predicates[v] && mentions(*grant.check_predicates[v]));
 	}
 	if (orphaned) {
-		throw IOException("virtual_catalog_bridge: '%s' is the key or a policy column of '%s.%s'", column, ddl.schema,
-		                  ddl.table);
+		throw IOException("vcatbridge: '%s' is the key or a policy column of '%s.%s'", column, ddl.schema, ddl.table);
 	}
 }
 
@@ -2329,11 +2313,11 @@ unique_ptr<QueryResult> RunRead(Connection &source_conn, const CrossingQuery &qu
 
 	auto pending = PendingCrossingPlan(context, std::move(plan), stream);
 	if (pending->HasError()) {
-		pending->GetErrorObject().Throw("virtual_catalog_bridge: plan on source failed: ");
+		pending->GetErrorObject().Throw("vcatbridge: plan on source failed: ");
 	}
 	auto result = pending->Execute();
 	if (result->HasError()) {
-		result->GetErrorObject().Throw("virtual_catalog_bridge: plan on source failed: ");
+		result->GetErrorObject().Throw("vcatbridge: plan on source failed: ");
 	}
 	return result;
 }
@@ -2345,7 +2329,7 @@ CrossingScan ScanOf(const shared_ptr<Connection> &conn, unique_ptr<QueryResult> 
 		return [conn, result](ClientContext &, DataChunk &chunk, const CrossingWaker &) {
 			auto raw = result->FetchRaw();
 			if (result->HasError()) {
-				result->ThrowError("virtual_catalog_bridge: source query failed: ");
+				result->ThrowError("vcatbridge: source query failed: ");
 			}
 			if (!raw || raw->size() == 0) {
 				return CrossingReadResult::Done();
@@ -2374,7 +2358,7 @@ CrossingScan DuckDBSession::Read(ClientContext &, const CrossingQuery &query) {
 }
 
 void RegisterBridgeFunctions(ExtensionLoader &loader) {
-	ScalarFunctionSet register_source_set("bridge_register_source");
+	ScalarFunctionSet register_source_set("vcatbridge_register_source");
 	ScalarFunction register_source({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                               RegisterSourceFunc);
 	register_source.stability = FunctionStability::VOLATILE;
@@ -2387,7 +2371,7 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	register_source_set.AddFunction(register_source_token);
 	loader.RegisterFunction(register_source_set);
 
-	ScalarFunctionSet set_policy_set("bridge_set_policy");
+	ScalarFunctionSet set_policy_set("vcatbridge_set_policy");
 	ScalarFunction set_policy({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
 	                          LogicalType::VARCHAR, SetPolicyFunc);
 	set_policy.stability = FunctionStability::VOLATILE;
@@ -2401,29 +2385,29 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	set_policy_set.AddFunction(set_policy_list);
 	loader.RegisterFunction(set_policy_set);
 
-	ScalarFunction configure_policy("bridge_configure_policy", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	ScalarFunction configure_policy("vcatbridge_configure_policy", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                LogicalType::VARCHAR, ConfigurePolicyFunc);
 	configure_policy.stability = FunctionStability::VOLATILE;
 	configure_policy.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(configure_policy);
 
-	TableFunction validate_policy("bridge_validate_policy_config", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	TableFunction validate_policy("vcatbridge_validate_policy_config", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                              ValidatePolicyScan, ValidatePolicyBind, ValidatePolicyInitGlobal);
 	loader.RegisterFunction(validate_policy);
 
-	ScalarFunction set_context("bridge_set_context", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
+	ScalarFunction set_context("vcatbridge_set_context", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
 	                           LogicalType::VARCHAR, SetContextFunc);
 	set_context.stability = FunctionStability::VOLATILE;
 	set_context.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(set_context);
 
-	ScalarFunction finalize_context("bridge_finalize_context", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	ScalarFunction finalize_context("vcatbridge_finalize_context", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                                FinalizeContextFunc);
 	finalize_context.stability = FunctionStability::VOLATILE;
 	finalize_context.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(finalize_context);
 
-	ScalarFunction finalize_policy("bridge_finalize_policy", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	ScalarFunction finalize_policy("vcatbridge_finalize_policy", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                               FinalizePolicyFunc);
 	finalize_policy.stability = FunctionStability::VOLATILE;
 	finalize_policy.null_handling = FunctionNullHandling::SPECIAL_HANDLING;

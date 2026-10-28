@@ -31,7 +31,6 @@ struct StreamFunctionInfo : public TableFunctionInfo {
 	}
 };
 
-// Registers provider_create_stream_function / provider_drop_stream_function / provider_stream_functions.
 void RegisterStreamFunctionCreators(ExtensionLoader &loader);
 
 } // namespace vcat

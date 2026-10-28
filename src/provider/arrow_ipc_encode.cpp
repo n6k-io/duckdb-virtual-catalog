@@ -51,10 +51,10 @@ ArrowIpcStreamEncoder::ArrowIpcStreamEncoder(ClientContext &context, const vecto
 	ArrowConverter::ToArrowSchema(&schema_, wire_types_, names, props);
 	ArrowBufferInit(&buf_);
 	if (ArrowIpcOutputStreamInitBuffer(&out_stream_, &buf_) != NANOARROW_OK) {
-		throw IOException("virtual_catalog_provider: ArrowIpcOutputStreamInitBuffer failed");
+		throw IOException("vcatprovider: ArrowIpcOutputStreamInitBuffer failed");
 	}
 	if (ArrowIpcWriterInit(&writer_, &out_stream_) != NANOARROW_OK) {
-		throw IOException("virtual_catalog_provider: ArrowIpcWriterInit failed");
+		throw IOException("vcatprovider: ArrowIpcWriterInit failed");
 	}
 }
 
@@ -75,7 +75,7 @@ std::string ArrowIpcStreamEncoder::TakeNewlyWrittenBytes() {
 
 std::string ArrowIpcStreamEncoder::SchemaMessage() {
 	if (ArrowIpcWriterWriteSchema(&writer_, &schema_, nullptr) != NANOARROW_OK) {
-		throw IOException("virtual_catalog_provider: ArrowIpcWriterWriteSchema failed");
+		throw IOException("vcatprovider: ArrowIpcWriterWriteSchema failed");
 	}
 	return TakeNewlyWrittenBytes();
 }
@@ -112,7 +112,7 @@ std::string ArrowIpcStreamEncoder::EncodeChunk(DataChunk &chunk) {
 		array.release(&array);
 	}
 	if (!ok) {
-		throw IOException("virtual_catalog_provider: encoding Arrow record batch failed");
+		throw IOException("vcatprovider: encoding Arrow record batch failed");
 	}
 	return TakeNewlyWrittenBytes();
 }
@@ -123,7 +123,7 @@ std::string ArrowIpcStreamEncoder::TakeEndOfStreamMessage() {
 	}
 	finalized_ = true;
 	if (ArrowIpcWriterWriteArrayView(&writer_, nullptr, nullptr) != NANOARROW_OK) {
-		throw IOException("virtual_catalog_provider: writing Arrow end-of-stream failed");
+		throw IOException("vcatprovider: writing Arrow end-of-stream failed");
 	}
 	return TakeNewlyWrittenBytes();
 }

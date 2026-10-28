@@ -2,7 +2,7 @@
 # description: S6 -- DELETE addresses rows by the declared key, under the USING policy.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
@@ -17,22 +17,22 @@ statement ok
 INSERT INTO memory.main.nokey VALUES (1,'a');
 
 statement ok
-SELECT bridge_register_source('v2_delete', 'memory', 'tok_delete');
+SELECT vcatbridge_register_source('v2_delete', 'memory', 'tok_delete');
 
 statement ok
-SELECT bridge_set_policy('v2_delete', 'main.orders', 'select', 'tenant = 7');
+SELECT vcatbridge_set_policy('v2_delete', 'main.orders', 'select', 'tenant = 7');
 
 statement ok
-SELECT bridge_set_policy('v2_delete', 'main.orders', 'delete', 'tenant = 7');
+SELECT vcatbridge_set_policy('v2_delete', 'main.orders', 'delete', 'tenant = 7');
 
 statement ok
-SELECT bridge_set_policy('v2_delete', 'main.nokey', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_delete', 'main.nokey', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_delete', 'main.nokey', 'delete', 'true');
+SELECT vcatbridge_set_policy('v2_delete', 'main.nokey', 'delete', 'true');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_delete', TOKEN 'tok_delete');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_delete', TOKEN 'tok_delete');
 
 statement ok
 DELETE FROM b.main.orders WHERE id = 2;

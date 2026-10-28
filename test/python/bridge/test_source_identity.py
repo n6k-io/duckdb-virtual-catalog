@@ -42,4 +42,4 @@ def test_a_database_attached_under_the_same_name_is_not_adopted(source, target):
 @pytest.mark.parametrize("catalog", ["temp", "system"])
 def test_register_source_refuses_temporary_and_system_catalogs(source, catalog):
     with pytest.raises(Exception, match="temporary or system catalog"):
-        source.execute("SELECT bridge_register_source(?, ?)", [unique_id(), catalog])
+        source.execute("SELECT vcatbridge_register_source(?, ?)", [unique_id(), catalog])

@@ -1,8 +1,8 @@
 # name: test/sql/bridge/set_policy.test
-# description: bridge_set_policy changes one setting per call: scalar settings are assigned, list settings take add/remove/set.
+# description: vcatbridge_set_policy changes one setting per call: scalar settings are assigned, list settings take add/remove/set.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, tenant INTEGER, name VARCHAR);
@@ -23,99 +23,99 @@ statement ok
 CREATE TABLE memory.main.gone(id INTEGER);
 
 statement ok
-SELECT bridge_register_source('sp', 'memory', 'tok_sp');
+SELECT vcatbridge_register_source('sp', 'memory', 'tok_sp');
 
 # --- shapes of the call -----------------------------------------------------
 
 statement error
-SELECT bridge_set_policy('sp', 'main.members', 'foreign_keys', 'main.orgs');
+SELECT vcatbridge_set_policy('sp', 'main.members', 'foreign_keys', 'main.orgs');
 ----
 is a list setting; pass an operation
 
 statement error
-SELECT bridge_set_policy('sp', 'main.users', 'select', 'set', 'true');
+SELECT vcatbridge_set_policy('sp', 'main.users', 'select', 'set', 'true');
 ----
 takes a single value
 
 statement error
-SELECT bridge_set_policy('sp', 'main.users', 'selct', 'true');
+SELECT vcatbridge_set_policy('sp', 'main.users', 'selct', 'true');
 ----
 'main.users' selct: unknown setting
 
 statement error
-SELECT bridge_set_policy('sp', 'users', 'select', 'true');
+SELECT vcatbridge_set_policy('sp', 'users', 'select', 'true');
 ----
 must be 'schema.table'
 
 statement error
-SELECT bridge_set_policy('sp', 'main.users', 'select', 'tenantt = 1');
+SELECT vcatbridge_set_policy('sp', 'main.users', 'select', 'tenantt = 1');
 ----
 'main.users' select:
 
 # --- assigning overwrites ---------------------------------------------------
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.users', 'select', 'tenant = 2');
+SELECT vcatbridge_set_policy('sp', 'main.users', 'select', 'tenant = 2');
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.users', 'select', 'tenant = 1');
+SELECT vcatbridge_set_policy('sp', 'main.users', 'select', 'tenant = 1');
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.users', 'update', {'using': 'tenant = 1', 'check': 'tenant = 1'});
+SELECT vcatbridge_set_policy('sp', 'main.users', 'update', {'using': 'tenant = 1', 'check': 'tenant = 1'});
 
 # insert's value is its check; true and 'true' are the same.
 statement ok
-SELECT bridge_set_policy('sp', 'main.users', 'insert', 'tenant = 1');
+SELECT vcatbridge_set_policy('sp', 'main.users', 'insert', 'tenant = 1');
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.gone', 'select', true);
+SELECT vcatbridge_set_policy('sp', 'main.gone', 'select', true);
 
 # A key may come before the verbs, but a table that ends up with no verb fails ATTACH.
 statement ok
-SELECT bridge_set_policy('sp', 'main.orgs', 'primary_key', ['id']);
+SELECT vcatbridge_set_policy('sp', 'main.orgs', 'primary_key', ['id']);
 
 statement error
-ATTACH '' AS s (TYPE virtual_catalog_bridge, ID 'sp', TOKEN 'tok_sp');
+ATTACH '' AS s (TYPE vcatbridge, ID 'sp', TOKEN 'tok_sp');
 ----
 'main.orgs' in bridge 'sp' sets primary_key or foreign_keys but grants no verb
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.orgs', 'select', true);
+SELECT vcatbridge_set_policy('sp', 'main.orgs', 'select', true);
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.teams', 'select', 'id > 0');
+SELECT vcatbridge_set_policy('sp', 'main.teams', 'select', 'id > 0');
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.members', 'select', true);
+SELECT vcatbridge_set_policy('sp', 'main.members', 'select', true);
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.members', 'insert', true);
+SELECT vcatbridge_set_policy('sp', 'main.members', 'insert', true);
 
 # --- list settings ----------------------------------------------------------
 
 statement error
-SELECT bridge_set_policy('sp', 'main.members', 'foreign_keys', 'add', 'main.users');
+SELECT vcatbridge_set_policy('sp', 'main.members', 'foreign_keys', 'add', 'main.users');
 ----
 has no foreign key to 'main.users'
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.members', 'foreign_keys', 'set', ['main.orgs', 'main.teams']);
+SELECT vcatbridge_set_policy('sp', 'main.members', 'foreign_keys', 'set', ['main.orgs', 'main.teams']);
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.members', 'foreign_keys', 'remove', 'main.orgs');
+SELECT vcatbridge_set_policy('sp', 'main.members', 'foreign_keys', 'remove', 'main.orgs');
 
 # orgs is readable in full, so only teams, whose select hides rows, needs the entry.
 statement ok
-ATTACH '' AS s (TYPE virtual_catalog_bridge, ID 'sp', TOKEN 'tok_sp');
+ATTACH '' AS s (TYPE vcatbridge, ID 'sp', TOKEN 'tok_sp');
 
 # After ATTACH the change must leave a consistent policy.
 statement error
-SELECT bridge_set_policy('sp', 'main.members', 'foreign_keys', 'remove', 'main.teams');
+SELECT vcatbridge_set_policy('sp', 'main.members', 'foreign_keys', 'remove', 'main.teams');
 ----
 add 'main.teams' to the foreign_keys of 'main.members'
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.members', 'foreign_keys', 'add', ['main.teams']);
+SELECT vcatbridge_set_policy('sp', 'main.members', 'foreign_keys', 'add', ['main.teams']);
 
 query IT
 SELECT id, name FROM s.main.users;
@@ -125,19 +125,19 @@ SELECT id, name FROM s.main.users;
 # --- revoking -------------------------------------------------------------
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.users', 'insert', false);
+SELECT vcatbridge_set_policy('sp', 'main.users', 'insert', false);
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.users', 'update', NULL);
+SELECT vcatbridge_set_policy('sp', 'main.users', 'update', NULL);
 
 query T
-SELECT verbs FROM bridge_table_permissions('s') WHERE name = 'users';
+SELECT verbs FROM vcatbridge_table_permissions('s') WHERE name = 'users';
 ----
 [select]
 
 # Revoking a table's last verb removes the table.
 statement ok
-SELECT bridge_set_policy('sp', 'main.gone', 'select', false);
+SELECT vcatbridge_set_policy('sp', 'main.gone', 'select', false);
 
 statement error
 SELECT * FROM s.main.gone;
@@ -147,46 +147,46 @@ does not exist
 # --- keys -----------------------------------------------------------------
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.orgs', 'primary_key', {'columns_from_query': 'SELECT ''id'''});
+SELECT vcatbridge_set_policy('sp', 'main.orgs', 'primary_key', {'columns_from_query': 'SELECT ''id'''});
 
 statement ok
-SELECT bridge_set_policy('sp', 'main.orgs', 'primary_key', NULL);
+SELECT vcatbridge_set_policy('sp', 'main.orgs', 'primary_key', NULL);
 
 query T
-SELECT primary_key FROM bridge_table_permissions('s') WHERE name = 'orgs';
+SELECT primary_key FROM vcatbridge_table_permissions('s') WHERE name = 'orgs';
 ----
 [id]
 
 statement error
-SELECT bridge_set_policy('sp', 'main.gone', 'primary_key', ['id']);
+SELECT vcatbridge_set_policy('sp', 'main.gone', 'primary_key', ['id']);
 ----
 is not granted in bridge 'sp'
 
 # --- schemas and functions --------------------------------------------------
 
 statement ok
-SELECT bridge_set_policy('sp', 'main', 'create', true);
+SELECT vcatbridge_set_policy('sp', 'main', 'create', true);
 
 statement ok
 CREATE TABLE s.main.made(id INTEGER);
 
 statement ok
-SELECT bridge_set_policy('sp', ':functions', 'whitelist', 'add', 'my_udf');
+SELECT vcatbridge_set_policy('sp', ':functions', 'whitelist', 'add', 'my_udf');
 
 statement error
-SELECT bridge_set_policy('sp', ':functions', 'whitelist', 'my_udf');
+SELECT vcatbridge_set_policy('sp', ':functions', 'whitelist', 'my_udf');
 ----
 pass an operation
 
 statement error
-SELECT bridge_set_policy('sp', ':funcs', 'whitelist', 'add', 'my_udf');
+SELECT vcatbridge_set_policy('sp', ':funcs', 'whitelist', 'add', 'my_udf');
 ----
 unknown target
 
 statement ok
-SELECT bridge_finalize_policy('sp');
+SELECT vcatbridge_finalize_policy('sp');
 
 statement error
-SELECT bridge_set_policy('sp', 'main.users', 'select', true);
+SELECT vcatbridge_set_policy('sp', 'main.users', 'select', true);
 ----
 finalized

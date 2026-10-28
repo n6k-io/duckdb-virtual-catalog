@@ -44,15 +44,15 @@ def test_a_stolen_bridge_id_buys_nothing(bridged):
     attacker = new_connection()
     try:
         with pytest.raises(duckdb.Error):
-            attacker.execute(f"ATTACH '' AS stolen (TYPE virtual_catalog_bridge, ID '{stolen_id}', TOKEN 'guess')")
+            attacker.execute(f"ATTACH '' AS stolen (TYPE vcatbridge, ID '{stolen_id}', TOKEN 'guess')")
         with pytest.raises(duckdb.Error):
-            attacker.execute("SELECT bridge_set_context(?, 'tenant', 1)", [stolen_id])
+            attacker.execute("SELECT vcatbridge_set_context(?, 'tenant', 1)", [stolen_id])
         with pytest.raises(duckdb.Error):
-            attacker.execute("SELECT bridge_set_policy(?, 'main.customers', 'select', 'true')", [stolen_id])
+            attacker.execute("SELECT vcatbridge_set_policy(?, 'main.customers', 'select', 'true')", [stolen_id])
         with pytest.raises(duckdb.Error):
-            attacker.execute("SELECT bridge_finalize_context(?)", [stolen_id])
+            attacker.execute("SELECT vcatbridge_finalize_context(?)", [stolen_id])
         with pytest.raises(duckdb.Error):
-            attacker.execute("SELECT bridge_finalize_policy(?)", [stolen_id])
+            attacker.execute("SELECT vcatbridge_finalize_policy(?)", [stolen_id])
     finally:
         attacker.close()
 

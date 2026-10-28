@@ -32,9 +32,9 @@ BRIDGE_LOG=$(CPP_TEST_BUILD_DIR)/vcat_bridge_build.log
 BRIDGE_TEST_ARGS?=test/sql/bridge/*
 bridge:
 	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
-	@echo "building virtual_catalog_bridge..."
+	@echo "building vcatbridge..."
 	@cmake --build "$(CPP_TEST_BUILD_DIR)" -j$(JOBS) --target \
-		virtual_catalog_bridge_loadable_extension unittest \
+		vcatbridge_loadable_extension unittest \
 		> "$(BRIDGE_LOG)" 2>&1 || { cat "$(BRIDGE_LOG)"; exit 1; }
 
 # One path end to end: its sqllogictests, then the python tests marked for it.
@@ -47,9 +47,9 @@ PROVIDER_LOG=$(CPP_TEST_BUILD_DIR)/vcat_provider_build.log
 PROVIDER_TEST_ARGS?=test/sql/provider/*
 provider:
 	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
-	@echo "building virtual_catalog_provider..."
+	@echo "building vcatprovider..."
 	@cmake --build "$(CPP_TEST_BUILD_DIR)" -j$(JOBS) --target \
-		virtual_catalog_provider_loadable_extension vcat_provider_unittest unittest \
+		vcatprovider_loadable_extension vcat_provider_unittest unittest \
 		> "$(PROVIDER_LOG)" 2>&1 || { cat "$(PROVIDER_LOG)"; exit 1; }
 
 test-provider: provider

@@ -1,0 +1,32 @@
+# name: test/sql/bridge/vcatbridge_api.test
+# description: pins the registered vcatbridge_% surface; docs/sql-api.md documents it
+# group: [bridge]
+
+require vcatbridge
+
+query II
+SELECT DISTINCT function_name, len(parameter_types)
+FROM duckdb_functions()
+WHERE function_name LIKE 'vcatbridge!_%' ESCAPE '!'
+ORDER BY 1, 2;
+----
+vcatbridge_configure_policy	2
+vcatbridge_finalize_context	1
+vcatbridge_finalize_policy	1
+vcatbridge_init	2
+vcatbridge_lockdown	2
+vcatbridge_lockdown	3
+vcatbridge_register_source	2
+vcatbridge_register_source	3
+vcatbridge_set_context	3
+vcatbridge_set_policy	4
+vcatbridge_set_policy	5
+vcatbridge_table_describe	3
+vcatbridge_table_permissions	3
+vcatbridge_validate_policy_config	2
+
+# Nothing provider-shaped comes with the bridge: the two extensions share no SQL.
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name LIKE 'vcatprovider!_%' ESCAPE '!';
+----
+0

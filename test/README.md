@@ -49,5 +49,5 @@ pushed into an Arrow scan, so a provider that ignores them silently returns wron
 - Register `open` and `next` with `null_handling="special"`. `open` is always called with a NULL
   fourth argument, and `next` returns NULL to signal exhaustion; under DuckDB's default NULL
   handling neither works.
-- Fetch the result of the setup calls. `con.execute("SELECT provider_create_stream_function(...)")`
+- Fetch the result of the setup calls. `con.execute("SELECT vcatprovider_create_stream_function(...)")`
   without a `.fetchall()` never runs the function, so the registration silently does not happen.

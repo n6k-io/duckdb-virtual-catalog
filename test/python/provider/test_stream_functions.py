@@ -1,6 +1,6 @@
 """Stream functions actually executed -- open/next/close driven to completion, and to failure.
 
-sqllogictest can only see that a registration appears in provider_stream_functions(); the generator
+sqllogictest can only see that a registration appears in vcatprovider_stream_functions(); the generator
 protocol itself needs a host.
 """
 
@@ -80,13 +80,13 @@ def batches(count, rows_each=3):
 
 @pytest.fixture
 def gen(con):
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     g = Generator(con, batches(3), SCHEMA)
     g.register()
     # .fetchall() is load-bearing: an unfetched SELECT never runs the scalar function, so the
     # catalog entry is never created and the failure only shows up at the call site.
     con.execute(
-        "SELECT provider_create_stream_function('app', 'main', 'gen', 'g_open', 'g_next', 'g_close')"
+        "SELECT vcatprovider_create_stream_function('app', 'main', 'gen', 'g_open', 'g_next', 'g_close')"
     ).fetchall()
     return g
 
@@ -108,12 +108,14 @@ def test_next_is_called_once_past_the_last_batch(con, gen):
 
 
 def test_empty_stream(con):
-    con.execute("ATTACH ':memory:' AS e (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS e (TYPE vcatprovider)")
     g = Generator(con, [], SCHEMA)
     g.register(prefix="e")
     # .fetchall() is load-bearing: an unfetched SELECT never runs the scalar function, so the
     # catalog entry is never created and the failure only shows up at the call site.
-    con.execute("SELECT provider_create_stream_function('e', 'main', 'gen', 'e_open', 'e_next', 'e_close')").fetchall()
+    con.execute(
+        "SELECT vcatprovider_create_stream_function('e', 'main', 'gen', 'e_open', 'e_next', 'e_close')"
+    ).fetchall()
     assert con.execute("SELECT * FROM e.main.gen()").fetchall() == []
     assert g.closed
 
@@ -150,7 +152,7 @@ def test_a_prepared_stream_function_runs_twice(con, gen):
 
 
 def test_dropping_the_stream_function_removes_it(con, gen):
-    con.execute("SELECT provider_drop_stream_function('app', 'main', 'gen')").fetchall()
-    assert con.execute("SELECT count(*) FROM provider_stream_functions() WHERE catalog = 'app'").fetchone() == (0,)
+    con.execute("SELECT vcatprovider_drop_stream_function('app', 'main', 'gen')").fetchall()
+    assert con.execute("SELECT count(*) FROM vcatprovider_stream_functions() WHERE catalog = 'app'").fetchone() == (0,)
     with pytest.raises(Exception):
         con.execute("SELECT * FROM app.main.gen()").fetchall()

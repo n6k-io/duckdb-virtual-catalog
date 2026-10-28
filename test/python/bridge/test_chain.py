@@ -27,12 +27,12 @@ def chain(a, b, c, inner, outer, pk_overrides=None):
 def handshake(source, target, source_catalog, context, grants):
     """`grants` is a list of (table, verb, using); an `insert` grant's value is its check."""
     bridge_id = unique_id()
-    token = source.execute("SELECT bridge_register_source(?, ?)", [bridge_id, source_catalog]).fetchone()[0]
+    token = source.execute("SELECT vcatbridge_register_source(?, ?)", [bridge_id, source_catalog]).fetchone()[0]
     for name, value in context.items():
-        source.execute("SELECT bridge_set_context(?, ?, ?)", [bridge_id, name, value])
+        source.execute("SELECT vcatbridge_set_context(?, ?, ?)", [bridge_id, name, value])
     for table, verb, using in grants:
-        source.execute("SELECT bridge_set_policy(?, ?, ?, ?)", [bridge_id, table, verb, using])
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+        source.execute("SELECT vcatbridge_set_policy(?, ?, ?, ?)", [bridge_id, table, verb, using])
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id
 
 

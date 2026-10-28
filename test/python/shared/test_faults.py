@@ -90,10 +90,10 @@ def test_bridge_swap_under_concurrent_binds_does_not_free_live_entries():
                 # Detach first: the catalog name is what a second bridge would collide on.
                 t.execute("DETACH app")
                 b = unique_id()
-                tok = s.execute("SELECT bridge_register_source(?, 'memory')", [b]).fetchone()[0]
-                s.execute("SELECT bridge_set_policy(?, 'main.big', 'select', 'true')", [b])
+                tok = s.execute("SELECT vcatbridge_register_source(?, 'memory')", [b]).fetchone()[0]
+                s.execute("SELECT vcatbridge_set_policy(?, 'main.big', 'select', 'true')", [b])
                 t.execute(
-                    "ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (b, tok)
+                    "ATTACH '' AS app (TYPE vcatbridge, ID '%s', TOKEN '%s')" % (b, tok)
                 )
         finally:
             # Without this the readers spin forever and the probe hangs rather than reporting.
@@ -125,11 +125,11 @@ def test_a_bridge_attached_over_its_own_source_name_does_not_recurse():
         con.execute("ATTACH ':memory:' AS app")
         con.execute("CREATE TABLE app.main.t(id INTEGER PRIMARY KEY)")
         loop = unique_id()
-        token = con.execute("SELECT bridge_register_source(?, 'app')", [loop]).fetchone()[0]
-        con.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [loop])
+        token = con.execute("SELECT vcatbridge_register_source(?, 'app')", [loop]).fetchone()[0]
+        con.execute("SELECT vcatbridge_set_policy(?, 'main.t', 'select', 'true')", [loop])
         con.execute("DETACH app")
         try:
-            con.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{loop}', TOKEN '{token}')")
+            con.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{loop}', TOKEN '{token}')")
             con.execute("SELECT * FROM app.main.t").fetchall()
         except Exception as e:
             assert "was detached" in str(e), e
@@ -145,17 +145,17 @@ def test_policy_refuses_a_source_catalog_detached_after_registration():
     bridge_id = unique_id()
     con.execute("ATTACH ':memory:' AS app")
     con.execute("CREATE TABLE app.main.t(id INTEGER PRIMARY KEY, v VARCHAR)")
-    con.execute("SELECT bridge_register_source(?, 'app')", [bridge_id])
+    con.execute("SELECT vcatbridge_register_source(?, 'app')", [bridge_id])
     con.execute("DETACH app")
 
     con.execute("CREATE TABLE t(id INTEGER PRIMARY KEY)")
     host = unique_id()
-    token = con.execute("SELECT bridge_register_source(?, 'memory')", [host]).fetchone()[0]
-    con.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [host])
-    con.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{host}', TOKEN '{token}')")
+    token = con.execute("SELECT vcatbridge_register_source(?, 'memory')", [host]).fetchone()[0]
+    con.execute("SELECT vcatbridge_set_policy(?, 'main.t', 'select', 'true')", [host])
+    con.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{host}', TOKEN '{token}')")
 
     with pytest.raises(Exception, match="was detached"):
-        con.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [bridge_id])
+        con.execute("SELECT vcatbridge_set_policy(?, 'main.t', 'select', 'true')", [bridge_id])
     con.close()
 
 
@@ -171,21 +171,21 @@ def test_cyclic_bridge_reads_fail_instead_of_recursing():
         a.execute("CREATE TABLE t1(id INTEGER PRIMARY KEY, v VARCHAR); INSERT INTO t1 VALUES (1,'x')")
 
         i1 = unique_id()
-        tk = a.execute("SELECT bridge_register_source(?, 'memory')", [i1]).fetchone()[0]
-        a.execute("SELECT bridge_set_policy(?, 'main.t1', 'select', 'true')", [i1])
-        b.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (i1, tk))
+        tk = a.execute("SELECT vcatbridge_register_source(?, 'memory')", [i1]).fetchone()[0]
+        a.execute("SELECT vcatbridge_set_policy(?, 'main.t1', 'select', 'true')", [i1])
+        b.execute("ATTACH '' AS app (TYPE vcatbridge, ID '%s', TOKEN '%s')" % (i1, tk))
         assert b.execute("SELECT * FROM app.main.t1").fetchall() == [(1, 'x')]
 
         i2 = unique_id()
-        tk2 = b.execute("SELECT bridge_register_source(?, 'app')", [i2]).fetchone()[0]
-        b.execute("SELECT bridge_set_policy(?, 'main.t1', 'select', 'true')", [i2])
-        b.execute("ATTACH '' AS app2 (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (i2, tk2))
+        tk2 = b.execute("SELECT vcatbridge_register_source(?, 'app')", [i2]).fetchone()[0]
+        b.execute("SELECT vcatbridge_set_policy(?, 'main.t1', 'select', 'true')", [i2])
+        b.execute("ATTACH '' AS app2 (TYPE vcatbridge, ID '%s', TOKEN '%s')" % (i2, tk2))
 
         i3 = unique_id()
-        tk3 = b.execute("SELECT bridge_register_source(?, 'app2')", [i3]).fetchone()[0]
-        b.execute("SELECT bridge_set_policy(?, 'main.t1', 'select', 'true')", [i3])
+        tk3 = b.execute("SELECT vcatbridge_register_source(?, 'app2')", [i3]).fetchone()[0]
+        b.execute("SELECT vcatbridge_set_policy(?, 'main.t1', 'select', 'true')", [i3])
         b.execute("DETACH app")
-        b.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (i3, tk3))
+        b.execute("ATTACH '' AS app (TYPE vcatbridge, ID '%s', TOKEN '%s')" % (i3, tk3))
         for catalog in ("app", "app2"):
             try:
                 b.execute("SELECT * FROM %s.main.t1" % catalog).fetchall()
@@ -214,9 +214,9 @@ def test_detaching_a_bridge_source_while_it_is_granted_does_not_deadlock():
 
         def attach_inner(con):
             inner = unique_id()
-            tk = a.execute("SELECT bridge_register_source(?, 'memory')", [inner]).fetchone()[0]
-            a.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [inner])
-            con.execute("ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')" % (inner, tk))
+            tk = a.execute("SELECT vcatbridge_register_source(?, 'memory')", [inner]).fetchone()[0]
+            a.execute("SELECT vcatbridge_set_policy(?, 'main.t', 'select', 'true')", [inner])
+            con.execute("ATTACH '' AS app (TYPE vcatbridge, ID '%s', TOKEN '%s')" % (inner, tk))
 
         attach_inner(b)
         stop = threading.Event()
@@ -232,8 +232,8 @@ def test_detaching_a_bridge_source_while_it_is_granted_does_not_deadlock():
             for _ in range(300):
                 try:
                     outer = unique_id()
-                    con.execute("SELECT bridge_register_source(?, 'app')", [outer])
-                    con.execute("SELECT bridge_set_policy(?, 'main.t', 'select', 'true')", [outer])
+                    con.execute("SELECT vcatbridge_register_source(?, 'app')", [outer])
+                    con.execute("SELECT vcatbridge_set_policy(?, 'main.t', 'select', 'true')", [outer])
                 except Exception as e:
                     message = str(e)
                     assert "was detached" in message or "does not exist" in message, message
@@ -264,10 +264,10 @@ def register_drifting_provider(con, scan):
     con.create_function(f"{tag}_schema", lambda n: schema_message(DECLARED), [VARCHAR], BLOB)
     con.create_function(f"{tag}_scan", scan, [VARCHAR, VARCHAR_LIST, VARCHAR], BLOB)
     con.execute(
-        "SELECT provider_register('app',?,?,?,'','','','')",
+        "SELECT vcatprovider_register('app',?,?,?,'','','','')",
         [f"{tag}_list", f"{tag}_schema", f"{tag}_scan"],
     )
-    con.execute("SELECT provider_invalidate_tables('app')")
+    con.execute("SELECT vcatprovider_invalidate_tables('app')")
 
 
 def test_provider_returning_fewer_columns_than_projected_is_refused():
@@ -278,7 +278,7 @@ def test_provider_returning_fewer_columns_than_projected_is_refused():
         from conftest import new_connection, VARCHAR, BLOB, VARCHAR_LIST, schema_message, stream_bytes
 
         con = new_connection(bridge=False, provider=True)
-        con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+        con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
         declared = pa.schema([("id", pa.int32()), ("name", pa.utf8())])
         con.create_function("q_list", lambda: "main.users", [], VARCHAR)
         con.create_function("q_schema", lambda n: schema_message(declared), [VARCHAR], BLOB)
@@ -288,7 +288,7 @@ def test_provider_returning_fewer_columns_than_projected_is_refused():
             [VARCHAR, VARCHAR_LIST, VARCHAR],
             BLOB,
         )
-        con.execute("SELECT provider_register('app','q_list','q_schema','q_scan','','','','')")
+        con.execute("SELECT vcatprovider_register('app','q_list','q_schema','q_scan','','','','')")
         try:
             rows = con.execute("SELECT id, name FROM app.main.users").fetchall()
         except Exception as e:
@@ -310,7 +310,7 @@ def test_provider_returning_a_short_primary_key_block_is_refused():
         from conftest import new_connection, VARCHAR, BLOB, VARCHAR_LIST, BIGINT, schema_message, stream_bytes
 
         con = new_connection(bridge=False, provider=True)
-        con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+        con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
         declared = pa.schema([("id", pa.int32()), ("name", pa.utf8())]).with_metadata(
             {b"vcat.primary_keys": b"id"}
         )
@@ -325,7 +325,7 @@ def test_provider_returning_a_short_primary_key_block_is_refused():
         )
         con.create_function("q_delete", lambda n, payload: 0, [VARCHAR, BLOB], BIGINT)
         con.execute(
-            "SELECT provider_register('app','q_list','q_schema','q_scan','','','q_delete','')"
+            "SELECT vcatprovider_register('app','q_list','q_schema','q_scan','','','q_delete','')"
         )
         try:
             con.execute("DELETE FROM app.main.users WHERE name = 'ana'")
@@ -343,7 +343,7 @@ def test_provider_returning_the_wrong_column_type_is_refused():
     """Declared INTEGER, returned utf8: no crash, but the integer column comes back as the utf8
     offsets buffer reinterpreted. The bridge path already rejects this (bridge_scan.hpp)."""
     con = new_connection(bridge=False, provider=True)
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     register_drifting_provider(
         con,
         lambda n, c, f: stream_bytes(pa.table({"c0": pa.array(["A" * 20, "B" * 20]), "c1": pa.array(["ana", "bo"])})),
@@ -378,7 +378,7 @@ def test_stream_function_batch_narrower_than_the_declared_schema_is_refused():
         con.create_function("s_open", _open, [VARCHAR, VARCHAR, VARCHAR, BLOB], BLOB, null_handling="special")
         con.create_function("s_next", _next, [VARCHAR], BLOB, null_handling="special")
         con.create_function("s_close", lambda h: "ok", [VARCHAR], VARCHAR)
-        con.execute("SELECT provider_create_stream_function('memory','main','gen','s_open','s_next','s_close')")
+        con.execute("SELECT vcatprovider_create_stream_function('memory','main','gen','s_open','s_next','s_close')")
         try:
             rows = con.execute("SELECT * FROM gen()").fetchall()
         except Exception as e:
@@ -410,7 +410,7 @@ def test_truncated_arrow_body_is_refused_not_read_past_the_end(cut):
     raise at all, it returns 800 rows of out-of-bounds memory, and a truncation that trips DuckDB's
     unicode validation instead of the length check would pass an exception-only test."""
     con = new_connection(bridge=False, provider=True)
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     full = stream_bytes(FULL_DATA)
     register_drifting_provider(con, lambda n, c, f: full[: len(full) - cut])
     try:

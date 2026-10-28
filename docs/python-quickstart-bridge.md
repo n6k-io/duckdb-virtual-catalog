@@ -13,8 +13,8 @@ REPO = "https://storage.googleapis.com/n6k-duckdb-release"
 
 def connect():
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
-    con.execute(f"INSTALL virtual_catalog_bridge FROM '{REPO}'")
-    con.execute("LOAD virtual_catalog_bridge")
+    con.execute(f"INSTALL vcatbridge FROM '{REPO}'")
+    con.execute("LOAD vcatbridge")
     return con
 ```
 
@@ -28,17 +28,17 @@ source.execute("""
     CREATE TABLE secrets (k VARCHAR, v VARCHAR);
 """)
 
-token = source.execute("SELECT bridge_register_source('b1', 'memory')").fetchone()[0]
-source.execute("SELECT bridge_set_context('b1', 'tenant', 42)")
-source.execute("SELECT bridge_set_policy('b1', 'main.users', 'select', 'tenant_id = $tenant')")
-source.execute("SELECT bridge_set_policy('b1', 'main.users', 'update', 'tenant_id = $tenant')")
+token = source.execute("SELECT vcatbridge_register_source('b1', 'memory')").fetchone()[0]
+source.execute("SELECT vcatbridge_set_context('b1', 'tenant', 42)")
+source.execute("SELECT vcatbridge_set_policy('b1', 'main.users', 'select', 'tenant_id = $tenant')")
+source.execute("SELECT vcatbridge_set_policy('b1', 'main.users', 'update', 'tenant_id = $tenant')")
 ```
 
 ## 3. Target: attach
 
 ```python
 target = connect()
-target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'b1', TOKEN '{token}')")
+target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID 'b1', TOKEN '{token}')")
 ```
 
 The token expires after 30 seconds if no `ATTACH` redeems it.
@@ -48,7 +48,7 @@ The token expires after 30 seconds if no `ATTACH` redeems it.
 Cap memory and threads, turn off file and network access, and lock the configuration.
 
 ```python
-target.execute("SELECT virtual_catalog_lockdown('1GB', 2)")
+target.execute("SELECT vcatbridge_lockdown('1GB', 2)")
 ```
 
 ## 5. Run user SQL on the target
@@ -77,10 +77,10 @@ target.execute("SET threads = 8")
 ## 6. Switch tenant
 
 ```python
-source.execute("SELECT bridge_set_context('b1', 'tenant', 7)")
+source.execute("SELECT vcatbridge_set_context('b1', 'tenant', 7)")
 
 target.execute("SELECT * FROM app.main.users").fetchall()
 # [(3, 7, 'linus')]
 ```
 
-Next: [virtual-catalog-bridge.md](virtual-catalog-bridge.md), [sql-api.md](sql-api.md).
+Next: [vcatbridge.md](vcatbridge.md), [sql-api.md](sql-api.md).

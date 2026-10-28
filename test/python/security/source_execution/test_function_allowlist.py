@@ -48,7 +48,7 @@ def test_default_builtin_is_pushed(world):
 
 def test_disallow_keeps_builtin_on_target(world):
     source, target, bridge_id, _ = world
-    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'remove', 'abs')", [bridge_id])
+    source.execute("SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', 'remove', 'abs')", [bridge_id])
 
     assert runs_on_target(target, "SELECT id FROM app.main.users WHERE abs(tenant) = 1", "abs")
     assert target.execute("SELECT id FROM app.main.users WHERE abs(tenant) = 1 ORDER BY id").fetchall() == [
@@ -59,7 +59,7 @@ def test_disallow_keeps_builtin_on_target(world):
 
 def test_exact_whitelist_drops_the_builtins(world):
     source, target, bridge_id, _ = world
-    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'set', ['abs'])", [bridge_id])
+    source.execute("SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', 'set', ['abs'])", [bridge_id])
 
     assert not runs_on_target(target, "SELECT id FROM app.main.users WHERE abs(tenant) = 1", "abs")
     assert runs_on_target(target, "SELECT id FROM app.main.users WHERE sign(tenant) = 1", "sign")
@@ -70,15 +70,15 @@ def test_source_function_needs_allow(world):
     assert tag_query(target) == [(1,), (2,)]
     assert calls == []
 
-    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, FUNCTION])
+    source.execute("SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, FUNCTION])
     assert tag_query(target) == [(1,), (2,)]
     assert calls
 
 
 def test_disallow_overrides_allow(world):
     source, target, bridge_id, calls = world
-    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, FUNCTION])
-    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'remove', ?)", [bridge_id, FUNCTION])
+    source.execute("SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, FUNCTION])
+    source.execute("SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', 'remove', ?)", [bridge_id, FUNCTION])
 
     assert tag_query(target) == [(1,), (2,)]
     assert calls == []
@@ -89,23 +89,23 @@ def test_target_cannot_change_functions(world, op):
     _, target, bridge_id, _ = world
     with pytest.raises(duckdb.PermissionException):
         target.execute(
-            "SELECT bridge_set_policy(?, ':functions', 'whitelist', ?, ['current_setting'])", [bridge_id, op]
+            "SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', ?, ['current_setting'])", [bridge_id, op]
         )
 
 
 @pytest.mark.parametrize("op", ["add", "remove", "set"])
 def test_refused_after_finalize(world, op):
     source, _, bridge_id, _ = world
-    source.execute("SELECT bridge_finalize_policy(?)", [bridge_id])
+    source.execute("SELECT vcatbridge_finalize_policy(?)", [bridge_id])
     with pytest.raises(duckdb.PermissionException, match="finalized"):
-        source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', ?, ['abs'])", [bridge_id, op])
+        source.execute("SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', ?, ['abs'])", [bridge_id, op])
 
 
 @pytest.mark.parametrize("name", [None, ""])
 def test_function_name_is_required(world, name):
     source, _, bridge_id, _ = world
     with pytest.raises(duckdb.IOException):
-        source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, name])
+        source.execute("SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', 'add', ?)", [bridge_id, name])
 
 
 WINDOW_SQL = "SELECT id, sum(tenant) OVER () FROM app.main.users"
@@ -113,13 +113,13 @@ WINDOW_SQL = "SELECT id, sum(tenant) OVER () FROM app.main.users"
 
 def test_disallow_keeps_window_aggregate_on_target(world):
     source, target, bridge_id, _ = world
-    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'remove', 'sum')", [bridge_id])
+    source.execute("SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', 'remove', 'sum')", [bridge_id])
 
     assert runs_on_target(target, WINDOW_SQL, "sum")
 
 
 def test_exact_whitelist_keeps_window_aggregate_on_target(world):
     source, target, bridge_id, _ = world
-    source.execute("SELECT bridge_set_policy(?, ':functions', 'whitelist', 'set', ['abs'])", [bridge_id])
+    source.execute("SELECT vcatbridge_set_policy(?, ':functions', 'whitelist', 'set', ['abs'])", [bridge_id])
 
     assert runs_on_target(target, WINDOW_SQL, "sum")

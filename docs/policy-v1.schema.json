@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/n6k-io/duckdb-virtual-catalog/docs/policy-v1.schema.json",
-  "title": "virtual_catalog_bridge policy, version 1",
-  "description": "The document bridge_configure_policy installs. It replaces the bridge's whole policy.",
+  "title": "vcatbridge policy, version 1",
+  "description": "The document vcatbridge_configure_policy installs. It replaces the bridge's whole policy.",
   "type": "object",
   "required": [
     "policy_version"

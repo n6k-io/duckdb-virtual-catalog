@@ -2,7 +2,7 @@
 # description: write policies and the WITH CHECK half.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, tenant_id INTEGER, amt INTEGER);
@@ -11,19 +11,19 @@ statement ok
 INSERT INTO memory.main.orders VALUES (1, 1, 50), (2, 1, 250), (3, 2, 50), (4, 2, 250);
 
 statement ok
-SELECT bridge_register_source('v2_pol_rw', 'memory', 'tok_rw');
+SELECT vcatbridge_register_source('v2_pol_rw', 'memory', 'tok_rw');
 
 statement ok
-SELECT bridge_set_policy('v2_pol_rw', 'main.orders', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_pol_rw', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_pol_rw', 'main.orders', 'update', 'tenant_id = 1');
+SELECT vcatbridge_set_policy('v2_pol_rw', 'main.orders', 'update', 'tenant_id = 1');
 
 statement ok
-SELECT bridge_set_policy('v2_pol_rw', 'main.orders', 'delete', 'amt = 50');
+SELECT vcatbridge_set_policy('v2_pol_rw', 'main.orders', 'delete', 'amt = 50');
 
 statement ok
-ATTACH '' AS rw (TYPE virtual_catalog_bridge, ID 'v2_pol_rw', TOKEN 'tok_rw');
+ATTACH '' AS rw (TYPE vcatbridge, ID 'v2_pol_rw', TOKEN 'tok_rw');
 
 # The statement selects every row; the policy decides which are written, and the count reported is
 # the number the source actually changed.
@@ -77,16 +77,16 @@ DETACH rw;
 
 # An explicit WITH CHECK on an insert guards what may be written.
 statement ok
-SELECT bridge_register_source('v2_pol_wc', 'memory', 'tok_wc');
+SELECT vcatbridge_register_source('v2_pol_wc', 'memory', 'tok_wc');
 
 statement ok
-SELECT bridge_set_policy('v2_pol_wc', 'main.orders', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_pol_wc', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_pol_wc', 'main.orders', 'insert', 'amt >= 0');
+SELECT vcatbridge_set_policy('v2_pol_wc', 'main.orders', 'insert', 'amt >= 0');
 
 statement ok
-ATTACH '' AS wc (TYPE virtual_catalog_bridge, ID 'v2_pol_wc', TOKEN 'tok_wc');
+ATTACH '' AS wc (TYPE vcatbridge, ID 'v2_pol_wc', TOKEN 'tok_wc');
 
 statement ok
 INSERT INTO wc.main.orders VALUES (10, 1, 5);

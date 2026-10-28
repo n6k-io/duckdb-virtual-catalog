@@ -2,7 +2,7 @@
 # description: S4 -- the USING half sits under every read, and nothing the target does can lift it.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
@@ -11,13 +11,13 @@ statement ok
 INSERT INTO memory.main.orders VALUES (1,'ada',50,7),(2,'grace',150,7),(3,'alan',250,9),(4,'edsger',350,7);
 
 statement ok
-SELECT bridge_register_source('v2_policy', 'memory', 'tok_policy');
+SELECT vcatbridge_register_source('v2_policy', 'memory', 'tok_policy');
 
 statement ok
-SELECT bridge_set_policy('v2_policy', 'main.orders', 'select', 'tenant = 7');
+SELECT vcatbridge_set_policy('v2_policy', 'main.orders', 'select', 'tenant = 7');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_policy', TOKEN 'tok_policy');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_policy', TOKEN 'tok_policy');
 
 # Tenant 9 is not reachable at all.
 query II
@@ -59,6 +59,6 @@ SELECT count(*) FROM memory.main.orders;
 
 # The key came off the source's PRIMARY KEY, not from an assertion.
 query II
-SELECT name, primary_key FROM bridge_table_permissions('b') ORDER BY name;
+SELECT name, primary_key FROM vcatbridge_table_permissions('b') ORDER BY name;
 ----
 orders	[id]

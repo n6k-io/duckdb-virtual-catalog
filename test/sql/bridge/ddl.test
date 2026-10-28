@@ -2,7 +2,7 @@
 # description: create/alter/drop policies send DDL to the source; a created table is granted every verb, undone on rollback.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER);
@@ -14,50 +14,50 @@ statement ok
 CREATE TABLE memory.main.locked(id INTEGER PRIMARY KEY);
 
 statement ok
-SELECT bridge_register_source('ddl', 'memory', 'tok_ddl');
+SELECT vcatbridge_register_source('ddl', 'memory', 'tok_ddl');
 
 # A create policy names a schema, not a table.
 statement error
-SELECT bridge_set_policy('ddl', 'main.orders', 'create', 'true');
+SELECT vcatbridge_set_policy('ddl', 'main.orders', 'create', 'true');
 ----
 'create' takes a schema name
 
 statement error
-SELECT bridge_set_policy('ddl', 'nope', 'create', 'true');
+SELECT vcatbridge_set_policy('ddl', 'nope', 'create', 'true');
 ----
 schema 'nope' not found
 
 # DDL verbs take no row predicate and no WITH CHECK.
 statement error
-SELECT bridge_set_policy('ddl', 'main', 'create', 'id > 1');
+SELECT vcatbridge_set_policy('ddl', 'main', 'create', 'id > 1');
 ----
 'create' takes only true
 
 statement error
-SELECT bridge_set_policy('ddl', 'main.orders', 'drop', 'id > 1');
+SELECT vcatbridge_set_policy('ddl', 'main.orders', 'drop', 'id > 1');
 ----
 'drop' takes only true
 
 statement error
-SELECT bridge_set_policy('ddl', 'main.orders', 'alter', {'using': 'true', 'check': 'true'});
+SELECT vcatbridge_set_policy('ddl', 'main.orders', 'alter', {'using': 'true', 'check': 'true'});
 ----
 'alter' takes true or a predicate string
 
 statement ok
-SELECT bridge_set_policy('ddl', 'main', 'create', 'true');
+SELECT vcatbridge_set_policy('ddl', 'main', 'create', 'true');
 
 # Setting it again overwrites it.
 statement ok
-SELECT bridge_set_policy('ddl', 'main', 'create', 'true');
+SELECT vcatbridge_set_policy('ddl', 'main', 'create', 'true');
 
 statement ok
-SELECT bridge_set_policy('ddl', 'main.orders', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
+SELECT vcatbridge_set_policy('ddl', 'main.orders', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
 
 statement ok
-SELECT bridge_set_policy('ddl', 'main.locked', 'select', 'true');
+SELECT vcatbridge_set_policy('ddl', 'main.locked', 'select', 'true');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ddl', TOKEN 'tok_ddl');
+ATTACH '' AS b (TYPE vcatbridge, ID 'ddl', TOKEN 'tok_ddl');
 
 # ---------------------------------------------------------------------------
 # CREATE
@@ -72,7 +72,7 @@ SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_na
 1
 
 query II
-SELECT kind, verbs FROM bridge_table_permissions('b') WHERE name = 't';
+SELECT kind, verbs FROM vcatbridge_table_permissions('b') WHERE name = 't';
 ----
 crossing	[select, insert, update, delete, create, alter, drop]
 
@@ -219,7 +219,7 @@ SELECT count(*) FROM duckdb_tables() WHERE database_name = 'memory' AND table_na
 0
 
 query I
-SELECT count(*) FROM bridge_table_permissions('b') WHERE name = 'gone';
+SELECT count(*) FROM vcatbridge_table_permissions('b') WHERE name = 'gone';
 ----
 0
 

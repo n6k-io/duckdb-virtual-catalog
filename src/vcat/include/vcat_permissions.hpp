@@ -38,8 +38,7 @@ PermissionsArgs ParsePermissionsArgs(TableFunctionBindInput &input);
 void CollectCatalogPermissions(ClientContext &context, Catalog &catalog, optional_ptr<const string> schema_filter,
                                optional_ptr<const string> table_filter, vector<TablePermissionRow> &out);
 
-//! `function_name` is bridge_table_permissions or provider_table_permissions -- each extension owns
-//! its own name, so both can be loaded into one process.
+//! Each extension passes its own `function_name`, so both can be loaded into one process.
 void RegisterTablePermissionsFunction(ExtensionLoader &loader, const string &function_name);
 
 } // namespace duckdb

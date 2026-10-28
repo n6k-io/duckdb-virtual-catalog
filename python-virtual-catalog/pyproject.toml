@@ -1,7 +1,7 @@
 [project]
 name = "duckdb-virtual-catalog"
 version = "0.1.0"
-description = "Python helpers for the virtual_catalog_bridge and virtual_catalog_provider DuckDB extensions"
+description = "Python helpers for the vcatbridge and vcatprovider DuckDB extensions"
 readme = "README.md"
 authors = [
     { email = "srossross@gmail.com" }

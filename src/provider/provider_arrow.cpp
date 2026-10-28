@@ -247,10 +247,10 @@ void RowChunkBuilder::BeginRow() {
 
 void RowChunkBuilder::Append(const Value &value) {
 	if (!current_) {
-		throw InternalException("virtual_catalog_provider: RowChunkBuilder::Append before BeginRow");
+		throw InternalException("vcatprovider: RowChunkBuilder::Append before BeginRow");
 	}
 	if (column_ >= types_.size()) {
-		throw InternalException("virtual_catalog_provider: more values appended than the row has columns");
+		throw InternalException("vcatprovider: more values appended than the row has columns");
 	}
 	// Cast rather than trust: a key value read out of an Arrow buffer carries that buffer's type,
 	// which need not be the column's own.

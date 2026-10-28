@@ -2,7 +2,7 @@
 # description: S1 -- a real source's granted tables become catalog entries on the target.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
@@ -23,59 +23,59 @@ SELECT * FROM b.main.orders;
 does not exist
 
 statement ok
-SELECT bridge_register_source('v2_attach_describe', 'memory', 'tok_attach_describe');
+SELECT vcatbridge_register_source('v2_attach_describe', 'memory', 'tok_attach_describe');
 
 statement error
-SELECT bridge_register_source('v2_attach_describe', 'memory');
+SELECT vcatbridge_register_source('v2_attach_describe', 'memory');
 ----
 a source is already registered for bridge
 
 statement error
-SELECT bridge_set_policy('v2_attach_describe', 'orders', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_attach_describe', 'orders', 'select', 'true');
 ----
 must be 'schema.table'
 
 statement error
-SELECT bridge_set_policy('v2_attach_describe', 'main.nosuch', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_attach_describe', 'main.nosuch', 'select', 'true');
 ----
 not found in catalog
 
 statement error
-SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'levitate', 'true');
+SELECT vcatbridge_set_policy('v2_attach_describe', 'main.orders', 'levitate', 'true');
 ----
 unknown setting
 
 statement error
-SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'select', 'nosuchcolumn = 1');
+SELECT vcatbridge_set_policy('v2_attach_describe', 'main.orders', 'select', 'nosuchcolumn = 1');
 ----
 is not a valid WHERE clause on the source
 
 statement error
-SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'select', 'amt');
+SELECT vcatbridge_set_policy('v2_attach_describe', 'main.orders', 'select', 'amt');
 ----
 must be BOOLEAN
 
 statement ok
-SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_attach_describe', 'main.orders', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_attach_describe', 'main.orders', 'update', 'true');
+SELECT vcatbridge_set_policy('v2_attach_describe', 'main.orders', 'update', 'true');
 
 statement ok
-SELECT bridge_set_policy('v2_attach_describe', 'main.customers', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_attach_describe', 'main.customers', 'select', 'true');
 
 statement error
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_attach_describe', TOKEN 'not-the-token');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_attach_describe', TOKEN 'not-the-token');
 ----
 invalid setup token
 
 statement error
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_attach_describe');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_attach_describe');
 ----
 requires a 'token' option
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_attach_describe', TOKEN 'tok_attach_describe');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_attach_describe', TOKEN 'tok_attach_describe');
 
 # Only what was granted is a table. `secrets` was never named.
 query I
@@ -95,7 +95,7 @@ amt	INTEGER
 tenant	INTEGER
 
 query III
-SELECT name, kind, verbs FROM bridge_table_permissions('b') ORDER BY name;
+SELECT name, kind, verbs FROM vcatbridge_table_permissions('b') ORDER BY name;
 ----
 customers	crossing	[select]
 orders	crossing	[select, update]

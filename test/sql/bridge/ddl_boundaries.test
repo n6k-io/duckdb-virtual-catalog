@@ -2,7 +2,7 @@
 # description: DDL never reaches a source object the caller cannot see or was not granted.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.served(id INTEGER PRIMARY KEY, tenant INTEGER);
@@ -23,25 +23,25 @@ statement ok
 INSERT INTO memory.aux.shadowed VALUES (1);
 
 statement ok
-SELECT bridge_register_source('bnd', 'memory', 'tok_bnd');
+SELECT vcatbridge_register_source('bnd', 'memory', 'tok_bnd');
 
 statement ok
-SELECT bridge_set_policy('bnd', 'main', 'create', 'true');
+SELECT vcatbridge_set_policy('bnd', 'main', 'create', 'true');
 
 statement ok
-SELECT bridge_set_context('bnd', 'role', 'admin');
+SELECT vcatbridge_set_context('bnd', 'role', 'admin');
 
 statement ok
-SELECT bridge_set_policy('bnd', 'main.served', 'select', '$role = ''admin'' OR tenant = 7');
+SELECT vcatbridge_set_policy('bnd', 'main.served', 'select', '$role = ''admin'' OR tenant = 7');
 
 statement ok
-SELECT bridge_set_policy('bnd', 'main.served', v, 'true') FROM (VALUES ('alter'), ('drop')) _(v);
+SELECT vcatbridge_set_policy('bnd', 'main.served', v, 'true') FROM (VALUES ('alter'), ('drop')) _(v);
 
 statement ok
-SELECT bridge_set_policy('bnd', 'aux.shadowed', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
+SELECT vcatbridge_set_policy('bnd', 'aux.shadowed', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'bnd', TOKEN 'tok_bnd');
+ATTACH '' AS b (TYPE vcatbridge, ID 'bnd', TOKEN 'tok_bnd');
 
 # ---------------------------------------------------------------------------
 # A local table shadowing a served name is the one DDL touches.
@@ -74,7 +74,7 @@ statement ok
 CREATE TABLE IF NOT EXISTS b.main.ungranted(id INTEGER);
 
 query I
-SELECT count(*) FROM bridge_table_permissions('b') WHERE name = 'ungranted';
+SELECT count(*) FROM vcatbridge_table_permissions('b') WHERE name = 'ungranted';
 ----
 0
 
@@ -82,7 +82,7 @@ statement ok
 CREATE TABLE IF NOT EXISTS b.main.served(id INTEGER);
 
 query I
-SELECT verbs FROM bridge_table_permissions('b') WHERE name = 'served';
+SELECT verbs FROM vcatbridge_table_permissions('b') WHERE name = 'served';
 ----
 [select, alter, drop]
 
@@ -92,7 +92,7 @@ CREATE OR REPLACE TABLE b.main.ungranted(id INTEGER);
 does not have 'drop' permission
 
 query I
-SELECT count(*) FROM bridge_table_permissions('b') WHERE name = 'ungranted';
+SELECT count(*) FROM vcatbridge_table_permissions('b') WHERE name = 'ungranted';
 ----
 0
 
@@ -143,7 +143,7 @@ statement ok
 CREATE TABLE b.main.keyless(x INTEGER);
 
 query I
-SELECT verbs FROM bridge_table_permissions('b') WHERE name = 'keyless';
+SELECT verbs FROM vcatbridge_table_permissions('b') WHERE name = 'keyless';
 ----
 [select, insert, create, alter, drop]
 
@@ -177,7 +177,7 @@ SELECT id, memo FROM b.main.served;
 # ---------------------------------------------------------------------------
 
 statement ok
-SELECT bridge_set_context('bnd', 'role', 'user');
+SELECT vcatbridge_set_context('bnd', 'role', 'user');
 
 statement error
 ALTER TABLE b.main.served ADD COLUMN other VARCHAR;

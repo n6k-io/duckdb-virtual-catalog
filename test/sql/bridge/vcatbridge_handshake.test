@@ -1,8 +1,8 @@
-# name: test/sql/bridge/virtual_catalog_handshake.test
+# name: test/sql/bridge/vcatbridge_handshake.test
 # description: bridge handshake -- validation, token rules, and registry lifecycle
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
@@ -14,52 +14,52 @@ statement ok
 CREATE TABLE memory.main.nopk(x INTEGER, y VARCHAR);
 
 # ---------------------------------------------------------------------------
-# bridge_register_source checks only the catalog and the id; the policy calls validate
+# vcatbridge_register_source checks only the catalog and the id; the policy calls validate
 # each setting on the source connection.
 # ---------------------------------------------------------------------------
 
 statement ok
-SELECT bridge_register_source('v1', 'memory', 'tok_v1');
+SELECT vcatbridge_register_source('v1', 'memory', 'tok_v1');
 
 # One pending source per id; the id is claimed from registration, not from setup.
 statement error
-SELECT bridge_register_source('v1', 'memory');
+SELECT vcatbridge_register_source('v1', 'memory');
 ----
 a source is already registered for bridge
 
 statement error
-SELECT bridge_set_policy('v1', 'users', 'select', 'true');
+SELECT vcatbridge_set_policy('v1', 'users', 'select', 'true');
 ----
 must be 'schema.table'
 
 statement error
-SELECT bridge_set_policy('v1', 'shop.main.users', 'select', 'true');
+SELECT vcatbridge_set_policy('v1', 'shop.main.users', 'select', 'true');
 ----
 names catalog 'shop'
 
 statement error
-SELECT bridge_set_policy('v1', '.users', 'select', 'true');
+SELECT vcatbridge_set_policy('v1', '.users', 'select', 'true');
 ----
 has an empty name part
 
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'write', 'true');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'write', 'true');
 ----
 unknown setting
 
 statement error
-SELECT bridge_set_policy('v1', 'main.ghost', 'select', 'true');
+SELECT vcatbridge_set_policy('v1', 'main.ghost', 'select', 'true');
 ----
 not found in catalog 'memory' on source
 
 # A schema the source does not have resolves no differently from a table it does not have.
 statement error
-SELECT bridge_set_policy('v1', 'nosuchschema.users', 'select', 'true');
+SELECT vcatbridge_set_policy('v1', 'nosuchschema.users', 'select', 'true');
 ----
 not found in catalog 'memory' on source
 
 statement error
-SELECT bridge_set_policy('unregistered', 'main.users', 'select', 'true');
+SELECT vcatbridge_set_policy('unregistered', 'main.users', 'select', 'true');
 ----
 no registered source for bridge
 
@@ -67,105 +67,105 @@ no registered source for bridge
 # The predicate is compiled against the source table it will be grafted onto.
 
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'select', 'nosuchcol = 1');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', 'nosuchcol = 1');
 ----
 is not a valid WHERE clause on the source
 
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'select', 'count(*) > 0');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', 'count(*) > 0');
 ----
 is not a valid WHERE clause on the source
 
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'select', 'row_number() over () = 1');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', 'row_number() over () = 1');
 ----
 is not a valid WHERE clause on the source
 
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'select', '1, 2');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', '1, 2');
 ----
 must be a single expression
 
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'select', 'id = $1');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', 'id = $1');
 ----
 not positional ones
 
 # A WHERE clause would coerce all three of these, and the policy would then be stored as something
 # that is not a predicate at all. The predicate is projected and type-checked instead.
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'select', '42');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', '42');
 ----
 must be BOOLEAN, but it is INTEGER
 
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'select', 'name');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', 'name');
 ----
 must be BOOLEAN, but it is VARCHAR
 
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'select', 'NULL');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', 'NULL');
 ----
 must be BOOLEAN
 
 # An insert reads no existing row, so it takes no USING half.
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'insert', {'using': 'id > 0', 'check': 'true'});
+SELECT vcatbridge_set_policy('v1', 'main.users', 'insert', {'using': 'id > 0', 'check': 'true'});
 ----
 unknown key "using"
 
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'grant', 'true');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'grant', 'true');
 ----
 unknown setting
 
 # --- the WITH CHECK half ----------------------------------------------------
 # An insert's value is its check, the only limit on what it may write. 'true' is the opt-out.
 statement ok
-SELECT bridge_set_policy('v1', 'main.users', 'insert', 'id > 0');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'insert', 'id > 0');
 
 statement ok
-SELECT bridge_set_policy('v1', 'main.users', 'insert', 'true');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'insert', 'true');
 
 # SELECT and DELETE write no row, so there is nothing for a check to constrain.
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'delete', {'using': 'true', 'check': 'id > 0'});
+SELECT vcatbridge_set_policy('v1', 'main.users', 'delete', {'using': 'true', 'check': 'id > 0'});
 ----
 'delete' takes true or a predicate string
 
 # A check is validated against the source the same way a USING predicate is.
 statement error
-SELECT bridge_set_policy('v1', 'main.users', 'update', {'using': 'true', 'check': 'nosuchcolumn > 0'});
+SELECT vcatbridge_set_policy('v1', 'main.users', 'update', {'using': 'true', 'check': 'nosuchcolumn > 0'});
 ----
 is not a valid WHERE clause on the source
 
 statement ok
-SELECT bridge_set_policy('v1', 'main.users', 'select', 'id > 0');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', 'id > 0');
 
 # Setting a verb again overwrites it.
 statement ok
-SELECT bridge_set_policy('v1', 'main.users', 'select', 'true');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('v1', 'main.users', 'select', 'id > 0');
+SELECT vcatbridge_set_policy('v1', 'main.users', 'select', 'id > 0');
 
 # --- primary keys -----------------------------------------------------------
 # Discovery runs on the first grant for a table. A key that discovery cannot find may still be
 # supplied afterwards; it is the write that refuses without one.
 
 statement ok
-SELECT bridge_set_policy('v1', 'main.nopk', 'select', 'true');
+SELECT vcatbridge_set_policy('v1', 'main.nopk', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('v1', 'main.nopk', 'update', 'true');
+SELECT vcatbridge_set_policy('v1', 'main.nopk', 'update', 'true');
 
 statement error
-SELECT bridge_set_policy('v1', 'main.nopk', 'primary_key', []::VARCHAR[]);
+SELECT vcatbridge_set_policy('v1', 'main.nopk', 'primary_key', []::VARCHAR[]);
 ----
 cannot be empty
 
 statement ok
-SELECT bridge_set_policy('v1', 'main.nopk', 'primary_key', ['x']);
+SELECT vcatbridge_set_policy('v1', 'main.nopk', 'primary_key', ['x']);
 
 # --- caller-supplied key discovery and validation ---------------------------
 
@@ -176,81 +176,81 @@ statement ok
 INSERT INTO memory.main.dupkey VALUES (1, 'a'), (1, 'b'), (2, 'c');
 
 statement ok
-SELECT bridge_set_policy('v1', 'main.dupkey', 'select', 'true');
+SELECT vcatbridge_set_policy('v1', 'main.dupkey', 'select', 'true');
 
 statement error
-SELECT bridge_set_policy('v1', 'shop.main.dupkey', 'primary_key', {'columns_from_query': 'SELECT ''k'''});
+SELECT vcatbridge_set_policy('v1', 'shop.main.dupkey', 'primary_key', {'columns_from_query': 'SELECT ''k'''});
 ----
 names catalog 'shop'
 
 statement error
-SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT k FROM memory.main.dupkey WHERE false'});
+SELECT vcatbridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT k FROM memory.main.dupkey WHERE false'});
 ----
 returned no columns
 
 statement error
-SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT * FROM memory.main.no_such_table'});
+SELECT vcatbridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT * FROM memory.main.no_such_table'});
 ----
 columns_from_query for 'main.dupkey' failed
 
 statement error
-SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT NULL'});
+SELECT vcatbridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT NULL'});
 ----
 empty or NULL
 
 statement ok
-SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT ''k'''});
+SELECT vcatbridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns_from_query': 'SELECT ''k'''});
 
 statement ok
-SELECT bridge_set_policy('v1', 'main.dupkey', 'delete', 'true');
+SELECT vcatbridge_set_policy('v1', 'main.dupkey', 'delete', 'true');
 
 statement error
-SELECT bridge_set_policy('v1', 'shop.main.dupkey', 'primary_key', {'columns': ['k'], 'verify_unique': 'SELECT 1 WHERE false'});
+SELECT vcatbridge_set_policy('v1', 'shop.main.dupkey', 'primary_key', {'columns': ['k'], 'verify_unique': 'SELECT 1 WHERE false'});
 ----
 names catalog 'shop'
 
 statement error
-SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns': ['k'], 'verify_unique': 'SELECT k FROM memory.main.dupkey GROUP BY k HAVING count(*) > 1'});
+SELECT vcatbridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns': ['k'], 'verify_unique': 'SELECT k FROM memory.main.dupkey GROUP BY k HAVING count(*) > 1'});
 ----
 is not unique on the source
 
 statement error
-SELECT bridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns': ['k'], 'verify_unique': 'SELECT * FROM memory.main.no_such_table'});
+SELECT vcatbridge_set_policy('v1', 'main.dupkey', 'primary_key', {'columns': ['k'], 'verify_unique': 'SELECT * FROM memory.main.no_such_table'});
 ----
 verify_unique for 'main.dupkey' failed
 
 query T
-SELECT bridge_set_policy('v1', 'main.users', 'primary_key', {'columns': ['id'], 'verify_unique': 'SELECT id FROM memory.main.users GROUP BY id HAVING count(*) > 1'});
+SELECT vcatbridge_set_policy('v1', 'main.users', 'primary_key', {'columns': ['id'], 'verify_unique': 'SELECT id FROM memory.main.users GROUP BY id HAVING count(*) > 1'});
 ----
 ok
 
 # --- freeze-time validation -------------------------------------------------
 # Both checks run before the pending source is consumed, so a rejected attach can be fixed with
-# another bridge_set_policy call and retried with the SAME token.
+# another vcatbridge_set_policy call and retried with the SAME token.
 
 statement ok
-SELECT bridge_register_source('v_empty', 'memory', 'tok_empty');
+SELECT vcatbridge_register_source('v_empty', 'memory', 'tok_empty');
 
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v_empty', TOKEN 'tok_empty');
 ----
 has no policies
 
 statement ok
-SELECT bridge_set_policy('v_empty', 'main.users', 'primary_key', ['id']);
+SELECT vcatbridge_set_policy('v_empty', 'main.users', 'primary_key', ['id']);
 
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v_empty', TOKEN 'tok_empty');
 ----
 grants no verb
 
 # delete needs no select.
 statement ok
-SELECT bridge_set_policy('v_empty', 'main.users', 'delete', 'true');
+SELECT vcatbridge_set_policy('v_empty', 'main.users', 'delete', 'true');
 
 # Same token, still live: neither rejection consumed the pending source.
 statement ok
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v_empty', TOKEN 'tok_empty');
 
 statement ok
 DETACH hs;
@@ -260,43 +260,43 @@ DETACH hs;
 # ---------------------------------------------------------------------------
 
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, TOKEN 'anything');
+ATTACH '' AS hs (TYPE vcatbridge, TOKEN 'anything');
 ----
 requires a 'id' option
 
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v7');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v7');
 ----
 requires a 'token' option
 
 # The nonce prefix is unique to the loaded extension binary, so a generated token minted elsewhere is
 # refused before the id is even looked up.
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v7', TOKEN '00000000-0000-0000-0000-000000000000:deadbeef');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v7', TOKEN '00000000-0000-0000-0000-000000000000:deadbeef');
 ----
 different copies of the virtual_catalog extension
 
 statement ok
-SELECT bridge_register_source('hs_b', 'memory', 'tok_hs_b');
+SELECT vcatbridge_register_source('hs_b', 'memory', 'tok_hs_b');
 
 statement ok
-SELECT bridge_set_policy('hs_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
+SELECT vcatbridge_set_policy('hs_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
 
 # The token is checked against the pending source's own.
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_b', TOKEN 'tok_hs_wrong');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'hs_b', TOKEN 'tok_hs_wrong');
 ----
 invalid setup token
 
 # A valid token is still no use against an id nobody registered.
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'never_registered', TOKEN 'tok_hs_b');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'never_registered', TOKEN 'tok_hs_b');
 ----
 no registered source for bridge
 
 # None of the refusals consumed hs_b's pending source: its original token still works.
 statement ok
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_b', TOKEN 'tok_hs_b');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'hs_b', TOKEN 'tok_hs_b');
 
 query IT
 SELECT * FROM hs.main.users ORDER BY id;
@@ -320,13 +320,13 @@ does not exist
 # bridge id would be consumed for the life of the process and the source DatabaseInstance would stay
 # pinned with it.
 statement ok
-SELECT bridge_register_source('hs_b', 'memory', 'tok_hs_reuse');
+SELECT vcatbridge_register_source('hs_b', 'memory', 'tok_hs_reuse');
 
 statement ok
-SELECT bridge_set_policy('hs_b', 'main.users', 'select', 'true');
+SELECT vcatbridge_set_policy('hs_b', 'main.users', 'select', 'true');
 
 statement ok
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_b', TOKEN 'tok_hs_reuse');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'hs_b', TOKEN 'tok_hs_reuse');
 
 query IT
 SELECT * FROM hs.main.users ORDER BY id;
@@ -351,17 +351,17 @@ statement ok
 INSERT INTO memory.sales.orders VALUES (7, 'widget');
 
 statement ok
-SELECT bridge_register_source('hs_multi', 'memory', 'tok_hs_multi');
+SELECT vcatbridge_register_source('hs_multi', 'memory', 'tok_hs_multi');
 
 statement ok
-SELECT bridge_set_policy('hs_multi', 'main.users', 'select', 'true');
+SELECT vcatbridge_set_policy('hs_multi', 'main.users', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('hs_multi', 'sales.orders', 'select', 'true');
+SELECT vcatbridge_set_policy('hs_multi', 'sales.orders', 'select', 'true');
 
 # No CREATE SCHEMA hs.sales anywhere above.
 statement ok
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_multi', TOKEN 'tok_hs_multi');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'hs_multi', TOKEN 'tok_hs_multi');
 
 query IT
 SELECT * FROM hs.sales.orders;
@@ -369,7 +369,7 @@ SELECT * FROM hs.sales.orders;
 7	widget
 
 query TT
-SELECT schema, name FROM bridge_table_permissions('hs') ORDER BY schema, name;
+SELECT schema, name FROM vcatbridge_table_permissions('hs') ORDER BY schema, name;
 ----
 main	users
 sales	orders
