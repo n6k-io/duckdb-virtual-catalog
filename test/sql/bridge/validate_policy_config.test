@@ -2,7 +2,7 @@
 # description: bridge_validate_policy_config checks a policy document against a catalog without a bridge.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, tenant INTEGER, name VARCHAR);

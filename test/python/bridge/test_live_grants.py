@@ -113,7 +113,7 @@ def test_concurrent_settings_are_all_kept(source, target):
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(grant, names))
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     granted = target.execute("SELECT name FROM bridge_table_permissions('app') ORDER BY name").fetchall()
     assert sorted(row[0] for row in granted) == sorted(names)
 
@@ -127,6 +127,6 @@ def test_foreign_key_edit_on_ungranted_table_leaves_attach_working(source, targe
     source.execute("SELECT bridge_set_policy(?, 'main.users', 'select', true)", [bridge_id])
     source.execute(f"SELECT bridge_set_policy(?, 'main.orders', 'foreign_keys', {edit})", [bridge_id])
 
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     granted = target.execute("SELECT name FROM bridge_table_permissions('app')").fetchall()
     assert granted == [("users",)]

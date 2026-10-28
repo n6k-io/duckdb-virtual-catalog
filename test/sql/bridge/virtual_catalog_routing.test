@@ -2,7 +2,7 @@
 # description: operations route by entry origin inside one virtual_catalog schema
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
@@ -26,7 +26,7 @@ statement ok
 SELECT bridge_set_policy('ws_b', 'main.logs', 'select', 'true');
 
 statement ok
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'ws_b', TOKEN 'tok_ws_b');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'ws_b', TOKEN 'tok_ws_b');
 
 # Native entries are created into the schema the bridge already serves.
 statement ok

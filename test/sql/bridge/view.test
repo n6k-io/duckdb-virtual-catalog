@@ -2,7 +2,7 @@
 # description: a source view is bridged read-only, under its select policy like a table.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
@@ -57,7 +57,7 @@ statement ok
 SELECT bridge_set_policy('v2_view', 'main.by_tenant', 'select', 'true');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_view', TOKEN 'tok_view');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_view', TOKEN 'tok_view');
 
 query II
 SELECT column_name, data_type FROM duckdb_columns()

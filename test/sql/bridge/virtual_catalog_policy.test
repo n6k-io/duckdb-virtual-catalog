@@ -2,7 +2,7 @@
 # description: row policies -- what a granted verb can see and touch
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, tenant_id INTEGER, amt INTEGER);
@@ -24,7 +24,7 @@ statement ok
 SELECT bridge_set_policy('pol_ro', 'main.orders', 'select', 'tenant_id = 1');
 
 statement ok
-ATTACH '' AS ro (TYPE virtual_catalog_bridge, ID 'pol_ro', TOKEN 'tok_ro');
+ATTACH '' AS ro (TYPE vcatbridge, ID 'pol_ro', TOKEN 'tok_ro');
 
 query III
 SELECT * FROM ro.main.orders ORDER BY id;
@@ -84,7 +84,7 @@ statement ok
 SELECT bridge_set_policy('pol_rw', 'main.orders', 'delete', 'amt = 50');
 
 statement ok
-ATTACH '' AS rw (TYPE virtual_catalog_bridge, ID 'pol_rw', TOKEN 'tok_rw');
+ATTACH '' AS rw (TYPE vcatbridge, ID 'pol_rw', TOKEN 'tok_rw');
 
 # The statement selects every row; the policy is what decides which are written. The reported count
 # is the number the source actually changed, not the number the target's plan matched.
@@ -155,7 +155,7 @@ statement ok
 SELECT bridge_set_policy('pol_ins', 'main.orders', 'insert', 'true');
 
 statement ok
-ATTACH '' AS ins (TYPE virtual_catalog_bridge, ID 'pol_ins', TOKEN 'tok_ins');
+ATTACH '' AS ins (TYPE vcatbridge, ID 'pol_ins', TOKEN 'tok_ins');
 
 statement ok
 INSERT INTO ins.main.orders VALUES (10, 3, 5);

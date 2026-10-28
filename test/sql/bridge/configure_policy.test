@@ -2,7 +2,7 @@
 # description: bridge_configure_policy installs a whole policy document, all or nothing, before or after ATTACH.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, tenant INTEGER, name VARCHAR);
@@ -111,7 +111,7 @@ SELECT bridge_configure_policy('cp', '{"policy_version": 1, "tables": {"main.org
 not found
 
 statement ok
-ATTACH '' AS c (TYPE virtual_catalog_bridge, ID 'cp', TOKEN 'tok_cp');
+ATTACH '' AS c (TYPE vcatbridge, ID 'cp', TOKEN 'tok_cp');
 
 query TTT
 SELECT name, verbs, primary_key FROM bridge_table_permissions('c') ORDER BY name;

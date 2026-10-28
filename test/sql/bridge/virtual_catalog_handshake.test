@@ -2,7 +2,7 @@
 # description: bridge handshake -- validation, token rules, and registry lifecycle
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
@@ -232,7 +232,7 @@ statement ok
 SELECT bridge_register_source('v_empty', 'memory', 'tok_empty');
 
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v_empty', TOKEN 'tok_empty');
 ----
 has no policies
 
@@ -240,7 +240,7 @@ statement ok
 SELECT bridge_set_policy('v_empty', 'main.users', 'primary_key', ['id']);
 
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v_empty', TOKEN 'tok_empty');
 ----
 grants no verb
 
@@ -250,7 +250,7 @@ SELECT bridge_set_policy('v_empty', 'main.users', 'delete', 'true');
 
 # Same token, still live: neither rejection consumed the pending source.
 statement ok
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v_empty', TOKEN 'tok_empty');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v_empty', TOKEN 'tok_empty');
 
 statement ok
 DETACH hs;
@@ -260,19 +260,19 @@ DETACH hs;
 # ---------------------------------------------------------------------------
 
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, TOKEN 'anything');
+ATTACH '' AS hs (TYPE vcatbridge, TOKEN 'anything');
 ----
 requires a 'id' option
 
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v7');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v7');
 ----
 requires a 'token' option
 
 # The nonce prefix is unique to the loaded extension binary, so a generated token minted elsewhere is
 # refused before the id is even looked up.
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'v7', TOKEN '00000000-0000-0000-0000-000000000000:deadbeef');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'v7', TOKEN '00000000-0000-0000-0000-000000000000:deadbeef');
 ----
 different copies of the virtual_catalog extension
 
@@ -284,19 +284,19 @@ SELECT bridge_set_policy('hs_b', 'main.users', v, true) FROM (VALUES ('select'),
 
 # The token is checked against the pending source's own.
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_b', TOKEN 'tok_hs_wrong');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'hs_b', TOKEN 'tok_hs_wrong');
 ----
 invalid setup token
 
 # A valid token is still no use against an id nobody registered.
 statement error
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'never_registered', TOKEN 'tok_hs_b');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'never_registered', TOKEN 'tok_hs_b');
 ----
 no registered source for bridge
 
 # None of the refusals consumed hs_b's pending source: its original token still works.
 statement ok
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_b', TOKEN 'tok_hs_b');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'hs_b', TOKEN 'tok_hs_b');
 
 query IT
 SELECT * FROM hs.main.users ORDER BY id;
@@ -326,7 +326,7 @@ statement ok
 SELECT bridge_set_policy('hs_b', 'main.users', 'select', 'true');
 
 statement ok
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_b', TOKEN 'tok_hs_reuse');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'hs_b', TOKEN 'tok_hs_reuse');
 
 query IT
 SELECT * FROM hs.main.users ORDER BY id;
@@ -361,7 +361,7 @@ SELECT bridge_set_policy('hs_multi', 'sales.orders', 'select', 'true');
 
 # No CREATE SCHEMA hs.sales anywhere above.
 statement ok
-ATTACH '' AS hs (TYPE virtual_catalog_bridge, ID 'hs_multi', TOKEN 'tok_hs_multi');
+ATTACH '' AS hs (TYPE vcatbridge, ID 'hs_multi', TOKEN 'tok_hs_multi');
 
 query IT
 SELECT * FROM hs.sales.orders;

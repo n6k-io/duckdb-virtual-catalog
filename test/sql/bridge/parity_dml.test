@@ -2,7 +2,7 @@
 # description: SET col = DEFAULT, and what a bridged table answers once its source is gone.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR DEFAULT 'dflt');
@@ -20,7 +20,7 @@ statement ok
 SELECT bridge_set_policy('v2_oc', 'main.users', 'insert', 'true');
 
 statement ok
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_oc', TOKEN 'tok_oc');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'v2_oc', TOKEN 'tok_oc');
 
 statement ok
 UPDATE ws.main.users SET name = DEFAULT WHERE id = 1;

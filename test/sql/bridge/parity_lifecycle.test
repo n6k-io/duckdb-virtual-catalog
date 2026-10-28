@@ -2,7 +2,7 @@
 # description: schema recreate, a refused attach, and re-attaching a catalog.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
@@ -18,17 +18,17 @@ SELECT bridge_set_policy('v2_recv_a', 'main.users', 'select', 'true');
 # ---------------------------------------------------------------------------
 
 statement error
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_recv_a', TOKEN 'wrong');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'v2_recv_a', TOKEN 'wrong');
 ----
 invalid setup token
 
 statement error
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'never_registered', TOKEN 'tok_recv_a');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'never_registered', TOKEN 'tok_recv_a');
 ----
 no registered source
 
 statement ok
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_recv_a', TOKEN 'tok_recv_a');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'v2_recv_a', TOKEN 'tok_recv_a');
 
 query I
 SELECT count(*) FROM ws.main.users;
@@ -37,7 +37,7 @@ SELECT count(*) FROM ws.main.users;
 
 # The token was spent by the attach that redeemed it.
 statement error
-ATTACH '' AS ws2 (TYPE virtual_catalog_bridge, ID 'v2_recv_a', TOKEN 'tok_recv_a');
+ATTACH '' AS ws2 (TYPE vcatbridge, ID 'v2_recv_a', TOKEN 'tok_recv_a');
 ----
 no registered source
 
@@ -101,7 +101,7 @@ statement ok
 SELECT bridge_set_policy('v2_recv_c', 'main.users', 'select', 'true');
 
 statement ok
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_recv_c', TOKEN 'tok_recv_c');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'v2_recv_c', TOKEN 'tok_recv_c');
 
 query I
 SELECT count(*) FROM ws.main.users;

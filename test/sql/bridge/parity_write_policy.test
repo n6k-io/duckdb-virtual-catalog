@@ -2,7 +2,7 @@
 # description: write policies and the WITH CHECK half.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, tenant_id INTEGER, amt INTEGER);
@@ -23,7 +23,7 @@ statement ok
 SELECT bridge_set_policy('v2_pol_rw', 'main.orders', 'delete', 'amt = 50');
 
 statement ok
-ATTACH '' AS rw (TYPE virtual_catalog_bridge, ID 'v2_pol_rw', TOKEN 'tok_rw');
+ATTACH '' AS rw (TYPE vcatbridge, ID 'v2_pol_rw', TOKEN 'tok_rw');
 
 # The statement selects every row; the policy decides which are written, and the count reported is
 # the number the source actually changed.
@@ -86,7 +86,7 @@ statement ok
 SELECT bridge_set_policy('v2_pol_wc', 'main.orders', 'insert', 'amt >= 0');
 
 statement ok
-ATTACH '' AS wc (TYPE virtual_catalog_bridge, ID 'v2_pol_wc', TOKEN 'tok_wc');
+ATTACH '' AS wc (TYPE vcatbridge, ID 'v2_pol_wc', TOKEN 'tok_wc');
 
 statement ok
 INSERT INTO wc.main.orders VALUES (10, 1, 5);

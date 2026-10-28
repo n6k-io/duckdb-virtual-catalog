@@ -71,7 +71,7 @@ def gated_bridge(source, target, user):
         "SELECT bridge_set_policy(?, 'main.users', 'select', '$user = ''admin'' OR tenant = $tenant')", [bridge_id]
     )
     source.execute("SELECT bridge_set_policy(?, 'main.users', 'alter', '$user = ''admin''')", [bridge_id])
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id
 
 

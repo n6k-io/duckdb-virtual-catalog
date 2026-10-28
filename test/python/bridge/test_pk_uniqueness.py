@@ -148,7 +148,7 @@ def test_primary_key_query_supplies_a_key_discovery_cannot_find(source, target):
     )
     source.execute("SELECT bridge_set_policy(?, 'main.q', 'select', 'tenant = 1')", [bridge_id])
     source.execute("SELECT bridge_set_policy(?, 'main.q', 'update', 'true')", [bridge_id])
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
 
     assert target.execute("UPDATE app.main.q SET v = 'P' WHERE v = 'x'").fetchall() == [(1,)]
     assert source.execute("SELECT * FROM q ORDER BY code").fetchall() == [

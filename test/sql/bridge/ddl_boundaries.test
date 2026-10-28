@@ -2,7 +2,7 @@
 # description: DDL never reaches a source object the caller cannot see or was not granted.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.served(id INTEGER PRIMARY KEY, tenant INTEGER);
@@ -41,7 +41,7 @@ statement ok
 SELECT bridge_set_policy('bnd', 'aux.shadowed', v, 'true') FROM (VALUES ('select'), ('alter'), ('drop')) _(v);
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'bnd', TOKEN 'tok_bnd');
+ATTACH '' AS b (TYPE vcatbridge, ID 'bnd', TOKEN 'tok_bnd');
 
 # ---------------------------------------------------------------------------
 # A local table shadowing a served name is the one DDL touches.

@@ -2,7 +2,7 @@
 # description: asserting and verifying a key the source does not declare.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.nopk(x INTEGER, y VARCHAR);
@@ -66,7 +66,7 @@ statement ok
 SELECT bridge_set_policy('v2_parity_keys', 'main.nopk', 'primary_key', {'columns': ['x'], 'verify_unique': 'SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1'});
 
 statement ok
-ATTACH '' AS k (TYPE virtual_catalog_bridge, ID 'v2_parity_keys', TOKEN 'tok_parity_keys');
+ATTACH '' AS k (TYPE vcatbridge, ID 'v2_parity_keys', TOKEN 'tok_parity_keys');
 
 # The asserted key is what the catalog reports and what a delete addresses rows by.
 query II

@@ -2,7 +2,7 @@
 # description: create/alter/drop policies send DDL to the source; a created table is granted every verb, undone on rollback.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER);
@@ -57,7 +57,7 @@ statement ok
 SELECT bridge_set_policy('ddl', 'main.locked', 'select', 'true');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'ddl', TOKEN 'tok_ddl');
+ATTACH '' AS b (TYPE vcatbridge, ID 'ddl', TOKEN 'tok_ddl');
 
 # ---------------------------------------------------------------------------
 # CREATE

@@ -32,7 +32,7 @@ def handshake(source, target, source_catalog, context, grants):
         source.execute("SELECT bridge_set_context(?, ?, ?)", [bridge_id, name, value])
     for table, verb, using in grants:
         source.execute("SELECT bridge_set_policy(?, ?, ?, ?)", [bridge_id, table, verb, using])
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id
 
 

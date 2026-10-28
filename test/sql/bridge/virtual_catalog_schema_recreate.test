@@ -11,7 +11,7 @@
 # when the extension is loaded dynamically. It does not fault in this statically-linked test binary,
 # so these assertions only catch the bug under a sanitizer build.
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.anchor(id INTEGER PRIMARY KEY);
@@ -23,7 +23,7 @@ statement ok
 SELECT bridge_set_policy('sr_b', 'main.anchor', 'select', 'true');
 
 statement ok
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'sr_b', TOKEN 'tok_sr_b');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'sr_b', TOKEN 'tok_sr_b');
 
 statement ok
 CREATE SCHEMA ws.s;

@@ -2,7 +2,7 @@
 # description: S4 -- the USING half sits under every read, and nothing the target does can lift it.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER, tenant INTEGER);
@@ -17,7 +17,7 @@ statement ok
 SELECT bridge_set_policy('v2_policy', 'main.orders', 'select', 'tenant = 7');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_policy', TOKEN 'tok_policy');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_policy', TOKEN 'tok_policy');
 
 # Tenant 9 is not reachable at all.
 query II

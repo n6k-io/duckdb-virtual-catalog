@@ -36,7 +36,7 @@ def register_pending(source):
 
 
 def attach(target, catalog, bridge_id, token):
-    target.execute(f"ATTACH '' AS {catalog} (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS {catalog} (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
 
 
 def guess_wrong(target, bridge_id, times):

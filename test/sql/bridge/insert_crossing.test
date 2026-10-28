@@ -2,7 +2,7 @@
 # description: an insert whose rows the source can produce itself runs there, and no row crosses
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.src(id INTEGER, amt INTEGER);
@@ -26,7 +26,7 @@ statement ok
 SELECT bridge_set_policy('ic', 'main.dst', 'insert', 'true');
 
 statement ok
-ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ic', TOKEN 'tok_ic');
+ATTACH '' AS w (TYPE vcatbridge, ID 'ic', TOKEN 'tok_ic');
 
 # ---------------------------------------------------------------------------
 # Both tables are the source's, so the whole statement goes there: one region, the select inside the
@@ -84,7 +84,7 @@ statement ok
 SELECT bridge_set_policy('ig', 'main.guarded', 'insert', 'amt < 15');
 
 statement ok
-ATTACH '' AS g (TYPE virtual_catalog_bridge, ID 'ig', TOKEN 'tok_ig');
+ATTACH '' AS g (TYPE vcatbridge, ID 'ig', TOKEN 'tok_ig');
 
 statement error
 INSERT INTO g.main.guarded SELECT id, amt FROM g.main.src;

@@ -2,7 +2,7 @@
 # description: INSERT executes the plan the write fence carries, and that plan is visible to EXPLAIN
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.t(id INTEGER PRIMARY KEY, amt INTEGER, note VARCHAR);
@@ -17,7 +17,7 @@ statement ok
 SELECT bridge_set_policy('ins_plan', 'main.t', 'insert', 'true');
 
 statement ok
-ATTACH '' AS w (TYPE virtual_catalog_bridge, ID 'ins_plan', TOKEN 'tok_ins_plan');
+ATTACH '' AS w (TYPE vcatbridge, ID 'ins_plan', TOKEN 'tok_ins_plan');
 
 # ---------------------------------------------------------------------------
 # EXPLAIN says where the rows are going, and how. A literal VALUES list is rows the target holds, so
@@ -84,7 +84,7 @@ statement ok
 SELECT bridge_set_policy('ins_check', 'main.c', 'insert', 'amt < 100');
 
 statement ok
-ATTACH '' AS ck (TYPE virtual_catalog_bridge, ID 'ins_check', TOKEN 'tok_ins_check');
+ATTACH '' AS ck (TYPE vcatbridge, ID 'ins_check', TOKEN 'tok_ins_check');
 
 statement error
 INSERT INTO ck.main.c VALUES (1, 500);

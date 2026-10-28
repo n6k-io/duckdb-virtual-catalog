@@ -1,8 +1,8 @@
-# name: test/sql/bridge/virtual_catalog_bridge_api.test
-# description: pins the registered bridge_% surface against docs/virtual-catalog-bridge.md
+# name: test/sql/bridge/vcatbridge_api.test
+# description: pins the registered bridge_% surface against docs/vcatbridge.md
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 query II
 SELECT DISTINCT function_name, len(parameter_types)

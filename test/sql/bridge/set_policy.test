@@ -2,7 +2,7 @@
 # description: bridge_set_policy changes one setting per call: scalar settings are assigned, list settings take add/remove/set.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, tenant INTEGER, name VARCHAR);
@@ -75,7 +75,7 @@ statement ok
 SELECT bridge_set_policy('sp', 'main.orgs', 'primary_key', ['id']);
 
 statement error
-ATTACH '' AS s (TYPE virtual_catalog_bridge, ID 'sp', TOKEN 'tok_sp');
+ATTACH '' AS s (TYPE vcatbridge, ID 'sp', TOKEN 'tok_sp');
 ----
 'main.orgs' in bridge 'sp' sets primary_key or foreign_keys but grants no verb
 
@@ -106,7 +106,7 @@ SELECT bridge_set_policy('sp', 'main.members', 'foreign_keys', 'remove', 'main.o
 
 # orgs is readable in full, so only teams, whose select hides rows, needs the entry.
 statement ok
-ATTACH '' AS s (TYPE virtual_catalog_bridge, ID 'sp', TOKEN 'tok_sp');
+ATTACH '' AS s (TYPE vcatbridge, ID 'sp', TOKEN 'tok_sp');
 
 # After ATTACH the change must leave a consistent policy.
 statement error

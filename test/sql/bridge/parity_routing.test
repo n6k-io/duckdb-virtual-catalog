@@ -2,7 +2,7 @@
 # description: native and bridged entries share one schema.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
@@ -29,7 +29,7 @@ statement ok
 SELECT bridge_set_policy('v2_ws_b', 'main.logs', 'select', 'true');
 
 statement ok
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'v2_ws_b', TOKEN 'tok_ws');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'v2_ws_b', TOKEN 'tok_ws');
 
 # Native entries are created into the schema the bridge already serves.
 statement ok

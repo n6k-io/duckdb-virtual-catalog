@@ -2,7 +2,7 @@
 # description: A bridge whose source catalog is itself a bridge, within one instance.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
@@ -20,7 +20,7 @@ statement ok
 SELECT bridge_set_policy('chain_inner', 'main.users', 'update', 'true');
 
 statement ok
-ATTACH '' AS inner_hop (TYPE virtual_catalog_bridge, ID 'chain_inner', TOKEN 'tok_chain_inner');
+ATTACH '' AS inner_hop (TYPE vcatbridge, ID 'chain_inner', TOKEN 'tok_chain_inner');
 
 statement ok
 SELECT bridge_register_source('chain_outer', 'inner_hop', 'tok_chain_outer');
@@ -32,7 +32,7 @@ statement ok
 SELECT bridge_set_policy('chain_outer', 'main.users', 'update', 'true');
 
 statement ok
-ATTACH '' AS outer_hop (TYPE virtual_catalog_bridge, ID 'chain_outer', TOKEN 'tok_chain_outer');
+ATTACH '' AS outer_hop (TYPE vcatbridge, ID 'chain_outer', TOKEN 'tok_chain_outer');
 
 # The inner hop's policy holds through the outer one.
 query IT

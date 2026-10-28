@@ -163,7 +163,7 @@ def bridge(
     policy = {"policy_version": 1, "tables": tables}
     source.execute("SELECT bridge_configure_policy(?, ?)", [bridge_id, json.dumps(policy)])
     # ATTACH options are folded to constants at bind time, so the token cannot be a parameter.
-    target.execute(f"ATTACH '' AS {catalog} (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS {catalog} (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     return bridge_id
 
 

@@ -1,5 +1,5 @@
-"""The bridge as the target's main database: `duckdb.connect('virtual_catalog_bridge:')`, then
-`virtual_catalog_bridge_init(bridge_id, token)`."""
+"""The bridge as the target's main database: `duckdb.connect('vcatbridge:')`, then
+`vcatbridge_init(bridge_id, token)`."""
 
 import duckdb
 import pytest
@@ -28,14 +28,14 @@ def config(extension_directory):
 def source(extension_directory):
     """Loaded from the installed copy: the target loads that one, and both must share a copy."""
     con = duckdb.connect(config=config(extension_directory))
-    con.execute("LOAD virtual_catalog_bridge")
+    con.execute("LOAD vcatbridge")
     yield con
     con.close()
 
 
 @pytest.fixture
 def target(extension_directory):
-    con = duckdb.connect("virtual_catalog_bridge:", config=config(extension_directory))
+    con = duckdb.connect("vcatbridge:", config=config(extension_directory))
     yield con
     con.close()
 
@@ -50,7 +50,7 @@ def register(source):
 
 
 def init(target, bridge_id, token):
-    target.execute("SELECT virtual_catalog_bridge_init($1, $2)", [bridge_id, token])
+    target.execute("SELECT vcatbridge_init($1, $2)", [bridge_id, token])
 
 
 def test_init_then_query(source, target):
@@ -136,7 +136,7 @@ def test_init_after_lockdown_refused(source, target):
 def test_init_on_plain_main_refused(source, extension_directory):
     bridge_id, token = register(source)
     con = duckdb.connect(config=config(extension_directory))
-    con.execute("LOAD virtual_catalog_bridge")
+    con.execute("LOAD vcatbridge")
     with pytest.raises(duckdb.Error, match="main database is not a bridge"):
         init(con, bridge_id, token)
     con.close()
@@ -144,7 +144,7 @@ def test_init_on_plain_main_refused(source, extension_directory):
 
 def test_path_refused(extension_directory):
     with pytest.raises(duckdb.Error, match="with no path"):
-        duckdb.connect("virtual_catalog_bridge:b1", config=config(extension_directory))
+        duckdb.connect("vcatbridge:b1", config=config(extension_directory))
 
 
 def test_token_not_exposed(source, target):

@@ -288,7 +288,7 @@ def checked(source, target):
     token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
     source.execute("SELECT bridge_set_policy(?, 'main.wide', 'select', 'true')", [bridge_id])
     source.execute("SELECT bridge_set_policy(?, 'main.wide', 'insert', ?)", [bridge_id, "score < 100"])
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     return source, target
 
 
@@ -440,7 +440,7 @@ def checked_update(source, target):
     source.execute(
         "SELECT bridge_set_policy(?, 'main.keyed', 'update', {'using': 'true', 'check': ?})", [bridge_id, "score < 100"]
     )
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     return source, target
 
 
@@ -476,7 +476,7 @@ def test_update_check_reads_columns_the_statement_does_not_set(source, target):
         "SELECT bridge_set_policy(?, 'main.keyed', 'update', {'using': 'true', 'check': ?})",
         [bridge_id, "name <> 'blocked'"],
     )
-    target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID '{bridge_id}', TOKEN '{token}')")
+    target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
 
     target.execute("UPDATE app.main.keyed SET score = 1 WHERE id = 1")
     assert source.execute("SELECT score FROM keyed WHERE id = 1").fetchone() == (1,)

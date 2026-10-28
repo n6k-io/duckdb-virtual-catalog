@@ -2,7 +2,7 @@
 # description: the source resolves with the target's transaction.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER);
@@ -26,7 +26,7 @@ statement ok
 SELECT bridge_set_policy('v2_transaction', 'main.orders', 'delete', 'true');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'v2_transaction', TOKEN 'tok_transaction');
+ATTACH '' AS b (TYPE vcatbridge, ID 'v2_transaction', TOKEN 'tok_transaction');
 
 # A statement outside an explicit transaction is a transaction of its own, and commits with it.
 statement ok

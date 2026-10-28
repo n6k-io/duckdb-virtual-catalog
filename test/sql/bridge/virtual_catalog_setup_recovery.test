@@ -2,7 +2,7 @@
 # description: an attach refused before redemption must leave the pending source intact
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
@@ -16,22 +16,22 @@ SELECT bridge_set_policy('recv_a', 'main.users', 'select', 'true');
 # Every refusal is raised before the pending source is taken, so a bad attach costs the caller
 # neither the token nor the grant script.
 statement error
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'recv_a', TOKEN 'not-the-token');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'recv_a', TOKEN 'not-the-token');
 ----
 invalid setup token
 
 statement error
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, TOKEN 'tok_recv_a');
+ATTACH '' AS ws (TYPE vcatbridge, TOKEN 'tok_recv_a');
 ----
 requires a 'id' option
 
 statement error
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'recv_a', TOKEN '');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'recv_a', TOKEN '');
 ----
 cannot be empty
 
 statement ok
-ATTACH '' AS ws (TYPE virtual_catalog_bridge, ID 'recv_a', TOKEN 'tok_recv_a');
+ATTACH '' AS ws (TYPE vcatbridge, ID 'recv_a', TOKEN 'tok_recv_a');
 
 query I
 SELECT count(*) FROM ws.main.users;

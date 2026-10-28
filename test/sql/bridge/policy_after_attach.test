@@ -2,7 +2,7 @@
 # description: grants and keys changed after ATTACH reach the next statement; bridge_finalize_policy locks them.
 # group: [bridge]
 
-require virtual_catalog_bridge
+require vcatbridge
 
 statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
@@ -38,7 +38,7 @@ statement ok
 SELECT bridge_set_policy('pa', 'main.users', 'select', 'true');
 
 statement ok
-ATTACH '' AS b (TYPE virtual_catalog_bridge, ID 'pa', TOKEN 'tok_pa');
+ATTACH '' AS b (TYPE vcatbridge, ID 'pa', TOKEN 'tok_pa');
 
 statement error
 SELECT * FROM b.main.extra;
@@ -209,7 +209,7 @@ SELECT bridge_set_policy('pb', 'main.extra', 'select', 'true');
 are finalized
 
 statement ok
-ATTACH '' AS b2 (TYPE virtual_catalog_bridge, ID 'pb', TOKEN 'tok_pb');
+ATTACH '' AS b2 (TYPE vcatbridge, ID 'pb', TOKEN 'tok_pb');
 
 statement error
 SELECT bridge_set_policy('pb', 'main.extra', 'select', 'true');
