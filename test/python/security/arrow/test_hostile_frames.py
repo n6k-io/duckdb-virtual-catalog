@@ -33,9 +33,7 @@ def serve(con, schema_bytes, scan=lambda columns: b"", delete=lambda payload: 0)
     con.create_function("h_schema", h_schema, [VARCHAR], BLOB)
     con.create_function("h_scan", h_scan, [VARCHAR, VARCHAR_LIST, VARCHAR], BLOB)
     con.create_function("h_delete", h_delete, [VARCHAR, BLOB], BIGINT)
-    con.execute(
-        "ATTACH '' AS app (TYPE virtual_catalog_provider, list h_list, schema h_schema, scan h_scan, delete h_delete)"
-    )
+    con.execute("ATTACH '' AS app (TYPE vcatprovider, list h_list, schema h_schema, scan h_scan, delete h_delete)")
 
 
 # --- A2: extreme metadata length prefix ---------------------------------------------------------
@@ -200,12 +198,12 @@ def test_stream_cannot_change_schema():
             return "ok"
 
         con = new_connection(bridge=True, provider=True)
-        con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+        con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
         con.create_function("g_open", g_open, [VARCHAR, VARCHAR, VARCHAR, BLOB], BLOB, null_handling="special")
         con.create_function("g_next", g_next, [VARCHAR], BLOB, null_handling="special")
         con.create_function("g_close", g_close, [VARCHAR], VARCHAR)
         con.execute(
-            "SELECT provider_create_stream_function('app', 'main', 'gen', 'g_open', 'g_next', 'g_close')"
+            "SELECT vcatprovider_create_stream_function('app', 'main', 'gen', 'g_open', 'g_next', 'g_close')"
         ).fetchall()
         try:
             print("ACCEPTED", con.execute("SELECT * FROM app.main.gen()").fetchall())

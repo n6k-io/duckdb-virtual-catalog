@@ -1,4 +1,4 @@
-# name: test/sql/bridge/virtual_catalog_routing.test
+# name: test/sql/bridge/vcatbridge_routing.test
 # description: operations route by entry origin inside one virtual_catalog schema
 # group: [bridge]
 
@@ -17,13 +17,13 @@ statement ok
 INSERT INTO memory.main.logs VALUES (1, 'boot');
 
 statement ok
-SELECT bridge_register_source('ws_b', 'memory', 'tok_ws_b');
+SELECT vcatbridge_register_source('ws_b', 'memory', 'tok_ws_b');
 
 statement ok
-SELECT bridge_set_policy('ws_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
+SELECT vcatbridge_set_policy('ws_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
 
 statement ok
-SELECT bridge_set_policy('ws_b', 'main.logs', 'select', 'true');
+SELECT vcatbridge_set_policy('ws_b', 'main.logs', 'select', 'true');
 
 statement ok
 ATTACH '' AS ws (TYPE vcatbridge, ID 'ws_b', TOKEN 'tok_ws_b');
@@ -138,7 +138,7 @@ statement ok
 ALTER TABLE ws.main.local ADD COLUMN extra INTEGER;
 
 query I
-SELECT len(columns) FROM bridge_table_describe('ws', schema := 'main', "table" := 'local');
+SELECT len(columns) FROM vcatbridge_table_describe('ws', schema := 'main', "table" := 'local');
 ----
 3
 

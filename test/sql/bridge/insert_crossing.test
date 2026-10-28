@@ -14,16 +14,16 @@ statement ok
 CREATE TABLE memory.main.dst(id INTEGER, amt INTEGER);
 
 statement ok
-SELECT bridge_register_source('ic', 'memory', 'tok_ic');
+SELECT vcatbridge_register_source('ic', 'memory', 'tok_ic');
 
 statement ok
-SELECT bridge_set_policy('ic', 'main.src', 'select', 'true');
+SELECT vcatbridge_set_policy('ic', 'main.src', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('ic', 'main.dst', 'select', 'true');
+SELECT vcatbridge_set_policy('ic', 'main.dst', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('ic', 'main.dst', 'insert', 'true');
+SELECT vcatbridge_set_policy('ic', 'main.dst', 'insert', 'true');
 
 statement ok
 ATTACH '' AS w (TYPE vcatbridge, ID 'ic', TOKEN 'tok_ic');
@@ -72,16 +72,16 @@ statement ok
 CREATE TABLE memory.main.guarded(id INTEGER, amt INTEGER);
 
 statement ok
-SELECT bridge_register_source('ig', 'memory', 'tok_ig');
+SELECT vcatbridge_register_source('ig', 'memory', 'tok_ig');
 
 statement ok
-SELECT bridge_set_policy('ig', 'main.src', 'select', 'true');
+SELECT vcatbridge_set_policy('ig', 'main.src', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('ig', 'main.guarded', 'select', 'true');
+SELECT vcatbridge_set_policy('ig', 'main.guarded', 'select', 'true');
 
 statement ok
-SELECT bridge_set_policy('ig', 'main.guarded', 'insert', 'amt < 15');
+SELECT vcatbridge_set_policy('ig', 'main.guarded', 'insert', 'amt < 15');
 
 statement ok
 ATTACH '' AS g (TYPE vcatbridge, ID 'ig', TOKEN 'tok_ig');

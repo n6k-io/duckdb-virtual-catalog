@@ -108,29 +108,29 @@ def test_detach_releases_the_catalog(source, target):
 def test_only_the_source_drives_a_live_context(source, target):
     seed(source)
     bridge_id = unique_id()
-    token = source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute("SELECT bridge_set_context(?, 'tenant', 7)", [bridge_id])
-    source.execute("SELECT bridge_set_policy(?, 'main.orders', 'select', 'tenant = $tenant')", [bridge_id])
+    token = source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT vcatbridge_set_context(?, 'tenant', 7)", [bridge_id])
+    source.execute("SELECT vcatbridge_set_policy(?, 'main.orders', 'select', 'tenant = $tenant')", [bridge_id])
 
     with pytest.raises(duckdb_error(), match="different source connection"):
-        target.execute("SELECT bridge_set_context(?, 'tenant', 9)", [bridge_id])
+        target.execute("SELECT vcatbridge_set_context(?, 'tenant', 9)", [bridge_id])
     with pytest.raises(duckdb_error(), match="different source connection"):
-        target.execute("SELECT bridge_finalize_context(?)", [bridge_id])
+        target.execute("SELECT vcatbridge_finalize_context(?)", [bridge_id])
 
     target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     assert target.execute("SELECT count(*) FROM app.main.orders").fetchone()[0] == 3
 
     with pytest.raises(duckdb_error(), match="different source connection"):
-        target.execute("SELECT bridge_set_context(?, 'tenant', 9)", [bridge_id])
+        target.execute("SELECT vcatbridge_set_context(?, 'tenant', 9)", [bridge_id])
     with pytest.raises(duckdb_error(), match="different source connection"):
-        target.execute("SELECT bridge_finalize_context(?)", [bridge_id])
+        target.execute("SELECT vcatbridge_finalize_context(?)", [bridge_id])
 
-    source.execute("SELECT bridge_set_context(?, 'tenant', 9)", [bridge_id])
+    source.execute("SELECT vcatbridge_set_context(?, 'tenant', 9)", [bridge_id])
     assert target.execute("SELECT count(*) FROM app.main.orders").fetchone()[0] == 1
 
-    source.execute("SELECT bridge_finalize_context(?)", [bridge_id])
+    source.execute("SELECT vcatbridge_finalize_context(?)", [bridge_id])
     with pytest.raises(duckdb_error(), match="is finalized"):
-        source.execute("SELECT bridge_set_context(?, 'tenant', 7)", [bridge_id])
+        source.execute("SELECT vcatbridge_set_context(?, 'tenant', 7)", [bridge_id])
     unbridge(target)
 
 

@@ -11,13 +11,13 @@ statement ok
 INSERT INTO memory.main.users VALUES (1, 'a'), (2, 'b');
 
 statement ok
-SELECT bridge_register_source('v2_oc', 'memory', 'tok_oc');
+SELECT vcatbridge_register_source('v2_oc', 'memory', 'tok_oc');
 
 statement ok
-SELECT bridge_set_policy('v2_oc', 'main.users', v, 'true') FROM (VALUES ('select'), ('update'), ('delete')) _(v);
+SELECT vcatbridge_set_policy('v2_oc', 'main.users', v, 'true') FROM (VALUES ('select'), ('update'), ('delete')) _(v);
 
 statement ok
-SELECT bridge_set_policy('v2_oc', 'main.users', 'insert', 'true');
+SELECT vcatbridge_set_policy('v2_oc', 'main.users', 'insert', 'true');
 
 statement ok
 ATTACH '' AS ws (TYPE vcatbridge, ID 'v2_oc', TOKEN 'tok_oc');

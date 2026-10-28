@@ -11,13 +11,13 @@ statement ok
 INSERT INTO memory.main.orders VALUES (1,'ada',50,7),(2,'grace',150,7),(3,'alan',250,9),(4,'edsger',350,7);
 
 statement ok
-SELECT bridge_register_source('v2_update', 'memory', 'tok_update');
+SELECT vcatbridge_register_source('v2_update', 'memory', 'tok_update');
 
 statement ok
-SELECT bridge_set_policy('v2_update', 'main.orders', 'select', 'tenant = 7');
+SELECT vcatbridge_set_policy('v2_update', 'main.orders', 'select', 'tenant = 7');
 
 statement ok
-SELECT bridge_set_policy('v2_update', 'main.orders', 'update', 'tenant = 7');
+SELECT vcatbridge_set_policy('v2_update', 'main.orders', 'update', 'tenant = 7');
 
 statement ok
 ATTACH '' AS b (TYPE vcatbridge, ID 'v2_update', TOKEN 'tok_update');

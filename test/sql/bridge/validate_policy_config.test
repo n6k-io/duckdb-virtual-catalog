@@ -1,5 +1,5 @@
 # name: test/sql/bridge/validate_policy_config.test
-# description: bridge_validate_policy_config checks a policy document against a catalog without a bridge.
+# description: vcatbridge_validate_policy_config checks a policy document against a catalog without a bridge.
 # group: [bridge]
 
 require vcatbridge
@@ -23,7 +23,7 @@ statement ok
 CREATE VIEW memory.main.v AS SELECT * FROM memory.main.users;
 
 query I
-SELECT count(*) FROM bridge_validate_policy_config('memory', '{
+SELECT count(*) FROM vcatbridge_validate_policy_config('memory', '{
   "policy_version": 1,
   "tables": {
     "main.members": {"foreign_keys": ["main.orgs"], "insert": true, "select": true},
@@ -37,7 +37,7 @@ SELECT count(*) FROM bridge_validate_policy_config('memory', '{
 
 # Every failing setting is reported, not just the first.
 query TT
-SELECT path, severity FROM bridge_validate_policy_config('memory', '{
+SELECT path, severity FROM vcatbridge_validate_policy_config('memory', '{
   "policy_version": 1,
   "tables": {
     "main.nosuch": {"select": true},
@@ -56,61 +56,61 @@ tables."main.users".select	error
 tables."main.v".insert	error
 
 query T
-SELECT message FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.nosuch": {"select": true}}}');
+SELECT message FROM vcatbridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.nosuch": {"select": true}}}');
 ----
 'main.nosuch' not found in catalog 'memory' on source
 
 # An entry that grants no verb fails parsing, so nothing else is checked.
 query TTI
-SELECT path, severity, message LIKE '%grants no verb%' FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"primary_key": ["id"]}}}');
+SELECT path, severity, message LIKE '%grants no verb%' FROM vcatbridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"primary_key": ["id"]}}}');
 ----
 NULL	error	true
 
 # delete needs no select.
 query I
-SELECT count(*) FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"delete": true}}}');
+SELECT count(*) FROM vcatbridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"delete": true}}}');
 ----
 0
 
 # Checks that need the whole policy, as ATTACH runs them.
 query TTI
-SELECT path, severity, message LIKE '%has no policies%' FROM bridge_validate_policy_config('memory', '{"policy_version": 1}');
+SELECT path, severity, message LIKE '%has no policies%' FROM vcatbridge_validate_policy_config('memory', '{"policy_version": 1}');
 ----
 NULL	error	true
 
 # A predicate over context is parsed but not bound.
 query TT
-SELECT path, severity FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"select": "tenant = $tenant"}}}');
+SELECT path, severity FROM vcatbridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"select": "tenant = $tenant"}}}');
 ----
 tables."main.users".select	unchecked
 
 query TT
-SELECT path, severity FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"select": "tenant = $1"}}}');
+SELECT path, severity FROM vcatbridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.users": {"select": "tenant = $1"}}}');
 ----
 tables."main.users".select	error
 
 # A key the source checks with a query depends on the data it holds now.
 query TT
-SELECT path, severity FROM bridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.nopk": {"select": true, "primary_key": {"columns": ["x"], "verify_unique": "SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1"}}}}');
+SELECT path, severity FROM vcatbridge_validate_policy_config('memory', '{"policy_version": 1, "tables": {"main.nopk": {"select": true, "primary_key": {"columns": ["x"], "verify_unique": "SELECT x FROM memory.main.nopk GROUP BY x HAVING count(*) > 1"}}}}');
 ----
 tables."main.nopk".primary_key	data_dependent
 
 query TTI
-SELECT path, severity, message LIKE '%not valid JSON%' FROM bridge_validate_policy_config('memory', '{"policy_version": 1,');
+SELECT path, severity, message LIKE '%not valid JSON%' FROM vcatbridge_validate_policy_config('memory', '{"policy_version": 1,');
 ----
 NULL	error	true
 
 statement error
-SELECT * FROM bridge_validate_policy_config(NULL, '{"policy_version": 1}');
+SELECT * FROM vcatbridge_validate_policy_config(NULL, '{"policy_version": 1}');
 ----
 cannot be NULL
 
 statement error
-SELECT * FROM bridge_validate_policy_config('nosuch', '{"policy_version": 1}');
+SELECT * FROM vcatbridge_validate_policy_config('nosuch', '{"policy_version": 1}');
 ----
 source catalog 'nosuch' does not exist
 
 statement error
-SELECT * FROM bridge_validate_policy_config('system', '{"policy_version": 1}');
+SELECT * FROM vcatbridge_validate_policy_config('system', '{"policy_version": 1}');
 ----
 temporary or system catalog

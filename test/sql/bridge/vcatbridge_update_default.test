@@ -1,4 +1,4 @@
-# name: test/sql/bridge/virtual_catalog_update_default.test
+# name: test/sql/bridge/vcatbridge_update_default.test
 # description: UPDATE ... SET col = DEFAULT on a bridged and on a provider table
 # group: [bridge]
 
@@ -11,10 +11,10 @@ statement ok
 INSERT INTO memory.main.users VALUES (1, 'a'), (2, 'b');
 
 statement ok
-SELECT bridge_register_source('d_b', 'memory', 'tok_d_b');
+SELECT vcatbridge_register_source('d_b', 'memory', 'tok_d_b');
 
 statement ok
-SELECT bridge_set_policy('d_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
+SELECT vcatbridge_set_policy('d_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
 
 statement ok
 ATTACH '' AS ws (TYPE vcatbridge, ID 'd_b', TOKEN 'tok_d_b');
@@ -27,7 +27,7 @@ UPDATE ws.main.users SET name = DEFAULT WHERE id = 1;
 # The bridged entry carries the source's types and constraints but not its column DEFAULT clauses --
 # it is built from the source query result, and nothing copies defaults the way CopySourceConstraints
 # copies constraints. So DEFAULT resolves to NULL here rather than to the source's 'dflt', and
-# bridge_table_describe reports a null default for every bridged column.
+# vcatbridge_table_describe reports a null default for every bridged column.
 query II
 SELECT id, name FROM ws.main.users ORDER BY id;
 ----

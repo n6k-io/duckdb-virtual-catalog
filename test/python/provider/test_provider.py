@@ -24,7 +24,7 @@ USERS = pa.table(
 
 @pytest.fixture
 def provider(con):
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     p = FakeProvider(con)
     p.add_table("users", USERS, primary_key=["id"])
     p.register()
@@ -48,13 +48,13 @@ def test_provider_table_is_visible_and_typed(con, provider):
 
 def test_permissions_report_the_provider_kind_and_key(con, provider):
     assert con.execute(
-        "SELECT name, kind, primary_key, verbs FROM provider_table_permissions('app', schema := 'main')"
+        "SELECT name, kind, primary_key, verbs FROM vcatprovider_table_permissions('app', schema := 'main')"
     ).fetchall() == [("users", "provider", ["id"], ["select", "insert", "update", "delete", "alter"])]
 
 
 def test_describe_reports_provider_columns(con, provider):
     columns, primary_key, verbs, _ = con.execute(
-        "SELECT * FROM provider_table_describe('app', schema := 'main', \"table\" := 'users')"
+        "SELECT * FROM vcatprovider_table_describe('app', schema := 'main', \"table\" := 'users')"
     ).fetchone()
     assert [c["name"] for c in columns] == ["id", "name", "score", "joined"]
     assert (primary_key, verbs) == (["id"], ["select", "insert", "update", "delete", "alter"])
@@ -171,11 +171,13 @@ def test_drop_table_is_refused(con, provider):
 
 
 def test_invalidate_picks_up_a_new_table(con, provider):
-    assert con.execute("SELECT count(*) FROM provider_table_permissions('app', schema := 'main')").fetchone() == (1,)
+    assert con.execute("SELECT count(*) FROM vcatprovider_table_permissions('app', schema := 'main')").fetchone() == (
+        1,
+    )
     provider.add_table("later", USERS, primary_key=["id"])
     provider.invalidate()
     assert con.execute(
-        "SELECT name FROM provider_table_permissions('app', schema := 'main') ORDER BY name"
+        "SELECT name FROM vcatprovider_table_permissions('app', schema := 'main') ORDER BY name"
     ).fetchall() == [
         ("later",),
         ("users",),
@@ -199,7 +201,7 @@ def test_attach_options_register_the_provider(con):
         (3, None),
     ]
     assert con.execute(
-        "SELECT name, kind, verbs FROM provider_table_permissions('attached', schema := 'main')"
+        "SELECT name, kind, verbs FROM vcatprovider_table_permissions('attached', schema := 'main')"
     ).fetchall() == [("users", "provider", ["select", "insert", "update", "delete", "alter"])]
 
 
@@ -216,10 +218,12 @@ def test_attach_options_serve_every_schema_the_list_names(con):
     con.create_function("m_list", m_list, [], VARCHAR)
     con.create_function("m_schema", m_schema, [VARCHAR], BLOB)
     con.create_function("m_scan", m_scan, [VARCHAR, VARCHAR_LIST, VARCHAR], BLOB)
-    con.execute("ATTACH '' AS multi (TYPE virtual_catalog_provider, list m_list, schema m_schema, scan m_scan)")
+    con.execute("ATTACH '' AS multi (TYPE vcatprovider, list m_list, schema m_schema, scan m_scan)")
 
     assert con.execute("SELECT id FROM multi.reporting.events").fetchall() == [(7,)]
-    assert con.execute("SELECT schema, name FROM provider_table_permissions('multi') ORDER BY schema").fetchall() == [
+    assert con.execute(
+        "SELECT schema, name FROM vcatprovider_table_permissions('multi') ORDER BY schema"
+    ).fetchall() == [
         ("main", "users"),
         ("reporting", "events"),
     ]
@@ -238,7 +242,7 @@ def test_an_unqualified_listed_name_is_refused(con):
     con.create_function("u_list", u_list, [], VARCHAR)
     con.create_function("u_schema", u_schema, [VARCHAR], BLOB)
     con.create_function("u_scan", u_scan, [VARCHAR, VARCHAR_LIST, VARCHAR], BLOB)
-    con.execute("ATTACH '' AS bare (TYPE virtual_catalog_provider, list u_list, schema u_schema, scan u_scan)")
+    con.execute("ATTACH '' AS bare (TYPE vcatprovider, list u_list, schema u_schema, scan u_scan)")
 
     with pytest.raises(Exception, match="schema.table"):
         con.execute("SELECT * FROM bare.main.users").fetchall()
@@ -246,15 +250,15 @@ def test_an_unqualified_listed_name_is_refused(con):
 
 def test_a_partial_attach_option_set_is_refused(con):
     with pytest.raises(Exception, match="LIST, SCHEMA and SCAN"):
-        con.execute("ATTACH '' AS partial (TYPE virtual_catalog_provider, list only_list)")
+        con.execute("ATTACH '' AS partial (TYPE vcatprovider, list only_list)")
 
 
 def test_provider_without_write_udfs_is_read_only(con):
-    con.execute("ATTACH ':memory:' AS ro (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS ro (TYPE vcatprovider)")
     p = FakeProvider(con, catalog="ro", writeable=False, editable=False)
     p.add_table("users", USERS, primary_key=["id"])
     p.register(prefix="ro")
-    assert con.execute("SELECT kind, verbs FROM provider_table_permissions('ro', schema := 'main')").fetchall() == [
+    assert con.execute("SELECT kind, verbs FROM vcatprovider_table_permissions('ro', schema := 'main')").fetchall() == [
         ("provider", ["select"])
     ]
     with pytest.raises(Exception, match="does not support ALTER"):
@@ -263,11 +267,13 @@ def test_provider_without_write_udfs_is_read_only(con):
 
 def test_unregister_removes_the_tables(con, provider):
     provider.unregister()
-    assert con.execute("SELECT count(*) FROM provider_table_permissions('app', schema := 'main')").fetchone() == (0,)
+    assert con.execute("SELECT count(*) FROM vcatprovider_table_permissions('app', schema := 'main')").fetchone() == (
+        0,
+    )
     with pytest.raises(Exception):
         con.execute("SELECT * FROM app.main.users").fetchall()
     with pytest.raises(Exception, match="no provider registered"):
-        con.execute("SELECT provider_unregister('app')")
+        con.execute("SELECT vcatprovider_unregister('app')")
 
 
 def test_native_tables_coexist_with_provider_tables(con, provider):
@@ -277,12 +283,12 @@ def test_native_tables_coexist_with_provider_tables(con, provider):
         "SELECT u.name, l.tag FROM app.main.users u JOIN app.main.local l USING (id) ORDER BY u.id"
     ).fetchall() == [("ana", "one"), ("bo", "two")]
     assert con.execute(
-        "SELECT name, kind FROM provider_table_permissions('app', schema := 'main') ORDER BY name"
+        "SELECT name, kind FROM vcatprovider_table_permissions('app', schema := 'main') ORDER BY name"
     ).fetchall() == [("local", "native_table"), ("users", "provider")]
 
 
 def test_provider_lists_a_schema_sql_already_created(con):
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     con.execute("CREATE SCHEMA app.public")
     con.execute("CREATE TABLE app.public.local(id INTEGER)")
     p = FakeProvider(con, schema="public")
@@ -290,12 +296,12 @@ def test_provider_lists_a_schema_sql_already_created(con):
     p.register()
     assert con.execute("SELECT count(*) FROM app.public.users").fetchone() == (3,)
     assert con.execute(
-        "SELECT name, kind FROM provider_table_permissions('app', schema := 'public') ORDER BY name"
+        "SELECT name, kind FROM vcatprovider_table_permissions('app', schema := 'public') ORDER BY name"
     ).fetchall() == [("local", "native_table"), ("users", "provider")]
 
 
 def test_a_raising_scan_udf_surfaces_as_a_query_error(con):
-    con.execute("ATTACH ':memory:' AS bad (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS bad (TYPE vcatprovider)")
 
     def boom_list():
         return "main.t"
@@ -309,13 +315,13 @@ def test_a_raising_scan_udf_surfaces_as_a_query_error(con):
     con.create_function("b_list", boom_list, [], VARCHAR)
     con.create_function("b_schema", boom_schema, [VARCHAR], BLOB)
     con.create_function("b_scan", boom_scan, [VARCHAR, VARCHAR_LIST, VARCHAR], BLOB)
-    con.execute("SELECT provider_register('bad', 'b_list', 'b_schema', 'b_scan', '', '', '', '')")
+    con.execute("SELECT vcatprovider_register('bad', 'b_list', 'b_schema', 'b_scan', '', '', '', '')")
     with pytest.raises(Exception, match="provider exploded"):
         con.execute("SELECT * FROM bad.main.t").fetchall()
 
 
 def test_a_malformed_arrow_payload_is_reported_not_crashed(con):
-    con.execute("ATTACH ':memory:' AS junk (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS junk (TYPE vcatprovider)")
 
     def junk_list():
         return "main.t"
@@ -325,7 +331,7 @@ def test_a_malformed_arrow_payload_is_reported_not_crashed(con):
 
     con.create_function("j_list", junk_list, [], VARCHAR)
     con.create_function("j_schema", junk_schema, [VARCHAR], BLOB)
-    con.execute("SELECT provider_register('junk', 'j_list', 'j_schema', 'j_scan', '', '', '', '')")
+    con.execute("SELECT vcatprovider_register('junk', 'j_list', 'j_schema', 'j_scan', '', '', '', '')")
     with pytest.raises(Exception, match="Arrow"):
         con.execute("SELECT * FROM junk.main.t").fetchall()
 
@@ -337,7 +343,7 @@ def test_a_write_matching_nothing_by_constant_reports_zero(con, provider):
 
 
 def test_a_primary_key_that_names_no_column_is_refused(con):
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     p = FakeProvider(con)
     p.add_table("users", USERS, primary_key=["ID"])
     p.register()
@@ -352,7 +358,7 @@ class NegativeCountProvider(FakeProvider):
 
 
 def test_a_negative_row_count_from_a_write_udf_is_an_error(con):
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     p = NegativeCountProvider(con)
     p.add_table("users", USERS, primary_key=["id"])
     p.register()
@@ -362,18 +368,18 @@ def test_a_negative_row_count_from_a_write_udf_is_an_error(con):
 
 
 def test_provider_register_refuses_empty_read_functions(con):
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     with pytest.raises(duckdb.BinderException, match="non-empty list, schema and scan"):
-        con.execute("SELECT provider_register('app', '', '', '', '', '', '', '')")
+        con.execute("SELECT vcatprovider_register('app', '', '', '', '', '', '', '')")
 
 
 def test_explain_does_not_run_provider_unregister(con, provider):
-    con.execute("EXPLAIN SELECT provider_unregister('app')").fetchall()
+    con.execute("EXPLAIN SELECT vcatprovider_unregister('app')").fetchall()
     provider.invalidate()
 
 
 def test_update_of_a_column_whose_name_contains_a_comma(con):
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     p = FakeProvider(con)
     odd = pa.table({"id": pa.array([1], type=pa.int32()), "a,b": pa.array([1], type=pa.int32())})
     p.add_table("odd", odd, primary_key=["id"])
@@ -397,7 +403,7 @@ def test_a_provider_scan_inside_a_recursive_cte_is_refused(con, provider):
 
 def _registered_in_own_database(users):
     con = new_connection(bridge=False, provider=True)
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     p = FakeProvider(con)
     p.add_table("users", users, primary_key=["id"])
     p.register()
@@ -406,7 +412,7 @@ def _registered_in_own_database(users):
 
 def _provider_tables(con):
     return sorted(
-        r[0] for r in con.execute("SELECT name FROM provider_table_permissions('app', schema := 'main')").fetchall()
+        r[0] for r in con.execute("SELECT name FROM vcatprovider_table_permissions('app', schema := 'main')").fetchall()
     )
 
 

@@ -1,4 +1,4 @@
-# name: test/sql/bridge/virtual_catalog_on_conflict.test
+# name: test/sql/bridge/vcatbridge_on_conflict.test
 # description: ON CONFLICT on a bridged table, against the source's own unique constraints
 # group: [bridge]
 
@@ -11,10 +11,10 @@ statement ok
 INSERT INTO memory.main.users VALUES (1, 'a'), (2, 'b');
 
 statement ok
-SELECT bridge_register_source('oc_b', 'memory', 'tok_oc_b');
+SELECT vcatbridge_register_source('oc_b', 'memory', 'tok_oc_b');
 
 statement ok
-SELECT bridge_set_policy('oc_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
+SELECT vcatbridge_set_policy('oc_b', 'main.users', v, true) FROM (VALUES ('select'), ('insert'), ('update'), ('delete')) _(v);
 
 statement ok
 ATTACH '' AS ws (TYPE vcatbridge, ID 'oc_b', TOKEN 'tok_oc_b');

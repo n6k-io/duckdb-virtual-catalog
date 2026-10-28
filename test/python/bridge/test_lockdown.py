@@ -1,4 +1,4 @@
-"""virtual_catalog_lockdown against the bridge: a locked instance can still be a target, a source, a
+"""vcatbridge_lockdown against the bridge: a locked instance can still be a target, a source, a
 middle hop, or both ends of a same-instance bridge."""
 
 import duckdb
@@ -8,7 +8,7 @@ from conftest import READ, READWRITE, bridge, new_connection, unbridge
 
 
 def lockdown(con, memory_limit="512MB", threads=2):
-    assert con.execute("SELECT virtual_catalog_lockdown(?, ?)", [memory_limit, threads]).fetchone() == ("ok",)
+    assert con.execute("SELECT vcatbridge_lockdown(?, ?)", [memory_limit, threads]).fetchone() == ("ok",)
 
 
 @pytest.fixture
@@ -73,9 +73,9 @@ def test_locked_source_still_grants(pair):
     source, target = pair
     lockdown(source)
     bridge_id = bridge(source, target, {"users": READ})
-    source.execute("SELECT bridge_set_context(?, 'tenant', 1)", [bridge_id])
+    source.execute("SELECT vcatbridge_set_context(?, 'tenant', 1)", [bridge_id])
     source.execute("CREATE TABLE logs(id INTEGER PRIMARY KEY)")
-    source.execute("SELECT bridge_set_policy(?, 'main.logs', 'select', 'id = $tenant')", [bridge_id])
+    source.execute("SELECT vcatbridge_set_policy(?, 'main.logs', 'select', 'id = $tenant')", [bridge_id])
     source.execute("INSERT INTO logs VALUES (1), (2)")
     assert target.execute("SELECT id FROM app.main.logs").fetchall() == [(1,)]
 
@@ -113,25 +113,25 @@ def test_second_call_is_refused(target):
 @pytest.mark.parametrize("args", [(None, 2), ("512MB", None)], ids=["memory_limit", "threads"])
 def test_null_argument_is_refused(target, args):
     with pytest.raises(duckdb.InvalidInputException, match="must not be NULL"):
-        target.execute("SELECT virtual_catalog_lockdown(?, ?)", list(args))
+        target.execute("SELECT vcatbridge_lockdown(?, ?)", list(args))
     assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
 
 
 def test_once_per_row_is_refused(target):
     with pytest.raises(duckdb.InvalidInputException, match="once"):
-        target.execute("SELECT virtual_catalog_lockdown('512MB', 2) FROM range(3)")
+        target.execute("SELECT vcatbridge_lockdown('512MB', 2) FROM range(3)")
     assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
 
 
 @pytest.mark.parametrize("memory_limit", ["-1", "none", "null", "NONE"])
 def test_unlimited_memory_limit_is_refused(target, memory_limit):
     with pytest.raises(duckdb.InvalidInputException, match="memory_limit"):
-        target.execute("SELECT virtual_catalog_lockdown(?, 2)", [memory_limit])
+        target.execute("SELECT vcatbridge_lockdown(?, 2)", [memory_limit])
     assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
 
 
 def test_drop_functions(source, target):
-    target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ['read_text', 'md5', 'version'])")
+    target.execute("SELECT vcatbridge_lockdown('512MB', 2, ['read_text', 'md5', 'version'])")
     for sql in ["SELECT * FROM read_text('x')", "SELECT md5('x')", "SELECT version()", "PRAGMA version"]:
         with pytest.raises(duckdb.CatalogException):
             target.execute(sql)
@@ -140,7 +140,7 @@ def test_drop_functions(source, target):
 
 def test_drop_functions_unknown_name_is_refused(target):
     with pytest.raises(duckdb.InvalidInputException, match='no system function named "no_such_fn"'):
-        target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ['md5', 'no_such_fn'])")
+        target.execute("SELECT vcatbridge_lockdown('512MB', 2, ['md5', 'no_such_fn'])")
     assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
     assert target.execute("SELECT md5('x')").fetchone() == ("9dd4e461268c8034f5c8564e155c67a6",)
 
@@ -148,14 +148,14 @@ def test_drop_functions_unknown_name_is_refused(target):
 @pytest.mark.parametrize("names", [None, ["md5", None]], ids=["list", "element"])
 def test_drop_functions_null_is_refused(target, names):
     with pytest.raises(duckdb.InvalidInputException, match="drop_functions must not"):
-        target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ?::VARCHAR[])", [names])
+        target.execute("SELECT vcatbridge_lockdown('512MB', 2, ?::VARCHAR[])", [names])
     assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
 
 
 def test_transaction_is_refused(target):
     target.execute("BEGIN")
     with pytest.raises(duckdb.PermissionException, match="inside a transaction"):
-        target.execute("SELECT virtual_catalog_lockdown('512MB', 2, ['md5'])")
+        target.execute("SELECT vcatbridge_lockdown('512MB', 2, ['md5'])")
     target.execute("ROLLBACK")
     assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
     assert target.execute("SELECT md5('x')").fetchone() == ("9dd4e461268c8034f5c8564e155c67a6",)

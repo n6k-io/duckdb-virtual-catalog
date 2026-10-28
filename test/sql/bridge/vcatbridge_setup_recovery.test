@@ -1,4 +1,4 @@
-# name: test/sql/bridge/virtual_catalog_setup_recovery.test
+# name: test/sql/bridge/vcatbridge_setup_recovery.test
 # description: an attach refused before redemption must leave the pending source intact
 # group: [bridge]
 
@@ -8,10 +8,10 @@ statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
 
 statement ok
-SELECT bridge_register_source('recv_a', 'memory', 'tok_recv_a');
+SELECT vcatbridge_register_source('recv_a', 'memory', 'tok_recv_a');
 
 statement ok
-SELECT bridge_set_policy('recv_a', 'main.users', 'select', 'true');
+SELECT vcatbridge_set_policy('recv_a', 'main.users', 'select', 'true');
 
 # Every refusal is raised before the pending source is taken, so a bad attach costs the caller
 # neither the token nor the grant script.

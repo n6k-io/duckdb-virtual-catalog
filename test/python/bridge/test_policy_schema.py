@@ -1,4 +1,4 @@
-"""The JSON Schema in docs/ and bridge_configure_policy accept and refuse the same documents."""
+"""The JSON Schema in docs/ and vcatbridge_configure_policy accept and refuse the same documents."""
 
 import json
 import pathlib
@@ -22,7 +22,7 @@ def pending(source):
     source.execute("CREATE TABLE orgs(id INTEGER PRIMARY KEY)")
     source.execute("CREATE TABLE members(id INTEGER PRIMARY KEY, org_id INTEGER REFERENCES orgs(id))")
     bridge_id = unique_id()
-    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id])
     return source, bridge_id
 
 
@@ -34,7 +34,9 @@ def test_the_schema_is_a_valid_schema():
 def test_valid_documents_pass_both(pending, path):
     source, bridge_id = pending
     jsonschema.validate(json.loads(path.read_text()), SCHEMA)
-    assert source.execute("SELECT bridge_configure_policy(?, ?)", [bridge_id, path.read_text()]).fetchone() == ("ok",)
+    assert source.execute("SELECT vcatbridge_configure_policy(?, ?)", [bridge_id, path.read_text()]).fetchone() == (
+        "ok",
+    )
 
 
 @pytest.mark.parametrize("path", INVALID, ids=[p.stem for p in INVALID])
@@ -43,7 +45,7 @@ def test_invalid_documents_fail_both(pending, path):
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(json.loads(path.read_text()), SCHEMA)
     with pytest.raises(duckdb.IOException):
-        source.execute("SELECT bridge_configure_policy(?, ?)", [bridge_id, path.read_text()])
+        source.execute("SELECT vcatbridge_configure_policy(?, ?)", [bridge_id, path.read_text()])
 
 
 def test_documented_examples_are_valid():
@@ -62,7 +64,7 @@ def test_documented_examples_are_valid():
 @pytest.mark.parametrize("path", VALID, ids=[p.stem for p in VALID])
 def test_valid_documents_validate_clean(pending, path):
     source, _ = pending
-    rows = source.execute("SELECT * FROM bridge_validate_policy_config('memory', ?)", [path.read_text()]).fetchall()
+    rows = source.execute("SELECT * FROM vcatbridge_validate_policy_config('memory', ?)", [path.read_text()]).fetchall()
     # A document that grants no table configures but cannot be attached.
     attach_only = (None, "error")
     assert [
@@ -73,5 +75,5 @@ def test_valid_documents_validate_clean(pending, path):
 @pytest.mark.parametrize("path", INVALID, ids=[p.stem for p in INVALID])
 def test_invalid_documents_report_an_error(pending, path):
     source, _ = pending
-    rows = source.execute("SELECT * FROM bridge_validate_policy_config('memory', ?)", [path.read_text()]).fetchall()
+    rows = source.execute("SELECT * FROM vcatbridge_validate_policy_config('memory', ?)", [path.read_text()]).fetchall()
     assert any(row[1] in ("error", "data_dependent") for row in rows)

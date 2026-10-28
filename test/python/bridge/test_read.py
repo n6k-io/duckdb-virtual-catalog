@@ -124,7 +124,7 @@ def test_source_writes_are_visible_immediately(bridged):
 
 
 def test_a_three_part_grant_name_must_name_the_source_catalog(source, target):
-    """The source catalog is fixed by bridge_register_source, so a third part may only repeat it."""
+    """The source catalog is fixed by vcatbridge_register_source, so a third part may only repeat it."""
     source.execute("ATTACH ':memory:' AS shop")
     source.execute("CREATE TABLE shop.main.orders(id INTEGER PRIMARY KEY, item VARCHAR)")
     source.execute(SETUP)
@@ -135,13 +135,13 @@ def test_a_three_part_grant_name_must_name_the_source_catalog(source, target):
 def test_a_bare_grant_name_is_rejected(source, target):
     source.execute(SETUP)
     bridge_id = unique_id()
-    source.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id])
+    source.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id])
     with pytest.raises(Exception, match="must be 'schema.table'"):
-        source.execute("SELECT bridge_set_policy(?, 'users', 'select', 'true')", [bridge_id])
+        source.execute("SELECT vcatbridge_set_policy(?, 'users', 'select', 'true')", [bridge_id])
 
 
 def test_source_tables_outside_the_default_catalog_reach_via_source_args(source, target):
-    """The source catalog is named in bridge_register_source; the schema comes from the grant."""
+    """The source catalog is named in vcatbridge_register_source; the schema comes from the grant."""
     source.execute("ATTACH ':memory:' AS shop")
     source.execute("CREATE TABLE shop.main.orders(id INTEGER PRIMARY KEY, item VARCHAR)")
     source.execute("INSERT INTO shop.main.orders VALUES (1, 'widget')")

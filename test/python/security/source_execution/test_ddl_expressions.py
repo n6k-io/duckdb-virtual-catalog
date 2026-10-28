@@ -25,7 +25,7 @@ def ddl_world():
     source.execute(SETUP)
     source.create_function("source_only", source_only, ["INTEGER"], "INTEGER")
     bridge_id = bridge(source, target, {"users": {"select": "true", "alter": "true", "update": "true"}})
-    source.execute("SELECT bridge_set_policy(?, 'main', 'create', 'true')", [bridge_id])
+    source.execute("SELECT vcatbridge_set_policy(?, 'main', 'create', 'true')", [bridge_id])
     yield source, target, calls
     source.close()
     target.close()

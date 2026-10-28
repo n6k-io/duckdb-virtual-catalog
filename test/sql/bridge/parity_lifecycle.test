@@ -8,10 +8,10 @@ statement ok
 CREATE TABLE memory.main.users(id INTEGER PRIMARY KEY, name VARCHAR);
 
 statement ok
-SELECT bridge_register_source('v2_recv_a', 'memory', 'tok_recv_a');
+SELECT vcatbridge_register_source('v2_recv_a', 'memory', 'tok_recv_a');
 
 statement ok
-SELECT bridge_set_policy('v2_recv_a', 'main.users', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_recv_a', 'main.users', 'select', 'true');
 
 # ---------------------------------------------------------------------------
 # An attach refused by token validation leaves the pending source spendable.
@@ -95,10 +95,10 @@ SELECT * FROM ws.main.users;
 <REGEX>:.*(no source|does not exist).*
 
 statement ok
-SELECT bridge_register_source('v2_recv_c', 'memory', 'tok_recv_c');
+SELECT vcatbridge_register_source('v2_recv_c', 'memory', 'tok_recv_c');
 
 statement ok
-SELECT bridge_set_policy('v2_recv_c', 'main.users', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_recv_c', 'main.users', 'select', 'true');
 
 statement ok
 ATTACH '' AS ws (TYPE vcatbridge, ID 'v2_recv_c', TOKEN 'tok_recv_c');

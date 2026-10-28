@@ -100,7 +100,7 @@ class FakeProvider:
     def register(self, prefix="p"):
         udfs = self.create_udfs(prefix)
         self.con.execute(
-            "SELECT provider_register(?, ?, ?, ?, ?, ?, ?, ?)",
+            "SELECT vcatprovider_register(?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 self.catalog,
                 udfs["list"],
@@ -117,13 +117,13 @@ class FakeProvider:
         """The other half of the same contract: the UDF set rides on ATTACH instead."""
         udfs = self.create_udfs(prefix)
         options = ", ".join(f"{verb} '{udf}'" for verb, udf in udfs.items() if udf)
-        self.con.execute(f"ATTACH '' AS {self.catalog} (TYPE virtual_catalog_provider, {options})")
+        self.con.execute(f"ATTACH '' AS {self.catalog} (TYPE vcatprovider, {options})")
 
     def invalidate(self):
-        self.con.execute("SELECT provider_invalidate_tables(?)", [self.catalog])
+        self.con.execute("SELECT vcatprovider_invalidate_tables(?)", [self.catalog])
 
     def unregister(self):
-        self.con.execute("SELECT provider_unregister(?)", [self.catalog])
+        self.con.execute("SELECT vcatprovider_unregister(?)", [self.catalog])
 
     # --- UDFs -----------------------------------------------------------------------------------
 

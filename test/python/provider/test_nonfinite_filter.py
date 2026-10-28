@@ -16,7 +16,7 @@ MEASUREMENTS = pa.table(
 
 @pytest.fixture
 def provider(con):
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     p = FakeProvider(con)
     p.add_table("measurements", MEASUREMENTS, primary_key=["id"])
     p.register()

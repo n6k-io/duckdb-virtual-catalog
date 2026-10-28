@@ -44,8 +44,8 @@ def register(source):
     source.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, tenant_id INTEGER, name VARCHAR)")
     source.execute("INSERT INTO users VALUES (1, 42, 'ada'), (2, 42, 'grace'), (3, 7, 'linus')")
     bridge_id = unique_id()
-    token = source.execute("SELECT bridge_register_source($1, 'memory')", [bridge_id]).fetchone()[0]
-    source.execute("SELECT bridge_set_policy($1, 'main.users', 'select', 'tenant_id = 42')", [bridge_id])
+    token = source.execute("SELECT vcatbridge_register_source($1, 'memory')", [bridge_id]).fetchone()[0]
+    source.execute("SELECT vcatbridge_set_policy($1, 'main.users', 'select', 'tenant_id = 42')", [bridge_id])
     return bridge_id, token
 
 
@@ -128,7 +128,7 @@ def test_bad_tokens_drop_registration(source, target):
 
 def test_init_after_lockdown_refused(source, target):
     bridge_id, token = register(source)
-    target.execute("SELECT virtual_catalog_lockdown('1GB', 2)")
+    target.execute("SELECT vcatbridge_lockdown('1GB', 2)")
     with pytest.raises(duckdb.Error, match="configuration is locked"):
         init(target, bridge_id, token)
 

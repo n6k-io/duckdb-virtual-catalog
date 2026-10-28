@@ -30,7 +30,7 @@ def test_two_bridges_serve_the_same_schema_name(two_sources, target):
 
     assert target.execute("SELECT v FROM app_a.main.alpha").fetchall() == [("from-a",)]
     assert target.execute("SELECT v FROM app_b.main.beta").fetchall() == [("from-b",)]
-    assert target.execute("SELECT schema, name FROM bridge_table_permissions('app_a')").fetchall() == [
+    assert target.execute("SELECT schema, name FROM vcatbridge_table_permissions('app_a')").fetchall() == [
         ("main", "alpha"),
     ]
 
@@ -82,7 +82,9 @@ def test_one_bridge_spans_two_source_schemas(two_sources, target):
 
     assert target.execute("SELECT v FROM app.main.alpha").fetchall() == [("from-a",)]
     assert target.execute("SELECT id FROM app.sales.orders").fetchall() == [(7,)]
-    assert target.execute("SELECT schema, name FROM bridge_table_permissions('app') ORDER BY schema").fetchall() == [
+    assert target.execute(
+        "SELECT schema, name FROM vcatbridge_table_permissions('app') ORDER BY schema"
+    ).fetchall() == [
         ("main", "alpha"),
         ("sales", "orders"),
     ]
@@ -99,8 +101,8 @@ def test_detach_frees_the_id_and_the_source(two_sources, target):
     bridge_id = bridge(a, target, {"alpha": READ})
     unbridge(target)
 
-    token = a.execute("SELECT bridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
-    a.execute("SELECT bridge_set_policy(?, 'main.alpha', 'select', 'true')", [bridge_id])
+    token = a.execute("SELECT vcatbridge_register_source(?, 'memory')", [bridge_id]).fetchone()[0]
+    a.execute("SELECT vcatbridge_set_policy(?, 'main.alpha', 'select', 'true')", [bridge_id])
     target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID '{bridge_id}', TOKEN '{token}')")
     assert target.execute("SELECT v FROM app.main.alpha").fetchall() == [("from-a",)]
     unbridge(target)

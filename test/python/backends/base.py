@@ -9,7 +9,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SEEDS = pathlib.Path(__file__).resolve().parent / "seeds"
 BUILT_EXTENSIONS = REPO_ROOT / "build/release/extension"
 BRIDGE_EXTENSION = BUILT_EXTENSIONS / "vcatbridge/vcatbridge.duckdb_extension"
-PROVIDER_EXTENSION = BUILT_EXTENSIONS / "virtual_catalog_provider/virtual_catalog_provider.duckdb_extension"
+PROVIDER_EXTENSION = BUILT_EXTENSIONS / "vcatprovider/vcatprovider.duckdb_extension"
 
 
 def new_connection(*, bridge=True, provider=False):

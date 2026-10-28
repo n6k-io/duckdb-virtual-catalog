@@ -18,20 +18,20 @@ INSERT INTO memory.main.logs VALUES (1,'boot'),(2,'halt');
 
 # First bridge: users only.
 statement ok
-SELECT bridge_register_source('v2_mb_a', 'memory', 'tok_mb_a');
+SELECT vcatbridge_register_source('v2_mb_a', 'memory', 'tok_mb_a');
 
 statement ok
-SELECT bridge_set_policy('v2_mb_a', 'main.users', 'select', 'true');
+SELECT vcatbridge_set_policy('v2_mb_a', 'main.users', 'select', 'true');
 
 statement ok
 ATTACH '' AS app_a (TYPE vcatbridge, ID 'v2_mb_a', TOKEN 'tok_mb_a');
 
 # Second bridge over the same source: logs only, with a policy of its own.
 statement ok
-SELECT bridge_register_source('v2_mb_b', 'memory', 'tok_mb_b');
+SELECT vcatbridge_register_source('v2_mb_b', 'memory', 'tok_mb_b');
 
 statement ok
-SELECT bridge_set_policy('v2_mb_b', 'main.logs', 'select', 'id = 1');
+SELECT vcatbridge_set_policy('v2_mb_b', 'main.logs', 'select', 'id = 1');
 
 statement ok
 ATTACH '' AS app_b (TYPE vcatbridge, ID 'v2_mb_b', TOKEN 'tok_mb_b');
@@ -67,10 +67,10 @@ ada	boot
 # A second bridge may serve a table another one already serves: they are separate catalogs, and the
 # policies are independent.
 statement ok
-SELECT bridge_register_source('v2_mb_c', 'memory', 'tok_mb_c');
+SELECT vcatbridge_register_source('v2_mb_c', 'memory', 'tok_mb_c');
 
 statement ok
-SELECT bridge_set_policy('v2_mb_c', 'main.users', 'select', 'id = 2');
+SELECT vcatbridge_set_policy('v2_mb_c', 'main.users', 'select', 'id = 2');
 
 statement ok
 ATTACH '' AS app_c (TYPE vcatbridge, ID 'v2_mb_c', TOKEN 'tok_mb_c');

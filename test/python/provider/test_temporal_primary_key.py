@@ -13,7 +13,7 @@ KEYS = {
 
 @pytest.fixture(params=KEYS.values(), ids=KEYS.keys())
 def provider(con, request):
-    con.execute("ATTACH ':memory:' AS app (TYPE virtual_catalog_provider)")
+    con.execute("ATTACH ':memory:' AS app (TYPE vcatprovider)")
     p = FakeProvider(con)
     p.add_table("events", pa.table({"k": request.param, "label": pa.array(["a", "b", "c"])}), primary_key=["k"])
     p.register()

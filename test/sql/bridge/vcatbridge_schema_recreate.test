@@ -1,4 +1,4 @@
-# name: test/sql/bridge/virtual_catalog_schema_recreate.test
+# name: test/sql/bridge/vcatbridge_schema_recreate.test
 # description: dropping and recreating a schema must not leave a wrapper bound to the dropped entry
 # group: [bridge]
 
@@ -17,10 +17,10 @@ statement ok
 CREATE TABLE memory.main.anchor(id INTEGER PRIMARY KEY);
 
 statement ok
-SELECT bridge_register_source('sr_b', 'memory', 'tok_sr_b');
+SELECT vcatbridge_register_source('sr_b', 'memory', 'tok_sr_b');
 
 statement ok
-SELECT bridge_set_policy('sr_b', 'main.anchor', 'select', 'true');
+SELECT vcatbridge_set_policy('sr_b', 'main.anchor', 'select', 'true');
 
 statement ok
 ATTACH '' AS ws (TYPE vcatbridge, ID 'sr_b', TOKEN 'tok_sr_b');

@@ -30,7 +30,7 @@ import sys
 sys.path.insert(0, {test_dir!r})
 from conftest import new_connection
 con = new_connection()
-con.execute("SELECT virtual_catalog_lockdown('{limit}MB', 1)")
+con.execute("SELECT vcatbridge_lockdown('{limit}MB', 1)")
 print("LOCKED", flush=True)
 sql = {sql}
 try:
