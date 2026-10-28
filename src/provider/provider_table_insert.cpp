@@ -51,9 +51,9 @@ SinkFinalizeType ProviderTableInsert::Finalize(Pipeline &pipeline, Event &event,
 	}
 
 	auto arrow_ipc = vcat_provider::EncodeChunksAsIpc(*conn->context, types, names, gstate.chunks);
-	gstate.affected_rows = NumericCast<idx_t>(
-	    vcat_provider::CallWriteUdf(*conn, table.table_info->provider->insert_udf, table.table_info->table_name,
-	                                arrow_ipc, vector<Value>(), "virtual_catalog_provider: insert UDF"));
+	gstate.affected_rows = NumericCast<idx_t>(vcat_provider::CallWriteUdf(*conn, table.table_info->provider->insert_udf,
+	                                                                      table.table_info->table_name, arrow_ipc,
+	                                                                      vector<Value>(), "vcatprovider: insert UDF"));
 
 	return SinkFinalizeType::READY;
 }

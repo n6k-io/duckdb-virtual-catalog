@@ -400,7 +400,7 @@ def test_alter_bridge_table_rejected():
 def _permissions(target, **filters):
     parts = ["'workspace'"] + [f'"{k}" := {v!r}' for k, v in filters.items()]
     rows = target.sql(
-        "SELECT name, kind, verbs, primary_key " f"FROM bridge_table_permissions({', '.join(parts)}) ORDER BY name"
+        "SELECT name, kind, verbs, primary_key " f"FROM vcatbridge_table_permissions({', '.join(parts)}) ORDER BY name"
     ).fetchall()
     # Each row's verbs as (writes insert/update/delete, alters).
     return [
@@ -809,7 +809,7 @@ def test_context_finalized_after_bridge():
     bridge_id = _bridge(source, target, [Policy("main.t", "select", "tenant_id = $tenant")], context={"tenant": 42})
 
     with pytest.raises(duckdb.Error, match="is finalized"):
-        source.sql("SELECT bridge_set_context($1, 'tenant', 7)", params=[bridge_id]).fetchone()
+        source.sql("SELECT vcatbridge_set_context($1, 'tenant', 7)", params=[bridge_id]).fetchone()
 
 
 def test_context_none_value_rejected():

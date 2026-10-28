@@ -59,17 +59,16 @@ SinkFinalizeType ProviderTableDelete::Finalize(Pipeline &pipeline, Event &event,
 	for (auto &id_val : gstate.id_values) {
 		auto buf_idx = id_val.GetValue<int64_t>();
 		builder.BeginRow();
-		for (auto &pk_value :
-		     PKBufferRow(pk_buffer.get(), buf_idx, pk_cols.size(), "virtual_catalog_provider: delete")) {
+		for (auto &pk_value : PKBufferRow(pk_buffer.get(), buf_idx, pk_cols.size(), "vcatprovider: delete")) {
 			builder.Append(pk_value);
 		}
-		builder.EndRow("virtual_catalog_provider: delete");
+		builder.EndRow("vcatprovider: delete");
 	}
 	auto chunks = builder.Finish();
 	auto arrow_ipc = vcat_provider::EncodeChunksAsIpc(*conn->context, pk_types, pk_cols, chunks);
-	auto affected = NumericCast<idx_t>(
-	    vcat_provider::CallWriteUdf(*conn, table.table_info->provider->delete_udf, table.table_info->table_name,
-	                                arrow_ipc, vector<Value>(), "virtual_catalog_provider: delete UDF"));
+	auto affected = NumericCast<idx_t>(vcat_provider::CallWriteUdf(*conn, table.table_info->provider->delete_udf,
+	                                                               table.table_info->table_name, arrow_ipc,
+	                                                               vector<Value>(), "vcatprovider: delete UDF"));
 	// The UDF has already run and nothing here can undo it: this reports, it does not prevent.
 	EnsureKeyIsUnique(affected, gstate.id_values.size(), table.table_info->table_name, pk_cols, "DELETE");
 	gstate.affected_rows = affected;

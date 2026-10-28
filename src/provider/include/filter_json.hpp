@@ -316,7 +316,7 @@ inline string SerializeFilters(const TableFilterSet &filter_set, const unordered
 		auto *json = yyjson_mut_write(doc, duckdb_yyjson::YYJSON_WRITE_ALLOW_INF_AND_NAN, &len);
 		if (!json) {
 			yyjson_mut_doc_free(doc);
-			throw InvalidInputException("virtual_catalog_provider: pushed filters could not be written as JSON");
+			throw InvalidInputException("vcatprovider: pushed filters could not be written as JSON");
 		}
 		out.assign(json, len);
 		free(json);

@@ -295,7 +295,7 @@ void BridgeInitFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	}
 	if (Settings::Get<LockConfigurationSetting>(DBConfig::GetConfig(db))) {
 		throw PermissionException("vcatbridge_init: the configuration is locked; call it before "
-		                          "virtual_catalog_lockdown");
+		                          "vcatbridge_lockdown");
 	}
 	optional_ptr<BridgeCatalog> main;
 	for (auto &attached : db.GetDatabaseManager().GetDatabases()) {

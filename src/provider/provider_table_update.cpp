@@ -112,14 +112,13 @@ SinkFinalizeType ProviderTableUpdate::Finalize(Pipeline &pipeline, Event &event,
 			rows_sent++;
 			auto buf_idx = chunk->GetValue(0, row).GetValue<int64_t>();
 			builder.BeginRow();
-			for (auto &pk_value :
-			     PKBufferRow(pk_buffer.get(), buf_idx, pk_cols.size(), "virtual_catalog_provider: update")) {
+			for (auto &pk_value : PKBufferRow(pk_buffer.get(), buf_idx, pk_cols.size(), "vcatprovider: update")) {
 				builder.Append(pk_value);
 			}
 			for (idx_t i = 0; i < update_columns.size(); i++) {
 				builder.Append(chunk->GetValue(i + 1, row));
 			}
-			builder.EndRow("virtual_catalog_provider: update");
+			builder.EndRow("vcatprovider: update");
 		}
 	}
 
@@ -127,8 +126,7 @@ SinkFinalizeType ProviderTableUpdate::Finalize(Pipeline &pipeline, Event &event,
 	auto arrow_ipc = vcat_provider::EncodeChunksAsIpc(*conn->context, row_types, row_col_names, chunks);
 	auto affected = NumericCast<idx_t>(vcat_provider::CallWriteUdf(
 	    *conn, table.table_info->provider->update_udf, table.table_info->table_name, arrow_ipc,
-	    vector<Value> {Value::LIST(LogicalType::VARCHAR, std::move(changed_col_names))},
-	    "virtual_catalog_provider: update UDF"));
+	    vector<Value> {Value::LIST(LogicalType::VARCHAR, std::move(changed_col_names))}, "vcatprovider: update UDF"));
 	// The UDF has already run and nothing here can undo it: this reports, it does not prevent.
 	EnsureKeyIsUnique(affected, rows_sent, table.table_info->table_name, pk_cols, "UPDATE");
 	gstate.affected_rows = affected;

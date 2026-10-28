@@ -61,18 +61,18 @@ Share `users` with tenant 42. They can read, insert and update their own rows, b
 ```python
 # Create bridge b1; the token lets the target connect once
 token = source.execute("""
-    SELECT bridge_register_source('b1', 'memory')
+    SELECT vcatbridge_register_source('b1', 'memory')
 """).fetchone()[0]
 
 # The tenant this bridge is for
 source.execute("""
-    SELECT bridge_set_context('b1', 'tenant', 42)
+    SELECT vcatbridge_set_context('b1', 'tenant', 42)
 """)
 
 # Each action only touches tenant 42's rows
 for verb in ["select", "insert", "update"]:
     source.execute(f"""
-        SELECT bridge_set_policy('b1', 'main.users', '{verb}', 'tenant_id = $tenant')
+        SELECT vcatbridge_set_policy('b1', 'main.users', '{verb}', 'tenant_id = $tenant')
     """)
 ```
 
@@ -105,7 +105,7 @@ Load `httpfs` now: Quack needs it, and after lockdown it can't be loaded.
 
 ```python
 target.execute("""
-    SELECT virtual_catalog_lockdown(
+    SELECT vcatbridge_lockdown(
         '1GB',                         -- memory limit
         2,                             -- threads
         ['quack_serve', 'quack_stop']  -- clients can't start or stop servers

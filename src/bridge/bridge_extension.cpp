@@ -9,8 +9,8 @@
 namespace duckdb {
 
 void VcatbridgeLoadInternal(ExtensionLoader &loader) {
-	RegisterTablePermissionsFunction(loader, "bridge_table_permissions");
-	RegisterTableDescribeFunction(loader, "bridge_table_describe");
+	RegisterTablePermissionsFunction(loader, "vcatbridge_table_permissions");
+	RegisterTableDescribeFunction(loader, "vcatbridge_table_describe");
 	RegisterBridgeFunctions(loader);
 	RegisterLockdownFunction(loader);
 	RegisterBridgeCatalog(loader);

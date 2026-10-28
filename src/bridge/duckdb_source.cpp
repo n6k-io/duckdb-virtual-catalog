@@ -170,7 +170,7 @@ PendingSource &LookupPendingForGrant(const string &bridge_id, ClientContext &con
 	auto it = PendingSources().find(bridge_id);
 	if (it == PendingSources().end()) {
 		throw PermissionException("vcatbridge: no registered source for bridge '%s'. "
-		                          "Call bridge_register_source on the source connection first.",
+		                          "Call vcatbridge_register_source on the source connection first.",
 		                          bridge_id);
 	}
 	if (it->second.source_db.get() != context.db.get()) {
@@ -276,7 +276,7 @@ void RegisterSourceFunc(DataChunk &args, ExpressionState &state, Vector &result)
 	for (idx_t c = 0; c < arg_count; c++) {
 		args.data[c].Flatten(count);
 	}
-	ThrowIfAnyNull(args, arg_count, "bridge_register_source");
+	ThrowIfAnyNull(args, arg_count, "vcatbridge_register_source");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto source_catalogs = FlatVector::GetData<string_t>(args.data[1]);
 	auto result_data = FlatVector::GetData<string_t>(result);
@@ -424,7 +424,7 @@ unique_ptr<ParsedExpression> ParseAndValidatePredicate(const shared_ptr<Relation
 		}
 		if (values && !values->count(name)) {
 			throw IOException("vcatbridge: the %s predicate '%s' uses context '$%s', which is not set; "
-			                  "call bridge_set_context before setting a policy that uses it",
+			                  "call vcatbridge_set_context before setting a policy that uses it",
 			                  clause, text, name);
 		}
 	}
@@ -981,8 +981,8 @@ void ValidateGrantSet(GrantTables &tables, const case_insensitive_set_t &create_
 		}
 	}
 	if (attaching && table_count == 0) {
-		throw PermissionException("vcatbridge: bridge '%s' has no policies; call bridge_configure_policy "
-		                          "or bridge_set_policy on the source connection before attaching",
+		throw PermissionException("vcatbridge: bridge '%s' has no policies; call vcatbridge_configure_policy "
+		                          "or vcatbridge_set_policy on the source connection before attaching",
 		                          bridge_id);
 	}
 }
@@ -1261,7 +1261,7 @@ void SetPolicyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		auto value_column = has_op ? 4 : 3;
 		for (idx_t c = 0; c < static_cast<idx_t>(value_column); c++) {
 			if (args.data[c].GetValue(i).IsNull()) {
-				throw IOException("vcatbridge: argument %llu of bridge_set_policy cannot be NULL",
+				throw IOException("vcatbridge: argument %llu of vcatbridge_set_policy cannot be NULL",
 				                  static_cast<uint64_t>(c + 1));
 			}
 		}
@@ -1287,7 +1287,7 @@ void ConfigurePolicyFunc(DataChunk &args, ExpressionState &state, Vector &result
 	auto count = args.size();
 	args.data[0].Flatten(count);
 	args.data[1].Flatten(count);
-	ThrowIfAnyNull(args, 2, "bridge_configure_policy");
+	ThrowIfAnyNull(args, 2, "vcatbridge_configure_policy");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto documents = FlatVector::GetData<string_t>(args.data[1]);
 	auto result_data = FlatVector::GetData<string_t>(result);
@@ -1311,7 +1311,7 @@ unique_ptr<FunctionData> ValidatePolicyBind(ClientContext &context, TableFunctio
 	return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
 	for (idx_t c = 0; c < input.inputs.size(); c++) {
 		if (input.inputs[c].IsNull()) {
-			throw IOException("vcatbridge: argument %llu of bridge_validate_policy_config cannot be NULL",
+			throw IOException("vcatbridge: argument %llu of vcatbridge_validate_policy_config cannot be NULL",
 			                  static_cast<uint64_t>(c + 1));
 		}
 	}
@@ -1424,7 +1424,7 @@ void SetContextFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		auto name_value = args.data[1].GetValue(i);
 		auto value = args.data[2].GetValue(i);
 		if (id_value.IsNull() || name_value.IsNull()) {
-			throw IOException("vcatbridge: bridge_set_context needs a bridge id and a context name");
+			throw IOException("vcatbridge: vcatbridge_set_context needs a bridge id and a context name");
 		}
 		auto bridge_id = StringValue::Get(id_value);
 		auto name = StringValue::Get(name_value);
@@ -1472,7 +1472,7 @@ void FinalizeContextFunc(DataChunk &args, ExpressionState &state, Vector &result
 	auto &context = state.GetContext();
 	auto count = args.size();
 	args.data[0].Flatten(count);
-	ThrowIfAnyNull(args, 1, "bridge_finalize_context");
+	ThrowIfAnyNull(args, 1, "vcatbridge_finalize_context");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto result_data = FlatVector::GetData<string_t>(result);
 
@@ -1493,7 +1493,7 @@ void FinalizePolicyFunc(DataChunk &args, ExpressionState &state, Vector &result)
 	auto &context = state.GetContext();
 	auto count = args.size();
 	args.data[0].Flatten(count);
-	ThrowIfAnyNull(args, 1, "bridge_finalize_policy");
+	ThrowIfAnyNull(args, 1, "vcatbridge_finalize_policy");
 	auto bridge_ids = FlatVector::GetData<string_t>(args.data[0]);
 	auto result_data = FlatVector::GetData<string_t>(result);
 
@@ -2358,7 +2358,7 @@ CrossingScan DuckDBSession::Read(ClientContext &, const CrossingQuery &query) {
 }
 
 void RegisterBridgeFunctions(ExtensionLoader &loader) {
-	ScalarFunctionSet register_source_set("bridge_register_source");
+	ScalarFunctionSet register_source_set("vcatbridge_register_source");
 	ScalarFunction register_source({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                               RegisterSourceFunc);
 	register_source.stability = FunctionStability::VOLATILE;
@@ -2371,7 +2371,7 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	register_source_set.AddFunction(register_source_token);
 	loader.RegisterFunction(register_source_set);
 
-	ScalarFunctionSet set_policy_set("bridge_set_policy");
+	ScalarFunctionSet set_policy_set("vcatbridge_set_policy");
 	ScalarFunction set_policy({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
 	                          LogicalType::VARCHAR, SetPolicyFunc);
 	set_policy.stability = FunctionStability::VOLATILE;
@@ -2385,29 +2385,29 @@ void RegisterBridgeFunctions(ExtensionLoader &loader) {
 	set_policy_set.AddFunction(set_policy_list);
 	loader.RegisterFunction(set_policy_set);
 
-	ScalarFunction configure_policy("bridge_configure_policy", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	ScalarFunction configure_policy("vcatbridge_configure_policy", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                LogicalType::VARCHAR, ConfigurePolicyFunc);
 	configure_policy.stability = FunctionStability::VOLATILE;
 	configure_policy.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(configure_policy);
 
-	TableFunction validate_policy("bridge_validate_policy_config", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	TableFunction validate_policy("vcatbridge_validate_policy_config", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                              ValidatePolicyScan, ValidatePolicyBind, ValidatePolicyInitGlobal);
 	loader.RegisterFunction(validate_policy);
 
-	ScalarFunction set_context("bridge_set_context", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
+	ScalarFunction set_context("vcatbridge_set_context", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::ANY},
 	                           LogicalType::VARCHAR, SetContextFunc);
 	set_context.stability = FunctionStability::VOLATILE;
 	set_context.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(set_context);
 
-	ScalarFunction finalize_context("bridge_finalize_context", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	ScalarFunction finalize_context("vcatbridge_finalize_context", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                                FinalizeContextFunc);
 	finalize_context.stability = FunctionStability::VOLATILE;
 	finalize_context.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(finalize_context);
 
-	ScalarFunction finalize_policy("bridge_finalize_policy", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	ScalarFunction finalize_policy("vcatbridge_finalize_policy", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                               FinalizePolicyFunc);
 	finalize_policy.stability = FunctionStability::VOLATILE;
 	finalize_policy.null_handling = FunctionNullHandling::SPECIAL_HANDLING;

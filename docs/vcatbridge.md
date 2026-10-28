@@ -8,7 +8,7 @@ per-verb grants and row policies.
 No network, no external server. Pure SQL API, usable from any DuckDB binding
 (C++, Python, Go, Node, etc.).
 
-Its sibling, [`virtual_catalog_provider`](virtual-catalog-provider.md), backs
+Its sibling, [`vcatprovider`](vcatprovider.md), backs
 tables with host-registered UDFs instead. The two are separate extensions with
 separate catalog types and no shared SQL; either can be loaded without the
 other, and a single attached catalog is one or the other, never both.
@@ -24,14 +24,14 @@ source schema, named the same.
 
 ```sql
 -- 1. On the SOURCE: register, receive a one-time token.
-SELECT bridge_register_source('b1', 'source_catalog');
+SELECT vcatbridge_register_source('b1', 'source_catalog');
 -- → 'NONCE:UUID'
 
 -- 2. On the SOURCE: set any context values the policy references.
-SELECT bridge_set_context('b1', 'tenant', 42);
+SELECT vcatbridge_set_context('b1', 'tenant', 42);
 
 -- 3. On the SOURCE: set the policy, as one document...
-SELECT bridge_configure_policy('b1', '{
+SELECT vcatbridge_configure_policy('b1', '{
   "policy_version": 1,
   "tables": {
     "main.users":   {"select": true, "update": "tenant_id = $tenant"},
@@ -40,7 +40,7 @@ SELECT bridge_configure_policy('b1', '{
   }
 }');
 -- ...or a setting at a time.
-SELECT bridge_set_policy('b1', 'main.users', 'select', true);
+SELECT vcatbridge_set_policy('b1', 'main.users', 'select', true);
 -- → 'ok'
 
 -- 4. On the TARGET: redeem the token into a new catalog.
@@ -63,7 +63,7 @@ target.execute("SELECT vcatbridge_init($1, $2)", ["b1", token])
 The extension then loads by name as the database opens, so it must already be
 installed, and the source must load that same installed copy. Until init, the
 main database refuses every lookup; init runs once, and not after
-`virtual_catalog_lockdown`. Quack clients see the main database on
+`vcatbridge_lockdown`. Quack clients see the main database on
 `ATTACH 'quack:...'`.
 
 The token contains a nonce unique to the loaded extension binary — mismatched
@@ -72,20 +72,20 @@ consumed — the clock measures inactivity, so it covers the whole policy script
 rather than the first call alone. The policy is declared by the source (trusted
 side) and cannot be modified by the target: every policy and context function
 refuses any connection whose `DatabaseInstance` is not the one that called
-`bridge_register_source` — so any connection on the source instance may change
+`vcatbridge_register_source` — so any connection on the source instance may change
 the policy, but no connection outside it can. Once the token is redeemed the
-policy stays open, like the [context](#context-values): `bridge_configure_policy`
-and `bridge_set_policy` still work, and the target's next statement — inside an
+policy stays open, like the [context](#context-values): `vcatbridge_configure_policy`
+and `vcatbridge_set_policy` still work, and the target's next statement — inside an
 open transaction too — sees the change. While a target transaction has DDL
 through the bridge that it has not committed, table and schema policy changes are
-refused (`:functions` whitelist changes are not); retry after it ends. `bridge_finalize_policy(bridge_id)` freezes the policy from that
+refused (`:functions` whitelist changes are not); retry after it ends. `vcatbridge_finalize_policy(bridge_id)` freezes the policy from that
 call on, before or after `ATTACH`.
 
 A source that already holds a secret can name the token itself, with the 3-arg
 form. This is also what lets a test hardcode one:
 
 ```sql
-SELECT bridge_register_source('b1', 'source_catalog', 'my-secret');
+SELECT vcatbridge_register_source('b1', 'source_catalog', 'my-secret');
 ATTACH '' AS my_bridge (TYPE vcatbridge, ID 'b1', TOKEN 'my-secret');
 ```
 
@@ -139,20 +139,20 @@ not granted is refused, and a table with no granted verb is not in the catalog
 
 Two functions set it. They take the same settings under the same names.
 
-- `bridge_configure_policy(bridge_id, json)` replaces the whole policy with one
+- `vcatbridge_configure_policy(bridge_id, json)` replaces the whole policy with one
   document. The document is checked in full — against the JSON rules and against
   the source — before anything changes, so a failing document leaves the
   installed policy as it was. Order inside the document never matters.
-- `bridge_set_policy(bridge_id, target, setting, value)` changes one setting.
+- `vcatbridge_set_policy(bridge_id, target, setting, value)` changes one setting.
   Assigning a setting overwrites it; `NULL` removes it. List settings take an
-  operation instead: `bridge_set_policy(bridge_id, target, setting, op, value)`
+  operation instead: `vcatbridge_set_policy(bridge_id, target, setting, op, value)`
   with `op` one of `add`, `remove`, `set`.
 
-`bridge_validate_policy_config(source_catalog, json)` checks a document against
+`vcatbridge_validate_policy_config(source_catalog, json)` checks a document against
 the source with no bridge registered, and returns a row per failing setting; see
 [SQL API](sql-api.md#policy-validation).
 
-Both work before and after `ATTACH`, until `bridge_finalize_policy`. Before
+Both work before and after `ATTACH`, until `vcatbridge_finalize_policy`. Before
 `ATTACH` the policy may be built a setting at a time in any order; `ATTACH`
 checks that it holds together. After `ATTACH`, every change must leave a policy
 that holds together on its own.
@@ -195,20 +195,20 @@ that holds together on its own.
 
 ```sql
 -- assign: the value replaces what was there
-SELECT bridge_set_policy('b1', 'main.users', 'select', 'tenant = $tenant');
-SELECT bridge_set_policy('b1', 'main.users', 'delete', true);
-SELECT bridge_set_policy('b1', 'main.users', 'update', {'using': 'tenant = $tenant', 'check': 'tenant = $tenant'});
-SELECT bridge_set_policy('b1', 'main.users', 'primary_key', ['id']);
-SELECT bridge_set_policy('b1', 'main', 'create', true);
+SELECT vcatbridge_set_policy('b1', 'main.users', 'select', 'tenant = $tenant');
+SELECT vcatbridge_set_policy('b1', 'main.users', 'delete', true);
+SELECT vcatbridge_set_policy('b1', 'main.users', 'update', {'using': 'tenant = $tenant', 'check': 'tenant = $tenant'});
+SELECT vcatbridge_set_policy('b1', 'main.users', 'primary_key', ['id']);
+SELECT vcatbridge_set_policy('b1', 'main', 'create', true);
 
 -- remove
-SELECT bridge_set_policy('b1', 'main.users', 'delete', false);
-SELECT bridge_set_policy('b1', 'main.users', 'primary_key', NULL);
+SELECT vcatbridge_set_policy('b1', 'main.users', 'delete', false);
+SELECT vcatbridge_set_policy('b1', 'main.users', 'primary_key', NULL);
 
 -- list settings: add, remove or set
-SELECT bridge_set_policy('b1', 'main.users', 'foreign_keys', 'add', 'main.orgs');
-SELECT bridge_set_policy('b1', 'main.users', 'foreign_keys', 'set', ['main.orgs', 'main.teams']);
-SELECT bridge_set_policy('b1', ':functions', 'whitelist', 'add', 'my_udf');
+SELECT vcatbridge_set_policy('b1', 'main.users', 'foreign_keys', 'add', 'main.orgs');
+SELECT vcatbridge_set_policy('b1', 'main.users', 'foreign_keys', 'set', ['main.orgs', 'main.teams']);
+SELECT vcatbridge_set_policy('b1', ':functions', 'whitelist', 'add', 'my_udf');
 ```
 
 `target` is a table (`schema.table`), a schema for `create`, or `:functions`
@@ -227,8 +227,8 @@ by setup if absent.
 
 ```sql
 -- exposes shop.main.orders as b1_target.main.orders
-SELECT bridge_register_source('b1', 'shop');
-SELECT bridge_set_policy('b1', 'main.orders', 'select', true);
+SELECT vcatbridge_register_source('b1', 'shop');
+SELECT vcatbridge_set_policy('b1', 'main.orders', 'select', true);
 ```
 
 One bridge may span any number of source schemas. A catalog holds any number of
@@ -311,11 +311,11 @@ the source wrote it and can already read them — and may be non-deterministic
 ### Context values
 
 A predicate may reference `$name`, a value the source set on this bridge with
-`bridge_set_context(bridge_id, name, value)`:
+`vcatbridge_set_context(bridge_id, name, value)`:
 
 ```sql
-SELECT bridge_set_context('b1', 'tenant', 42);
-SELECT bridge_set_policy('b1', 'main.orders', 'select', 'tenant_id = $tenant');
+SELECT vcatbridge_set_context('b1', 'tenant', 42);
+SELECT vcatbridge_set_policy('b1', 'main.orders', 'select', 'tenant_id = $tenant');
 ```
 
 The predicate is stored with `$name` in it. Each target statement takes one
@@ -323,16 +323,16 @@ snapshot of the context and fills every `$name` in as a constant node, so all
 tables in a statement see the same values.
 
 - **Set before use.** A predicate naming an unset `$name` is refused, so call
-  `bridge_set_context` before the policy that uses it.
+  `vcatbridge_set_context` before the policy that uses it.
 - **Live.** The context stays changeable after `ATTACH`, like the policy:
-  `bridge_set_context` overwrites a value and the target's next statement —
+  `vcatbridge_set_context` overwrites a value and the target's next statement —
   a prepared one included — uses it.
 - **Checked on change.** A new value is bound into every predicate that uses it;
   one that stops a predicate binding or being BOOLEAN is refused and the old value
   stays. Binding casts nothing, so a value that only fails a cast (`'abc'`
   against an INTEGER column) passes, and the target's statement fails instead.
-- **Lockable.** `bridge_finalize_context(bridge_id)` freezes the context, before
-  or after `ATTACH`; every later `bridge_set_context` is refused. It is optional.
+- **Lockable.** `vcatbridge_finalize_context(bridge_id)` freezes the context, before
+  or after `ATTACH`; every later `vcatbridge_set_context` is refused. It is optional.
 - **Any type, never NULL.** The value keeps its type (`42` is an INTEGER,
   `DATE '2024-01-01'` a DATE).
 - **Named only.** Positional `$1` and `?` are refused.
@@ -375,7 +375,7 @@ whitelist starts as the built-ins that answer the same on either side.
   including function-backed operators (`+`, `*`, `~~` …). Comparisons, AND/OR,
   casts and CASE are not function calls and still push.
 
-The setter spells these `bridge_set_policy(id, ':functions', 'whitelist', op,
+The setter spells these `vcatbridge_set_policy(id, ':functions', 'whitelist', op,
 names)`. A change is live on the target's next statement.
 
 ## Primary keys
@@ -383,7 +383,7 @@ names)`. A change is live on the target's next statement.
 Tables granted `update` or `delete` require a primary key. The bridge discovers
 one by reading the `PRIMARY KEY` constraint off the source's own catalog entry —
 the only mechanism that carries no assumption about the source's catalog shape.
-Discovery runs for every verb, so `bridge_table_permissions` reports the key for
+Discovery runs for every verb, so `vcatbridge_table_permissions` reports the key for
 read-only tables too — but only `update` and `delete` make an empty result an
 error, since only they resolve rows back to the source by key.
 
@@ -402,7 +402,7 @@ runs your SQL on the source connection and reads column 0 of every row as a key
 column, in key order:
 
 ```sql
-SELECT bridge_set_policy('b1', 'main.orders', 'primary_key', {
+SELECT vcatbridge_set_policy('b1', 'main.orders', 'primary_key', {
   'columns_from_query': $$SELECT mysql_query('mydb', 'SHOW KEYS FROM orders WHERE Key_name = ''PRIMARY''')$$
 });
 ```
@@ -509,7 +509,7 @@ INSERT/UPDATE/DELETE.
 
 ## Introspecting grants
 
-`bridge_table_permissions` reports, per table/view in an attached catalog, which
+`vcatbridge_table_permissions` reports, per table/view in an attached catalog, which
 statements it accepts. It works on a `vcatbridge` catalog and on a
 plain DuckDB catalog. Signature and columns: [`sql-api.md`](sql-api.md).
 
@@ -522,8 +522,8 @@ kind:
 | `native_view` | `select` | empty |
 | `crossing` | the granted verbs | discovered from source |
 
-A `virtual_catalog_provider` catalog reports its own entries as `provider`;
-`provider_table_permissions` is the same function compiled into the provider.
+A `vcatprovider` catalog reports its own entries as `provider`;
+`vcatprovider_table_permissions` is the same function compiled into the provider.
 
 `verbs` is the single source of truth for capability. There is deliberately no
 coarse `writeable`/`editable` pair alongside it — those existed, duplicated a
@@ -541,10 +541,10 @@ values not listed above for catalog types it owns.
 
 The optional `schema` / `"table"` named parameters are case-insensitive filters.
 
-### Single-table descriptor: `bridge_table_describe`
+### Single-table descriptor: `vcatbridge_table_describe`
 
 Returns one fully-typed row for a single table. It reuses the same per-kind capability collectors as
-`bridge_table_permissions` for the verbs and primary key, and reads columns
+`vcatbridge_table_permissions` for the verbs and primary key, and reads columns
 / enum domains from the catalog entry — so a client gets everything it needs to
 render a table in one call instead of stitching together `DESCRIBE`,
 `duckdb_constraints()`, and per-column `enum_range()`.
@@ -584,7 +584,7 @@ rather than colliding with it.
 The bridge arrives with the ATTACH; `CREATE TABLE` and `CREATE SCHEMA` follow it
 in any order.
 
-Provider entries cannot live here — they need `TYPE virtual_catalog_provider`,
+Provider entries cannot live here — they need `TYPE vcatprovider`,
 a separate catalog from a separate extension.
 
 ## Using from other languages
@@ -599,11 +599,11 @@ Rough sketch in Go (pseudocode):
 // source connection
 var token string
 sourceDB.QueryRow(`
-    SELECT bridge_register_source(?, ?)
+    SELECT vcatbridge_register_source(?, ?)
 `, bridgeID, sourceCatalog).Scan(&token)
 
 // policy is a document as in "The document" above, e.g. marshalled from a struct.
-sourceDB.Exec(`SELECT bridge_configure_policy(?, ?)`, bridgeID, policy)
+sourceDB.Exec(`SELECT vcatbridge_configure_policy(?, ?)`, bridgeID, policy)
 
 // target connection. ATTACH options are folded to constants at bind time, so the id and the
 // token go into the statement text rather than into placeholders.

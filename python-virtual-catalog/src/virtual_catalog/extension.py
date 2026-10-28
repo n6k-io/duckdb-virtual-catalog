@@ -1,4 +1,4 @@
-"""Install and load the ``vcatbridge`` and ``virtual_catalog_provider`` extensions.
+"""Install and load the ``vcatbridge`` and ``vcatprovider`` extensions.
 
 Local builds resolve by name from ``$VIRTUAL_CATALOG_EXT_DIR`` (this repo's
 ``build/release/extension``); unset, they install from the GCS bucket. Connections must allow
@@ -17,7 +17,7 @@ EXTENSION_REPO = "https://storage.googleapis.com/n6k-duckdb-release"
 VIRTUAL_CATALOG_EXT_DIR_ENV = "VIRTUAL_CATALOG_EXT_DIR"
 
 VCATBRIDGE = "vcatbridge"
-VIRTUAL_CATALOG_PROVIDER = "virtual_catalog_provider"
+VCATPROVIDER = "vcatprovider"
 
 
 def local_extension_path(name: str, dir_env: str = VIRTUAL_CATALOG_EXT_DIR_ENV) -> Optional[str]:
@@ -45,5 +45,5 @@ def load_vcatbridge(conn: duckdb.DuckDBPyConnection) -> None:
     _load_local_or_install(conn, VCATBRIDGE)
 
 
-def load_virtual_catalog_provider(conn: duckdb.DuckDBPyConnection) -> None:
-    _load_local_or_install(conn, VIRTUAL_CATALOG_PROVIDER)
+def load_vcatprovider(conn: duckdb.DuckDBPyConnection) -> None:
+    _load_local_or_install(conn, VCATPROVIDER)

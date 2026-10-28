@@ -1,6 +1,6 @@
 #pragma once
 
-// `ATTACH '' AS db (TYPE virtual_catalog_provider, list listfn, schema schemafn, scan scanfn)`.
+// `ATTACH '' AS db (TYPE vcatprovider, list listfn, schema schemafn, scan scanfn)`.
 // Native DuckDB entries and UDF-backed provider tables coexist in one schema; the wrapper lifecycle
 // and the native side of every operation live in VirtualCatalogBase/VirtualCatalogSchemaEntryBase.
 //
@@ -18,14 +18,14 @@ namespace duckdb {
 
 struct ProviderInfo;
 
-static constexpr const char *VIRTUAL_CATALOG_PROVIDER_TYPE = "virtual_catalog_provider";
+static constexpr const char *VCATPROVIDER_TYPE = "vcatprovider";
 
 class VirtualCatalogProvider : public VirtualCatalogBase {
 public:
 	explicit VirtualCatalogProvider(AttachedDatabase &db, shared_ptr<ProviderInfo> attached_provider = nullptr);
 
 	string GetCatalogType() override {
-		return VIRTUAL_CATALOG_PROVIDER_TYPE;
+		return VCATPROVIDER_TYPE;
 	}
 
 	static shared_ptr<StorageExtension> CreateStorageExtension();

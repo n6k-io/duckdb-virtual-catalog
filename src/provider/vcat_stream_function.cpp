@@ -180,8 +180,7 @@ void OpenHostStream(ClientContext &context, const StreamFunctionInfo &info, cons
 
 	auto open_stmt = self->conn->Prepare(vcat::UdfCallWithParams(info.open_udf, 4));
 	if (open_stmt->HasError()) {
-		open_stmt->GetErrorObject().Throw("virtual_catalog_provider: stream open function \"" + info.open_udf +
-		                                  "\" is unusable: ");
+		open_stmt->GetErrorObject().Throw("vcatprovider: stream open function \"" + info.open_udf + "\" is unusable: ");
 	}
 	// Bound, never interpolated: args_json carries the caller's values verbatim.
 	vector<Value> open_params;
@@ -195,34 +194,31 @@ void OpenHostStream(ClientContext &context, const StreamFunctionInfo &info, cons
 	}
 	auto open_chunk = open_result->Fetch();
 	if (!open_chunk || open_chunk->size() == 0) {
-		throw IOException("virtual_catalog_provider: stream \"%s\" returned no Arrow schema when opened",
-		                  info.function_name);
+		throw IOException("vcatprovider: stream \"%s\" returned no Arrow schema when opened", info.function_name);
 	}
 	// Held in a named Value: StringValue::Get borrows from it.
 	const Value schema_value = open_chunk->GetValue(0, 0);
 	if (schema_value.IsNull()) {
-		throw IOException("virtual_catalog_provider: stream \"%s\" returned no Arrow schema when opened",
-		                  info.function_name);
+		throw IOException("vcatprovider: stream \"%s\" returned no Arrow schema when opened", info.function_name);
 	}
 	self->opened = true;
 
 	const auto &schema_message = StringValue::Get(schema_value);
 	if (schema_message.empty()) {
-		throw IOException("virtual_catalog_provider: stream \"%s\" returned an empty Arrow schema when opened",
-		                  info.function_name);
+		throw IOException("vcatprovider: stream \"%s\" returned an empty Arrow schema when opened", info.function_name);
 	}
 	if (!self->decoder.PushFrame(schema_message) || !self->decoder.HasSchema()) {
-		throw IOException("virtual_catalog_provider: stream \"%s\" returned an unreadable Arrow schema: %s",
-		                  info.function_name, self->decoder.ErrorMessage());
+		throw IOException("vcatprovider: stream \"%s\" returned an unreadable Arrow schema: %s", info.function_name,
+		                  self->decoder.ErrorMessage());
 	}
 	if (ArrowSchemaDeepCopy(self->decoder.GetSchema(), &self->schema) != NANOARROW_OK) {
-		throw IOException("virtual_catalog_provider: stream \"%s\": ArrowSchemaDeepCopy failed", info.function_name);
+		throw IOException("vcatprovider: stream \"%s\": ArrowSchemaDeepCopy failed", info.function_name);
 	}
 	self->schema_owned = true;
 
 	self->next_stmt = self->conn->Prepare(vcat::UdfCallWithParams(info.next_udf, 1));
 	if (self->next_stmt->HasError()) {
-		self->next_stmt->GetErrorObject().Throw("virtual_catalog_provider: stream next function \"" + info.next_udf +
+		self->next_stmt->GetErrorObject().Throw("vcatprovider: stream next function \"" + info.next_udf +
 		                                        "\" is unusable: ");
 	}
 
@@ -265,7 +261,7 @@ struct StreamScanData : public ArrowScanFunctionData {
 unique_ptr<ArrowArrayStreamWrapper> TakeHostStreamOnce(uintptr_t factory_ptr, ArrowStreamParameters &) {
 	auto *stream_data = reinterpret_cast<HostStreamData *>(factory_ptr);
 	if (stream_data->consumed) {
-		throw InvalidInputException("virtual_catalog_provider: a stream function result can only be scanned once");
+		throw InvalidInputException("vcatprovider: a stream function result can only be scanned once");
 	}
 	auto wrapper = make_uniq<ArrowArrayStreamWrapper>();
 	wrapper->arrow_array_stream = stream_data->stream;
@@ -277,7 +273,7 @@ unique_ptr<ArrowArrayStreamWrapper> TakeHostStreamOnce(uintptr_t factory_ptr, Ar
 
 // Opened at bind time because the binder needs the schema, which the host declares in `open`, before
 // any row is read. This function's address is also the stream's identity, matched by
-// provider_stream_functions.
+// vcatprovider_stream_functions.
 unique_ptr<FunctionData> OpenStreamAndBindSchema(ClientContext &context, TableFunctionBindInput &input,
                                                  vector<LogicalType> &return_types, vector<string> &names) {
 	auto &info = input.info->Cast<StreamFunctionInfo>();
@@ -290,7 +286,7 @@ unique_ptr<FunctionData> OpenStreamAndBindSchema(ClientContext &context, TableFu
 	auto *sp = result->owned_stream_data.get();
 	sp->stream.get_schema(&sp->stream, &result->schema_root.arrow_schema);
 	vcat_provider::ThrowOnMismatchedExtensionStorage(context, result->schema_root.arrow_schema,
-	                                                 "virtual_catalog_provider: stream open");
+	                                                 "vcatprovider: stream open");
 	ArrowTableFunction::PopulateArrowTableSchema(context, result->arrow_table, result->schema_root.arrow_schema);
 	names = result->arrow_table.GetNames();
 	return_types = result->arrow_table.GetTypes();
@@ -302,7 +298,6 @@ std::string ArgString(DataChunk &args, idx_t col, idx_t row) {
 	return FlatVector::GetData<string_t>(args.data[col])[row].GetString();
 }
 
-// provider_create_stream_function(catalog, schema, name, open_udf, next_udf, close_udf) -> 'ok'
 void CreateStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &context = state.GetContext();
 	const auto count = args.size();
@@ -320,11 +315,11 @@ void CreateStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector
 		const auto close_udf = ArgString(args, 5, i);
 		if (catalog_name.empty() || schema_name.empty() || name.empty()) {
 			throw InvalidInputException(
-			    "provider_create_stream_function: catalog, schema and name must all be non-empty");
+			    "vcatprovider_create_stream_function: catalog, schema and name must all be non-empty");
 		}
 		if (open_udf.empty() || next_udf.empty() || close_udf.empty()) {
 			throw InvalidInputException(
-			    "provider_create_stream_function: open, next and close UDF names are all required");
+			    "vcatprovider_create_stream_function: open, next and close UDF names are all required");
 		}
 
 		auto stream_info = make_shared_ptr<StreamFunctionInfo>(name, open_udf, next_udf, close_udf);
@@ -353,7 +348,6 @@ void CreateStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector
 	}
 }
 
-// provider_drop_stream_function(catalog, schema, name) -> 'ok'
 void DropStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &context = state.GetContext();
 	const auto count = args.size();
@@ -460,20 +454,20 @@ void StreamFunctionsScan(ClientContext &context, TableFunctionInput &data_p, Dat
 } // namespace
 
 void RegisterStreamFunctionCreators(ExtensionLoader &loader) {
-	ScalarFunction create_func("provider_create_stream_function",
+	ScalarFunction create_func("vcatprovider_create_stream_function",
 	                           {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
 	                            LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                           LogicalType::VARCHAR, CreateStreamFunctionEntries);
 	create_func.SetVolatile();
 	loader.RegisterFunction(create_func);
 
-	ScalarFunction drop_func("provider_drop_stream_function",
+	ScalarFunction drop_func("vcatprovider_drop_stream_function",
 	                         {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                         DropStreamFunctionEntries);
 	drop_func.SetVolatile();
 	loader.RegisterFunction(drop_func);
 
-	TableFunction list_func("provider_stream_functions", {}, StreamFunctionsScan, StreamFunctionsBind,
+	TableFunction list_func("vcatprovider_stream_functions", {}, StreamFunctionsScan, StreamFunctionsBind,
 	                        StreamFunctionsInitGlobal);
 	loader.RegisterFunction(std::move(list_func));
 }

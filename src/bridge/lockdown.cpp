@@ -19,7 +19,7 @@ void SetGlobal(DatabaseInstance &db, const char *name, const Value &value) {
 	auto &config = DBConfig::GetConfig(db);
 	auto option = DBConfig::GetOptionByName(name);
 	if (!option) {
-		throw InternalException("virtual_catalog_lockdown: unknown setting \"%s\"", name);
+		throw InternalException("vcatbridge_lockdown: unknown setting \"%s\"", name);
 	}
 	config.SetOption(&db, *option, value);
 }
@@ -27,18 +27,17 @@ void SetGlobal(DatabaseInstance &db, const char *name, const Value &value) {
 //! DuckDB reads '-<anything>', 'none' and 'null' as no limit at all.
 void ThrowUnlessFiniteMemoryLimit(const string &text) {
 	if (text.empty()) {
-		throw InvalidInputException("virtual_catalog_lockdown: memory_limit must not be empty");
+		throw InvalidInputException("vcatbridge_lockdown: memory_limit must not be empty");
 	}
 	idx_t bytes;
 	try {
 		bytes = DBConfig::ParseMemoryLimit(text);
 	} catch (const std::exception &ex) {
-		throw InvalidInputException("virtual_catalog_lockdown: memory_limit '%s' is not a size: %s", text,
+		throw InvalidInputException("vcatbridge_lockdown: memory_limit '%s' is not a size: %s", text,
 		                            ErrorData(ex).RawMessage());
 	}
 	if (bytes == NumericLimits<idx_t>::Maximum()) {
-		throw InvalidInputException("virtual_catalog_lockdown: memory_limit '%s' must be a finite size, e.g. '512MB'",
-		                            text);
+		throw InvalidInputException("vcatbridge_lockdown: memory_limit '%s' must be a finite size, e.g. '512MB'", text);
 	}
 }
 
@@ -49,14 +48,14 @@ const CatalogType FUNCTION_SETS[] = {CatalogType::SCALAR_FUNCTION_ENTRY, Catalog
 
 vector<reference<CatalogEntry>> ResolveSystemFunctions(ClientContext &context, const Value &names) {
 	if (names.IsNull()) {
-		throw InvalidInputException("virtual_catalog_lockdown: drop_functions must not be NULL");
+		throw InvalidInputException("vcatbridge_lockdown: drop_functions must not be NULL");
 	}
 	auto &catalog = Catalog::GetSystemCatalog(context);
 	vector<reference<CatalogEntry>> entries;
 	case_insensitive_set_t seen;
 	for (auto &name : ListValue::GetChildren(names)) {
 		if (name.IsNull()) {
-			throw InvalidInputException("virtual_catalog_lockdown: drop_functions must not contain NULL");
+			throw InvalidInputException("vcatbridge_lockdown: drop_functions must not contain NULL");
 		}
 		auto text = StringValue::Get(name);
 		if (!seen.insert(text).second) {
@@ -71,7 +70,7 @@ vector<reference<CatalogEntry>> ResolveSystemFunctions(ClientContext &context, c
 			}
 		}
 		if (!found) {
-			throw InvalidInputException("virtual_catalog_lockdown: no system function named \"%s\"", text);
+			throw InvalidInputException("vcatbridge_lockdown: no system function named \"%s\"", text);
 		}
 	}
 	return entries;
@@ -105,18 +104,18 @@ void LockdownFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		return;
 	}
 	if (!state.GetContext().transaction.IsAutoCommit()) {
-		throw PermissionException("virtual_catalog_lockdown: cannot run inside a transaction");
+		throw PermissionException("vcatbridge_lockdown: cannot run inside a transaction");
 	}
 	if (count > 1) {
-		throw InvalidInputException("virtual_catalog_lockdown: call it once, not once per row");
+		throw InvalidInputException("vcatbridge_lockdown: call it once, not once per row");
 	}
 	auto memory_limit = args.data[0].GetValue(0);
 	auto threads = args.data[1].GetValue(0);
 	if (memory_limit.IsNull() || threads.IsNull()) {
-		throw InvalidInputException("virtual_catalog_lockdown: memory_limit and threads must not be NULL");
+		throw InvalidInputException("vcatbridge_lockdown: memory_limit and threads must not be NULL");
 	}
 	if (Settings::Get<LockConfigurationSetting>(DBConfig::GetConfig(db))) {
-		throw PermissionException("virtual_catalog_lockdown: the configuration is already locked");
+		throw PermissionException("vcatbridge_lockdown: the configuration is already locked");
 	}
 	ThrowUnlessFiniteMemoryLimit(memory_limit.ToString());
 	if (args.ColumnCount() > 2) {
@@ -142,7 +141,7 @@ void LockdownFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 } // namespace
 
 void RegisterLockdownFunction(ExtensionLoader &loader) {
-	ScalarFunctionSet set("virtual_catalog_lockdown");
+	ScalarFunctionSet set("vcatbridge_lockdown");
 	for (auto &arguments :
 	     {vector<LogicalType> {LogicalType::VARCHAR, LogicalType::BIGINT},
 	      vector<LogicalType> {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::LIST(LogicalType::VARCHAR)}}) {

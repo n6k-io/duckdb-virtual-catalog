@@ -33,7 +33,7 @@ static string SerializeFlatFiltersOrThrow(ArrowStreamParameters &parameters, con
 	auto json = filter_json::SerializeFilters(*parameters.filters, parameters.projected_columns.filter_to_col,
 	                                          column_names, result);
 	if (!result.all_exact) {
-		filter_json::ThrowUnrenderableFilter("virtual_catalog_provider scan", result.first_unsupported);
+		filter_json::ThrowUnrenderableFilter("vcatprovider scan", result.first_unsupported);
 	}
 	return json;
 }
@@ -43,7 +43,7 @@ static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(uintpt
 	auto *stream_data = reinterpret_cast<ProviderStreamData *>(factory_ptr);
 
 	if (stream_data->consumed) {
-		throw InvalidInputException("virtual_catalog_provider: a provider table scan cannot be restarted");
+		throw InvalidInputException("vcatprovider: a provider table scan cannot be restarted");
 	}
 	auto wrapper = make_uniq<ArrowArrayStreamWrapper>();
 
@@ -76,7 +76,7 @@ static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(uintpt
 	stream_data->source_conn = make_uniq<Connection>(*stream_data->source_db);
 	auto udf_stmt = stream_data->source_conn->Prepare(vcat::UdfCallWithParams(scan_udf, 3));
 	if (udf_stmt->HasError()) {
-		udf_stmt->GetErrorObject().Throw("virtual_catalog_provider: read UDF is unusable: ");
+		udf_stmt->GetErrorObject().Throw("vcatprovider: read UDF is unusable: ");
 	}
 	// vector<Value>, not the variadic Execute: that overload routes std::string through
 	// Value::CreateValue<string>, which builds a BLOB, so a UDF declared VARCHAR never binds.
@@ -86,23 +86,22 @@ static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(uintpt
 	udf_params.emplace_back(filters_json);
 	auto udf_result = udf_stmt->Execute(udf_params);
 	if (udf_result->HasError()) {
-		udf_result->GetErrorObject().Throw("virtual_catalog_provider: read UDF failed: ");
+		udf_result->GetErrorObject().Throw("vcatprovider: read UDF failed: ");
 	}
 	auto udf_chunk = udf_result->Fetch();
 	if (!udf_chunk || udf_chunk->size() == 0) {
-		throw IOException("virtual_catalog_provider: read UDF returned no result");
+		throw IOException("vcatprovider: read UDF returned no result");
 	}
 	// Named, not a temporary: StringValue::Get borrows from the Value.
 	const Value arrow_value = udf_chunk->GetValue(0, 0);
 	if (arrow_value.IsNull()) {
-		throw IOException("virtual_catalog_provider: read UDF for '%s' returned no Arrow data", provider_table);
+		throw IOException("vcatprovider: read UDF for '%s' returned no Arrow data", provider_table);
 	}
 	vcat_provider::MakeStreamFromIpc(StringValue::Get(arrow_value), &wrapper->arrow_array_stream,
-	                                 "virtual_catalog_provider: read UDF");
+	                                 "vcatprovider: read UDF");
 
-	auto trailing =
-	    vcat_provider::DescribeTrailingColumns(*stream_data->source_conn->context, wrapper->arrow_array_stream,
-	                                           pk_cols.size(), "virtual_catalog_provider: read UDF");
+	auto trailing = vcat_provider::DescribeTrailingColumns(
+	    *stream_data->source_conn->context, wrapper->arrow_array_stream, pk_cols.size(), "vcatprovider: read UDF");
 	stream_data->pk_types = std::move(trailing.types);
 	stream_data->pk_formats = std::move(trailing.formats);
 
@@ -134,7 +133,7 @@ static unique_ptr<GlobalTableFunctionState> ProviderScanInitGlobal(ClientContext
 		}
 	}
 	if (wants_row_id && projected_count > 0 && !bind_data.owned_stream_data->pk_buffer) {
-		throw BinderException("virtual_catalog_provider: rowid is not available on provider table '%s'",
+		throw BinderException("vcatprovider: rowid is not available on provider table '%s'",
 		                      bind_data.owned_stream_data->provider_table_name);
 	}
 
@@ -149,13 +148,11 @@ static unique_ptr<GlobalTableFunctionState> ProviderScanInitGlobal(ClientContext
 	if (result->stream && result->stream->arrow_array_stream.get_schema) {
 		ArrowSchema stream_schema {};
 		if (result->stream->arrow_array_stream.get_schema(&result->stream->arrow_array_stream, &stream_schema) != 0) {
-			throw InvalidInputException(
-			    "virtual_catalog_provider: read UDF for '%s' returned an unreadable Arrow schema",
-			    bind_data.owned_stream_data->provider_table_name);
+			throw InvalidInputException("vcatprovider: read UDF for '%s' returned an unreadable Arrow schema",
+			                            bind_data.owned_stream_data->provider_table_name);
 		}
 		try {
-			vcat_provider::ThrowOnMismatchedExtensionStorage(context, stream_schema,
-			                                                 "virtual_catalog_provider: read UDF");
+			vcat_provider::ThrowOnMismatchedExtensionStorage(context, stream_schema, "vcatprovider: read UDF");
 		} catch (...) {
 			if (stream_schema.release) {
 				stream_schema.release(&stream_schema);
@@ -176,7 +173,7 @@ static unique_ptr<GlobalTableFunctionState> ProviderScanInitGlobal(ClientContext
 				stream_schema.release(&stream_schema);
 			}
 			throw InvalidInputException(
-			    "virtual_catalog_provider: read UDF for '%s' returned %llu columns, expected %llu projected + %llu key",
+			    "vcatprovider: read UDF for '%s' returned %llu columns, expected %llu projected + %llu key",
 			    bind_data.owned_stream_data->provider_table_name, static_cast<uint64_t>(returned),
 			    static_cast<uint64_t>(projected_count), static_cast<uint64_t>(result->pk_count));
 		}
@@ -195,10 +192,10 @@ static unique_ptr<GlobalTableFunctionState> ProviderScanInitGlobal(ClientContext
 				if (stream_schema.release) {
 					stream_schema.release(&stream_schema);
 				}
-				throw InvalidInputException(
-				    "virtual_catalog_provider: read UDF for '%s' returned column '%s' as %s, but its "
-				    "schema declares %s",
-				    bind_data.owned_stream_data->provider_table_name, name, returned_type.ToString(), declared);
+				throw InvalidInputException("vcatprovider: read UDF for '%s' returned column '%s' as %s, but its "
+				                            "schema declares %s",
+				                            bind_data.owned_stream_data->provider_table_name, name,
+				                            returned_type.ToString(), declared);
 			}
 			bind_data.arrow_table.AddColumn(col_id, std::move(arrow_type), string(schema.name));
 			stream_col++;
@@ -254,8 +251,7 @@ static void EmitProviderScanChunk(ClientContext &context, TableFunctionInput &da
 				auto col_id = state.column_ids.empty() ? idx : state.column_ids[idx];
 				if (col_id == COLUMN_IDENTIFIER_ROW_ID) {
 					AppendPKValuesAndEmitBufferRowIds(state.all_columns.data[idx], state.chunk->arrow_array,
-					                                  global_state, state.chunk_offset, output_size,
-					                                  "virtual_catalog_provider");
+					                                  global_state, state.chunk_offset, output_size, "vcatprovider");
 				}
 			}
 		}
@@ -268,7 +264,7 @@ static void EmitProviderScanChunk(ClientContext &context, TableFunctionInput &da
 				auto col_id = state.column_ids.empty() ? idx : state.column_ids[idx];
 				if (col_id == COLUMN_IDENTIFIER_ROW_ID) {
 					AppendPKValuesAndEmitBufferRowIds(output.data[idx], state.chunk->arrow_array, global_state,
-					                                  state.chunk_offset, output_size, "virtual_catalog_provider");
+					                                  state.chunk_offset, output_size, "vcatprovider");
 				}
 			}
 		}

@@ -47,9 +47,9 @@ PROVIDER_LOG=$(CPP_TEST_BUILD_DIR)/vcat_provider_build.log
 PROVIDER_TEST_ARGS?=test/sql/provider/*
 provider:
 	@if [ ! -f "$(CPP_TEST_BUILD_DIR)/CMakeCache.txt" ]; then $(MAKE) release; fi
-	@echo "building virtual_catalog_provider..."
+	@echo "building vcatprovider..."
 	@cmake --build "$(CPP_TEST_BUILD_DIR)" -j$(JOBS) --target \
-		virtual_catalog_provider_loadable_extension vcat_provider_unittest unittest \
+		vcatprovider_loadable_extension vcat_provider_unittest unittest \
 		> "$(PROVIDER_LOG)" 2>&1 || { cat "$(PROVIDER_LOG)"; exit 1; }
 
 test-provider: provider

@@ -548,11 +548,11 @@ PolicyEdit ParsePolicyEdit(const string &target, const string &setting, const st
 	auto raw = FromSql(value, edit.path);
 	const auto require_op = [&](bool is_list) {
 		if (is_list && !op) {
-			Fail(edit.path, "is a list setting; pass an operation: bridge_set_policy(id, '" + target + "', '" +
+			Fail(edit.path, "is a list setting; pass an operation: vcatbridge_set_policy(id, '" + target + "', '" +
 			                    setting + "', 'add' | 'remove' | 'set', value)");
 		}
 		if (!is_list && op) {
-			Fail(edit.path, "takes a single value; call bridge_set_policy(id, '" + target + "', '" + setting +
+			Fail(edit.path, "takes a single value; call vcatbridge_set_policy(id, '" + target + "', '" + setting +
 			                    "', value) without an operation");
 		}
 		if (!op) {

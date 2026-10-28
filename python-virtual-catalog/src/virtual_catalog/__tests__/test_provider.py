@@ -1,6 +1,6 @@
 """Tests for the Provider-backed dynamic virtual-table API.
 
-Providers require a provider catalog (ATTACH ... (TYPE virtual_catalog_provider)); the
+Providers require a provider catalog (ATTACH ... (TYPE vcatprovider)); the
 extension materialises the schemas a provider lists.
 
 Queries run via asyncio.to_thread so DuckDB executes on a worker thread; the
@@ -20,7 +20,7 @@ import duckdb
 import pyarrow as pa
 import pytest
 
-from virtual_catalog.extension import load_virtual_catalog_provider
+from virtual_catalog.extension import load_vcatprovider
 from virtual_catalog.filters import Filters, filter_and_project
 from virtual_catalog.provider import (
     PK_METADATA_KEY,
@@ -38,8 +38,8 @@ CONN_CONFIG: dict[str, str | bool | int | float | list[str]] = {"allow_unsigned_
 
 def _new_conn(schema_name: str = "public") -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect(config=CONN_CONFIG)
-    load_virtual_catalog_provider(conn)
-    conn.execute("ATTACH ':memory:' AS workspace (TYPE virtual_catalog_provider)")
+    load_vcatprovider(conn)
+    conn.execute("ATTACH ':memory:' AS workspace (TYPE vcatprovider)")
     conn.execute(f"CREATE SCHEMA workspace.{schema_name}")
     return conn
 
@@ -262,7 +262,7 @@ async def test_unregister_twice_raises() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
     await store.unregister()
     with pytest.raises(duckdb.Error):
-        await asyncio.to_thread(lambda: conn.sql("SELECT provider_unregister('workspace')").fetchall())
+        await asyncio.to_thread(lambda: conn.sql("SELECT vcatprovider_unregister('workspace')").fetchall())
 
 
 @pytest.mark.asyncio
@@ -306,7 +306,7 @@ async def test_unregistered_provider_invalidate_raises() -> None:
 @pytest.mark.asyncio
 async def test_register_without_attach_errors() -> None:
     conn = duckdb.connect(config=CONN_CONFIG)
-    load_virtual_catalog_provider(conn)
+    load_vcatprovider(conn)
     store = _FakeStore()
     with pytest.raises(duckdb.Error):
         register_provider(conn, catalog="memory", schema_name="main", provider=store)
@@ -316,8 +316,8 @@ async def test_register_without_attach_errors() -> None:
 @pytest.mark.asyncio
 async def test_register_materialises_schema_on_demand() -> None:
     conn = duckdb.connect(config=CONN_CONFIG)
-    load_virtual_catalog_provider(conn)
-    conn.execute("ATTACH ':memory:' AS workspace (TYPE virtual_catalog_provider)")
+    load_vcatprovider(conn)
+    conn.execute("ATTACH ':memory:' AS workspace (TYPE vcatprovider)")
     store = _FakeStore()
     store.set_table("t", pa.table({"id": [1]}))
     register_provider(conn, catalog="workspace", schema_name="nosuch", provider=store)
@@ -629,12 +629,12 @@ async def test_provider_filter_pushdown_multiple_clauses() -> None:
     assert clauses == [("id", "<", 10), ("id", ">", 1)]
 
 
-# ── provider_table_permissions + provider capability optionality ─────────────────
+# ── vcatprovider_table_permissions + provider capability optionality ─────────────────
 #
 # A provider declares a write/edit capability by *implementing* the method;
 # leaving it as the base NotImplementedError stub leaves the UDF unregistered,
 # so the table's verbs leave it out and the op is rejected at plan time.
-# provider_table_permissions exposes those verbs.
+# vcatprovider_table_permissions exposes those verbs.
 
 
 class _ReadOnlyStore(Provider):
@@ -686,7 +686,7 @@ async def _permissions(
         parts.append(f'"table" := {table!r}')
     sql = (
         "SELECT schema, name, kind, verbs, primary_key "
-        f"FROM provider_table_permissions({', '.join(parts)}) ORDER BY name"
+        f"FROM vcatprovider_table_permissions({', '.join(parts)}) ORDER BY name"
     )
     return _writes_and_alter(await asyncio.to_thread(lambda: conn.sql(sql).fetchall()))
 
@@ -745,7 +745,7 @@ async def test_table_permissions_native_table_and_view() -> None:
     rows = await asyncio.to_thread(
         lambda: conn.sql(
             "SELECT schema, name, kind, verbs, primary_key "
-            "FROM provider_table_permissions('workspace', schema := 'public') ORDER BY name"
+            "FROM vcatprovider_table_permissions('workspace', schema := 'public') ORDER BY name"
         ).fetchall()
     )
     # The provider extension's own grants, passed through.
@@ -759,13 +759,13 @@ async def test_table_permissions_native_table_and_view() -> None:
 async def test_table_permissions_plain_catalog() -> None:
     """On a plain (non-virtual_catalog) catalog the function reports native tables/views."""
     conn = duckdb.connect(config=CONN_CONFIG)
-    load_virtual_catalog_provider(conn)
+    load_vcatprovider(conn)
     conn.execute("CREATE TABLE memory.main.nt(x INTEGER PRIMARY KEY)")
     conn.execute("CREATE VIEW memory.main.nv AS SELECT 1 AS y")
     rows = await asyncio.to_thread(
         lambda: conn.sql(
             "SELECT schema, name, kind, verbs, primary_key "
-            "FROM provider_table_permissions('memory', schema := 'main') ORDER BY name"
+            "FROM vcatprovider_table_permissions('memory', schema := 'main') ORDER BY name"
         ).fetchall()
     )
     assert rows == [
@@ -1183,7 +1183,7 @@ async def _register_query_release() -> tuple["weakref.ref[_FakeStore]", "weakref
     assert store._binding is None
     assert await asyncio.to_thread(_error_of, conn, f"SELECT __n6k_provider_list_{probe_id}()")
     assert "no provider registered" in await asyncio.to_thread(
-        _error_of, conn, "SELECT provider_invalidate_tables('workspace')"
+        _error_of, conn, "SELECT vcatprovider_invalidate_tables('workspace')"
     )
     conn.close()
     return weakref.ref(store), weakref.ref(conn)

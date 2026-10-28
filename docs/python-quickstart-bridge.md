@@ -28,10 +28,10 @@ source.execute("""
     CREATE TABLE secrets (k VARCHAR, v VARCHAR);
 """)
 
-token = source.execute("SELECT bridge_register_source('b1', 'memory')").fetchone()[0]
-source.execute("SELECT bridge_set_context('b1', 'tenant', 42)")
-source.execute("SELECT bridge_set_policy('b1', 'main.users', 'select', 'tenant_id = $tenant')")
-source.execute("SELECT bridge_set_policy('b1', 'main.users', 'update', 'tenant_id = $tenant')")
+token = source.execute("SELECT vcatbridge_register_source('b1', 'memory')").fetchone()[0]
+source.execute("SELECT vcatbridge_set_context('b1', 'tenant', 42)")
+source.execute("SELECT vcatbridge_set_policy('b1', 'main.users', 'select', 'tenant_id = $tenant')")
+source.execute("SELECT vcatbridge_set_policy('b1', 'main.users', 'update', 'tenant_id = $tenant')")
 ```
 
 ## 3. Target: attach
@@ -48,7 +48,7 @@ The token expires after 30 seconds if no `ATTACH` redeems it.
 Cap memory and threads, turn off file and network access, and lock the configuration.
 
 ```python
-target.execute("SELECT virtual_catalog_lockdown('1GB', 2)")
+target.execute("SELECT vcatbridge_lockdown('1GB', 2)")
 ```
 
 ## 5. Run user SQL on the target
@@ -77,7 +77,7 @@ target.execute("SET threads = 8")
 ## 6. Switch tenant
 
 ```python
-source.execute("SELECT bridge_set_context('b1', 'tenant', 7)")
+source.execute("SELECT vcatbridge_set_context('b1', 'tenant', 7)")
 
 target.execute("SELECT * FROM app.main.users").fetchall()
 # [(3, 7, 'linus')]

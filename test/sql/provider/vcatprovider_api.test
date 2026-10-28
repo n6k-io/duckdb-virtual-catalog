@@ -1,5 +1,5 @@
 # name: test/sql/provider/vcatprovider_api.test
-# description: pins the registered vcatprovider_% surface against docs/vcatprovider.md
+# description: pins the registered vcatprovider_% surface; docs/sql-api.md documents it
 # group: [provider]
 
 require vcatprovider

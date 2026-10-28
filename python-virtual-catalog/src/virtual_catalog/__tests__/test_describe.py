@@ -1,4 +1,4 @@
-"""bridge_table_describe: one fully-typed row per table.
+"""vcatbridge_table_describe: one fully-typed row per table.
 
 Returns columns (name/type/nullable/default), primary_key, verbs,
 and enum domains in a single call — what useTableMeta needs without stitching
@@ -23,7 +23,7 @@ def _conn() -> duckdb.DuckDBPyConnection:
 def _describe(conn: duckdb.DuckDBPyConnection, catalog: str, schema: str, table: str) -> dict[str, Any]:
     row = conn.sql(
         "SELECT columns, primary_key, verbs, enums "
-        f"FROM bridge_table_describe('{catalog}', schema := '{schema}', \"table\" := '{table}')"
+        f"FROM vcatbridge_table_describe('{catalog}', schema := '{schema}', \"table\" := '{table}')"
     ).fetchone()
     assert row is not None
     cols, pk, verbs, enums = row

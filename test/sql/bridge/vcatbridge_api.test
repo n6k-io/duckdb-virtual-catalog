@@ -1,5 +1,5 @@
 # name: test/sql/bridge/vcatbridge_api.test
-# description: pins the registered vcatbridge_% surface against docs/sql-api.md
+# description: pins the registered vcatbridge_% surface; docs/sql-api.md documents it
 # group: [bridge]
 
 require vcatbridge

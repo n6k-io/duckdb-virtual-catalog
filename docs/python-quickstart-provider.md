@@ -16,8 +16,8 @@ import pyarrow as pa
 REPO = "https://storage.googleapis.com/n6k-duckdb-release"
 
 con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
-con.execute(f"INSTALL virtual_catalog_provider FROM '{REPO}'")
-con.execute("LOAD virtual_catalog_provider")
+con.execute(f"INSTALL vcatprovider FROM '{REPO}'")
+con.execute("LOAD vcatprovider")
 ```
 
 ## 2. Your data
@@ -63,7 +63,7 @@ con.create_function("p_scan", scan, [VARCHAR, duckdb.sqltype("VARCHAR[]"), VARCH
 ## 4. Attach
 
 ```python
-con.execute("ATTACH '' AS app (TYPE virtual_catalog_provider, list 'p_list', schema 'p_schema', scan 'p_scan')")
+con.execute("ATTACH '' AS app (TYPE vcatprovider, list 'p_list', schema 'p_schema', scan 'p_scan')")
 ```
 
 ## 5. Query
@@ -81,4 +81,4 @@ con.execute("INSERT INTO app.main.users VALUES (4, 'barbara')")
 
 Add `insert`, `update` and `delete` functions to make it writable.
 
-Next: [virtual-catalog-provider.md](virtual-catalog-provider.md), [sql-api.md](sql-api.md).
+Next: [vcatprovider.md](vcatprovider.md), [sql-api.md](sql-api.md).
