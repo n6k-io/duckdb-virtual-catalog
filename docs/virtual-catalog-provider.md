@@ -8,7 +8,7 @@ entries.
 No network, no external server. Pure SQL API, usable from any DuckDB binding
 that can register a UDF.
 
-Its sibling, [`virtual_catalog_bridge`](virtual-catalog-bridge.md), mirrors
+Its sibling, [`vcatbridge`](vcatbridge.md), mirrors
 tables from another `DatabaseInstance` instead. The two are separate extensions
 with separate catalog types and no shared SQL; either can be loaded without the
 other, and a single attached catalog is one or the other, never both.
@@ -205,7 +205,7 @@ entry kind:
 | `native_view` | `select` | empty |
 | `provider` | `select`, plus one per implemented UDF | from `vcat.primary_keys` Arrow metadata (legacy `n6k.primary_keys` still accepted) |
 
-A `virtual_catalog_bridge` catalog is a different extension's binary, so this
+A `vcatbridge` catalog is a different extension's binary, so this
 function does not recognise it and falls back to the plain-catalog classifier.
 Use `bridge_table_permissions` for those; it is the same function compiled into
 the bridge.
@@ -258,10 +258,10 @@ A name collision resolves native-first: the wrapped schema is consulted before
 the provider's table list, so a `CREATE TABLE` shadows a provider table of the
 same name rather than colliding with it.
 
-Bridge entries cannot live here — they need `TYPE virtual_catalog_bridge`, a
+Bridge entries cannot live here — they need `TYPE vcatbridge`, a
 separate catalog from a separate extension.
 
 ## See also
 
 - [`sql-api.md`](sql-api.md) — every registered function, its arguments and columns.
-- [`virtual-catalog-bridge.md`](virtual-catalog-bridge.md) — the sibling extension.
+- [`vcatbridge.md`](vcatbridge.md) — the sibling extension.

@@ -22,8 +22,8 @@ REPO = "https://storage.googleapis.com/n6k-duckdb-release"
 def connect():
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
 
-    con.execute(f"INSTALL virtual_catalog_bridge FROM '{REPO}'")
-    con.execute("LOAD virtual_catalog_bridge")
+    con.execute(f"INSTALL vcatbridge FROM '{REPO}'")
+    con.execute("LOAD vcatbridge")
     return con
 ```
 
@@ -82,8 +82,8 @@ The target is the database Quack will serve. Open it as a bridge, then connect i
 the token.
 
 ```python
-target = duckdb.connect("virtual_catalog_bridge:", config={"allow_unsigned_extensions": "true"})
-target.execute("SELECT virtual_catalog_bridge_init('b1', $1)", [token])
+target = duckdb.connect("vcatbridge:", config={"allow_unsigned_extensions": "true"})
+target.execute("SELECT vcatbridge_init('b1', $1)", [token])
 ```
 
 ## 4. Serve the target over Quack
@@ -136,7 +136,7 @@ INSERT INTO app.users VALUES (4, 42, 'barbara');
 
 -- Insert for another tenant: refused
 INSERT INTO app.users VALUES (5, 7, 'mallory');
--- Invalid Input Error: Failed to append: virtual_catalog_bridge: row violates the check predicate on this table
+-- Invalid Input Error: Failed to append: vcatbridge: row violates the check predicate on this table
 
 -- Update tenant 42's row
 FROM quack_query('quack:localhost:9494', 'UPDATE users SET name = ''Ada'' WHERE id = 1');
@@ -167,4 +167,4 @@ Quack's `ATTACH` can't run `UPDATE` or `DELETE`, bridge or not, so send those th
 `quack_query`.
 
 Next: [python-quickstart-bridge.md](python-quickstart-bridge.md),
-[virtual-catalog-bridge.md](virtual-catalog-bridge.md), [sql-api.md](sql-api.md).
+[vcatbridge.md](vcatbridge.md), [sql-api.md](sql-api.md).

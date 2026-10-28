@@ -13,8 +13,8 @@ REPO = "https://storage.googleapis.com/n6k-duckdb-release"
 
 def connect():
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
-    con.execute(f"INSTALL virtual_catalog_bridge FROM '{REPO}'")
-    con.execute("LOAD virtual_catalog_bridge")
+    con.execute(f"INSTALL vcatbridge FROM '{REPO}'")
+    con.execute("LOAD vcatbridge")
     return con
 ```
 
@@ -38,7 +38,7 @@ source.execute("SELECT bridge_set_policy('b1', 'main.users', 'update', 'tenant_i
 
 ```python
 target = connect()
-target.execute(f"ATTACH '' AS app (TYPE virtual_catalog_bridge, ID 'b1', TOKEN '{token}')")
+target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID 'b1', TOKEN '{token}')")
 ```
 
 The token expires after 30 seconds if no `ATTACH` redeems it.
@@ -83,4 +83,4 @@ target.execute("SELECT * FROM app.main.users").fetchall()
 # [(3, 7, 'linus')]
 ```
 
-Next: [virtual-catalog-bridge.md](virtual-catalog-bridge.md), [sql-api.md](sql-api.md).
+Next: [vcatbridge.md](vcatbridge.md), [sql-api.md](sql-api.md).

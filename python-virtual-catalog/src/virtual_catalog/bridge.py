@@ -7,7 +7,7 @@ from typing import NamedTuple, Optional, Sequence
 
 import duckdb
 
-from virtual_catalog.extension import load_virtual_catalog_bridge
+from virtual_catalog.extension import load_vcatbridge
 
 log = logging.getLogger(__name__)
 
@@ -98,8 +98,8 @@ def bridge(
 
     bridge_id = uuid.uuid4().hex
 
-    load_virtual_catalog_bridge(source)
-    load_virtual_catalog_bridge(target)
+    load_vcatbridge(source)
+    load_vcatbridge(target)
 
     if lock is not None:
         lock.acquire()
@@ -132,7 +132,7 @@ def bridge(
     quoted_id = bridge_id.replace("'", "''")
     quoted_token = token.replace("'", "''")
     target.execute(
-        f"ATTACH '' AS \"{quoted}\" (TYPE virtual_catalog_bridge, ID '{quoted_id}', TOKEN '{quoted_token}')",
+        f"ATTACH '' AS \"{quoted}\" (TYPE vcatbridge, ID '{quoted_id}', TOKEN '{quoted_token}')",
     )
     log.debug("bridge(%s): attached as %s", name, bridge_id)
     return bridge_id
@@ -141,9 +141,9 @@ def bridge(
 def connect_main(bridge_id: str, token: str, **config: str) -> duckdb.DuckDBPyConnection:
     """A new database whose main database is the bridge. The extension loads by name as it opens, so it must
     already be installed, and the source must have loaded that same installed copy."""
-    target = duckdb.connect("virtual_catalog_bridge:", config=config)
+    target = duckdb.connect("vcatbridge:", config=config)
     try:
-        target.execute("SELECT virtual_catalog_bridge_init($1, $2)", [bridge_id, token])
+        target.execute("SELECT vcatbridge_init($1, $2)", [bridge_id, token])
     except BaseException:
         target.close()
         raise

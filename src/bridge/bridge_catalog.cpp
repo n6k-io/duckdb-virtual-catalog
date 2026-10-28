@@ -31,7 +31,7 @@ BridgeCatalog::~BridgeCatalog() {
 }
 
 string BridgeCatalog::GetCatalogType() {
-	return VIRTUAL_CATALOG_BRIDGE_TYPE;
+	return VCATBRIDGE_TYPE;
 }
 
 void BridgeCatalog::Initialize(optional_ptr<ClientContext>, bool load_builtin) {
@@ -50,15 +50,14 @@ bool BridgeCatalog::IsBound() {
 
 void BridgeCatalog::ThrowUnlessBound() {
 	if (!IsBound()) {
-		throw PermissionException(
-		    "virtual_catalog_bridge: not initialized; call virtual_catalog_bridge_init(bridge_id, token)");
+		throw PermissionException("vcatbridge: not initialized; call vcatbridge_init(bridge_id, token)");
 	}
 }
 
 void BridgeCatalog::Bind(const string &bridge_id, const string &token) {
 	lock_guard<mutex> guard(bind_lock);
 	if (IsBound()) {
-		throw PermissionException("virtual_catalog_bridge: the main database is already initialized");
+		throw PermissionException("vcatbridge: the main database is already initialized");
 	}
 	auto redeemed = RedeemBridge(bridge_id, token, GetDatabase());
 	auto &source = attach.Source<DuckDBSource>();
@@ -261,8 +260,8 @@ unique_ptr<Catalog> AttachBridge(optional_ptr<StorageExtensionInfo>, ClientConte
                                  const string &, AttachInfo &info, AttachOptions &options) {
 	if (options.is_main_database) {
 		if (!info.path.empty() || !info.options.empty()) {
-			throw IOException("virtual_catalog_bridge: open the main database as 'virtual_catalog_bridge:' with no "
-			                  "path, then call virtual_catalog_bridge_init(bridge_id, token)");
+			throw IOException("vcatbridge: open the main database as 'vcatbridge:' with no "
+			                  "path, then call vcatbridge_init(bridge_id, token)");
 		}
 		return make_uniq<BridgeCatalog>(db, make_uniq<DuckDBSource>());
 	}
@@ -284,29 +283,29 @@ void BridgeInitFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		return;
 	}
 	if (!context.transaction.IsAutoCommit()) {
-		throw PermissionException("virtual_catalog_bridge_init: cannot run inside a transaction");
+		throw PermissionException("vcatbridge_init: cannot run inside a transaction");
 	}
 	if (count > 1) {
-		throw InvalidInputException("virtual_catalog_bridge_init: call it once, not once per row");
+		throw InvalidInputException("vcatbridge_init: call it once, not once per row");
 	}
 	auto bridge_id = args.data[0].GetValue(0);
 	auto token = args.data[1].GetValue(0);
 	if (bridge_id.IsNull() || token.IsNull()) {
-		throw InvalidInputException("virtual_catalog_bridge_init: bridge_id and token must not be NULL");
+		throw InvalidInputException("vcatbridge_init: bridge_id and token must not be NULL");
 	}
 	if (Settings::Get<LockConfigurationSetting>(DBConfig::GetConfig(db))) {
-		throw PermissionException("virtual_catalog_bridge_init: the configuration is locked; call it before "
+		throw PermissionException("vcatbridge_init: the configuration is locked; call it before "
 		                          "virtual_catalog_lockdown");
 	}
 	optional_ptr<BridgeCatalog> main;
 	for (auto &attached : db.GetDatabaseManager().GetDatabases()) {
-		if (attached->IsInitialDatabase() && attached->GetCatalog().GetCatalogType() == VIRTUAL_CATALOG_BRIDGE_TYPE) {
+		if (attached->IsInitialDatabase() && attached->GetCatalog().GetCatalogType() == VCATBRIDGE_TYPE) {
 			main = &attached->GetCatalog().Cast<BridgeCatalog>();
 		}
 	}
 	if (!main) {
-		throw InvalidInputException("virtual_catalog_bridge_init: the main database is not a bridge; open it as "
-		                            "'virtual_catalog_bridge:'");
+		throw InvalidInputException("vcatbridge_init: the main database is not a bridge; open it as "
+		                            "'vcatbridge:'");
 	}
 	main->Bind(bridge_id.ToString(), token.ToString());
 
@@ -321,11 +320,11 @@ void RegisterBridgeCatalog(ExtensionLoader &loader) {
 	ext->attach = AttachBridge;
 	ext->create_transaction_manager = CreateBridgeTransactionManager;
 	auto &db = loader.GetDatabaseInstance();
-	StorageExtension::Register(DBConfig::GetConfig(db), VIRTUAL_CATALOG_BRIDGE_TYPE, std::move(ext));
+	StorageExtension::Register(DBConfig::GetConfig(db), VCATBRIDGE_TYPE, std::move(ext));
 	Crossing<DuckDBSource>::RegisterPass(db);
 
-	ScalarFunction init("virtual_catalog_bridge_init", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                    LogicalType::VARCHAR, BridgeInitFunc);
+	ScalarFunction init("vcatbridge_init", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                    BridgeInitFunc);
 	init.stability = FunctionStability::VOLATILE;
 	init.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(init);

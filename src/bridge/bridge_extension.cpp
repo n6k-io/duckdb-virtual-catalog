@@ -1,4 +1,4 @@
-#include "virtual_catalog_bridge_extension.hpp"
+#include "vcatbridge_extension.hpp"
 
 #include "bridge_catalog.hpp"
 #include "duckdb_source.hpp"
@@ -8,7 +8,7 @@
 
 namespace duckdb {
 
-void VirtualCatalogBridgeLoadInternal(ExtensionLoader &loader) {
+void VcatbridgeLoadInternal(ExtensionLoader &loader) {
 	RegisterTablePermissionsFunction(loader, "bridge_table_permissions");
 	RegisterTableDescribeFunction(loader, "bridge_table_describe");
 	RegisterBridgeFunctions(loader);
@@ -16,17 +16,17 @@ void VirtualCatalogBridgeLoadInternal(ExtensionLoader &loader) {
 	RegisterBridgeCatalog(loader);
 }
 
-void VirtualCatalogBridgeExtension::Load(ExtensionLoader &loader) {
-	VirtualCatalogBridgeLoadInternal(loader);
+void VcatbridgeExtension::Load(ExtensionLoader &loader) {
+	VcatbridgeLoadInternal(loader);
 }
 
-std::string VirtualCatalogBridgeExtension::Name() {
-	return "virtual_catalog_bridge";
+std::string VcatbridgeExtension::Name() {
+	return "vcatbridge";
 }
 
-std::string VirtualCatalogBridgeExtension::Version() const {
-#ifdef EXT_VERSION_VIRTUAL_CATALOG_BRIDGE
-	return EXT_VERSION_VIRTUAL_CATALOG_BRIDGE;
+std::string VcatbridgeExtension::Version() const {
+#ifdef EXT_VERSION_VCATBRIDGE
+	return EXT_VERSION_VCATBRIDGE;
 #else
 	return "";
 #endif
@@ -35,7 +35,7 @@ std::string VirtualCatalogBridgeExtension::Version() const {
 } // namespace duckdb
 
 extern "C" {
-DUCKDB_CPP_EXTENSION_ENTRY(virtual_catalog_bridge, loader) {
-	duckdb::VirtualCatalogBridgeLoadInternal(loader);
+DUCKDB_CPP_EXTENSION_ENTRY(vcatbridge, loader) {
+	duckdb::VcatbridgeLoadInternal(loader);
 }
 }

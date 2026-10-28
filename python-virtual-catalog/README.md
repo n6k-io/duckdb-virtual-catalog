@@ -1,6 +1,6 @@
 # duckdb-virtual-catalog
 
-Python helpers for the `virtual_catalog_bridge` and `virtual_catalog_provider` DuckDB extensions.
+Python helpers for the `vcatbridge` and `virtual_catalog_provider` DuckDB extensions.
 
 ```sh
 pip install duckdb-virtual-catalog

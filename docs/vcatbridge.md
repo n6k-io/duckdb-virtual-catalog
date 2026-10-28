@@ -1,4 +1,4 @@
-# virtual_catalog_bridge
+# vcatbridge
 
 In-process DuckDB storage extension: a catalog whose contents come from another
 `DatabaseInstance` in the same process, rather than from a file. A **source**
@@ -44,7 +44,7 @@ SELECT bridge_set_policy('b1', 'main.users', 'select', true);
 -- → 'ok'
 
 -- 4. On the TARGET: redeem the token into a new catalog.
-ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'NONCE:UUID');
+ATTACH '' AS my_bridge (TYPE vcatbridge, ID 'b1', TOKEN 'NONCE:UUID');
 -- my_bridge.main.users, my_bridge.main.logs, my_bridge.sales.orders
 ```
 
@@ -53,11 +53,11 @@ constant at bind time, so neither can be a `?` parameter or a subquery — a hos
 formats the token into the statement text.
 
 To open the bridge as the target's main database, open it with no path and
-redeem the token with `virtual_catalog_bridge_init`:
+redeem the token with `vcatbridge_init`:
 
 ```python
-target = duckdb.connect("virtual_catalog_bridge:", config={"allow_unsigned_extensions": "true"})
-target.execute("SELECT virtual_catalog_bridge_init($1, $2)", ["b1", token])
+target = duckdb.connect("vcatbridge:", config={"allow_unsigned_extensions": "true"})
+target.execute("SELECT vcatbridge_init($1, $2)", ["b1", token])
 ```
 
 The extension then loads by name as the database opens, so it must already be
@@ -86,10 +86,10 @@ form. This is also what lets a test hardcode one:
 
 ```sql
 SELECT bridge_register_source('b1', 'source_catalog', 'my-secret');
-ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'my-secret');
+ATTACH '' AS my_bridge (TYPE vcatbridge, ID 'b1', TOKEN 'my-secret');
 ```
 
-The source catalog may be another `virtual_catalog_bridge`, so bridges chain:
+The source catalog may be another `vcatbridge`, so bridges chain:
 each hop applies its own policies and context, and a write or DDL passes through
 every hop. A `primary_key` set on one hop is not seen by the next; set it again
 there (a native primary key is). The source may not be
@@ -510,7 +510,7 @@ INSERT/UPDATE/DELETE.
 ## Introspecting grants
 
 `bridge_table_permissions` reports, per table/view in an attached catalog, which
-statements it accepts. It works on a `virtual_catalog_bridge` catalog and on a
+statements it accepts. It works on a `vcatbridge` catalog and on a
 plain DuckDB catalog. Signature and columns: [`sql-api.md`](sql-api.md).
 
 `kind` is one of `native_table` · `native_view` · `crossing`. Capability by entry
@@ -531,7 +531,7 @@ subset of this list, and drifted from it. A `READ_ONLY` attach narrows `verbs`
 to `select` whatever the entry's own type says, because the engine will refuse
 the write regardless and the client should not learn that only on failure.
 
-For a `virtual_catalog_bridge` catalog it is a fast, in-memory metadata lookup:
+For a `vcatbridge` catalog it is a fast, in-memory metadata lookup:
 it reads the bridge grant map and the native catalog type directly — no
 source-DB query. On a plain DuckDB catalog it classifies native tables/views
 from the catalog directly.
@@ -555,13 +555,13 @@ render a table in one call instead of stitching together `DESCRIBE`,
 - No snapshot isolation — target always sees the source's latest committed data
 - Inserts commit on the source independently of the target transaction
 
-## Unified catalog (`TYPE virtual_catalog_bridge`)
+## Unified catalog (`TYPE vcatbridge`)
 
 The catalog type is unified in the sense that native DuckDB tables and
 bridge-mirrored source tables coexist freely in the same schema:
 
 ```sql
-ATTACH '' AS workspace (TYPE virtual_catalog_bridge, ID 'b1', TOKEN 'NONCE:UUID');
+ATTACH '' AS workspace (TYPE vcatbridge, ID 'b1', TOKEN 'NONCE:UUID');
 ```
 
 `workspace` behaves exactly like a native in-memory DuckDB catalog — full
@@ -608,7 +608,7 @@ sourceDB.Exec(`SELECT bridge_configure_policy(?, ?)`, bridgeID, policy)
 // target connection. ATTACH options are folded to constants at bind time, so the id and the
 // token go into the statement text rather than into placeholders.
 targetDB.Exec(fmt.Sprintf(
-    `ATTACH '' AS my_bridge (TYPE virtual_catalog_bridge, ID '%s', TOKEN '%s')`, bridgeID, token))
+    `ATTACH '' AS my_bridge (TYPE vcatbridge, ID '%s', TOKEN '%s')`, bridgeID, token))
 
 // ... and on the way out, so the source DatabaseInstance is released
 targetDB.Exec(`DETACH my_bridge`)

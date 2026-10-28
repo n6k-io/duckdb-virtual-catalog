@@ -2,7 +2,7 @@
 
 Two DuckDB extensions:
 
-- **`virtual_catalog_bridge`** — share tables with another DuckDB database, with permissions.
+- **`vcatbridge`** — share tables with another DuckDB database, with permissions.
 - **`virtual_catalog_provider`** — make tables from Python functions.
 
 ## Quick start
@@ -31,13 +31,13 @@ two files `ATTACH`ed to one connection.
 ```
 SOURCE                                         TARGET
 ──────                                         ──────
-LOAD virtual_catalog_bridge;                     LOAD virtual_catalog_bridge;
+LOAD vcatbridge;                     LOAD vcatbridge;
 
 SELECT bridge_register_source('b1', 'db');
   → <token> ────────────────────────────────┐
 SELECT bridge_set_policy('b1', 'main.users',│
                          'select', true);   │
-                                            └──▶ ATTACH '' AS app (TYPE virtual_catalog_bridge,
+                                            └──▶ ATTACH '' AS app (TYPE vcatbridge,
                                                                    ID 'b1', TOKEN '<token>');
 
 SELECT * FROM db.main.users;                     SELECT * FROM app.main.users;
@@ -103,8 +103,8 @@ source.
 on the target as `crm` and `shop`:
 
 ```sql
-ATTACH '' AS crm  (TYPE virtual_catalog_bridge, ID 'b1', TOKEN '<token1>');
-ATTACH '' AS shop (TYPE virtual_catalog_bridge, ID 'b2', TOKEN '<token2>');
+ATTACH '' AS crm  (TYPE vcatbridge, ID 'b1', TOKEN '<token1>');
+ATTACH '' AS shop (TYPE vcatbridge, ID 'b2', TOKEN '<token2>');
 ```
 
 Each source gets its own fragment, with the `WHERE` pushed into the source it belongs to. The
@@ -139,7 +139,7 @@ See [docs/virtual-catalog-provider.md](docs/virtual-catalog-provider.md).
 ## Docs
 
 - [docs/sql-api.md](docs/sql-api.md) — every function
-- [docs/virtual-catalog-bridge.md](docs/virtual-catalog-bridge.md) — the bridge model: setup,
+- [docs/vcatbridge.md](docs/vcatbridge.md) — the bridge model: setup,
   policy, row filters, primary keys, transactions
 - [docs/virtual-catalog-provider.md](docs/virtual-catalog-provider.md) — the provider model and
   UDF contract

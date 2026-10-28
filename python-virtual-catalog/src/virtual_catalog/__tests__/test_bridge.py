@@ -2,7 +2,7 @@ import duckdb
 import pytest
 
 from virtual_catalog.bridge import Policy, bridge, unbridge
-from virtual_catalog.extension import load_virtual_catalog_bridge
+from virtual_catalog.extension import load_vcatbridge
 
 CONN_CONFIG: dict[str, str | bool | int | float | list[str]] = {"allow_unsigned_extensions": "true"}
 
@@ -11,7 +11,7 @@ T = '"workspace"."main"."t"'
 
 def _target() -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect(config=CONN_CONFIG)
-    load_virtual_catalog_bridge(conn)
+    load_vcatbridge(conn)
     return conn
 
 

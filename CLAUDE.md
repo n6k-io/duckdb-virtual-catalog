@@ -3,7 +3,7 @@
 The USER runs builds — never run them yourself.
 
 - User runs **`make release`** builds the extensions into
-  `build/release/extension/virtual_catalog_bridge/virtual_catalog_bridge.duckdb_extension` and
+  `build/release/extension/vcatbridge/vcatbridge.duckdb_extension` and
   `build/release/extension/virtual_catalog_provider/virtual_catalog_provider.duckdb_extension`.
 - You may run **`make test`** runs the sqllogictests under `test/sql/`. (needs make release)
 - You may run **`make test-cpp`** run the c++ unit tests (does not need make release)

@@ -2,6 +2,7 @@
 
 ## virtual_catalog_bridge
 
+- **Breaking:** the extension is renamed `vcatbridge`: `LOAD vcatbridge`, `TYPE vcatbridge`, main database `'vcatbridge:'`, `vcatbridge_init(bridge_id, token)`. The old name has `_`, which URL-based clients (duckdb-go) reject in the `name:` prefix.
 - **Breaking:** two functions replace every policy function. `bridge_configure_policy(id, json)` replaces the whole policy with a JSON document ([schema](docs/policy-v1.schema.json)), checked in full before anything changes. `bridge_set_policy(id, target, setting, value)` assigns one setting; list settings take `add`, `remove` or `set`.
 
   | Removed | Now |
