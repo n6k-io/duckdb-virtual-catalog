@@ -3,7 +3,7 @@
 Two DuckDB extensions:
 
 - **`vcatbridge`** — share tables with another DuckDB database, with permissions.
-- **`virtual_catalog_provider`** — make tables from Python functions.
+- **`vcatprovider`** — make tables from Python functions.
 
 ## Quick start
 
@@ -31,11 +31,11 @@ two files `ATTACH`ed to one connection.
 ```
 SOURCE                                         TARGET
 ──────                                         ──────
-LOAD vcatbridge;                     LOAD vcatbridge;
+LOAD vcatbridge;                               LOAD vcatbridge;
 
-SELECT bridge_register_source('b1', 'db');
+SELECT vcatbridge_register_source('b1', 'db');
   → <token> ────────────────────────────────┐
-SELECT bridge_set_policy('b1', 'main.users',│
+SELECT vcatbridge_set_policy('b1', 'main.users',│
                          'select', true);   │
                                             └──▶ ATTACH '' AS app (TYPE vcatbridge,
                                                                    ID 'b1', TOKEN '<token>');
@@ -55,10 +55,10 @@ SQL text.
 The examples below use this policy on the source, then the same `ATTACH ... AS app` as above:
 
 ```sql
-SELECT bridge_set_context('b1', 'tenant', 42);
-SELECT bridge_set_policy('b1', 'main.users', 'select', 'tenant_id = $tenant');
-SELECT bridge_set_policy('b1', 'main.orders', 'select', true);
-SELECT bridge_set_policy('b1', ':functions', 'whitelist', 'remove', 'upper');
+SELECT vcatbridge_set_context('b1', 'tenant', 42);
+SELECT vcatbridge_set_policy('b1', 'main.users', 'select', 'tenant_id = $tenant');
+SELECT vcatbridge_set_policy('b1', 'main.orders', 'select', true);
+SELECT vcatbridge_set_policy('b1', ':functions', 'whitelist', 'remove', 'upper');
 ```
 
 **A join and aggregate on one bridge** — all on the source (`EXPLAIN`, abridged):
@@ -129,19 +129,19 @@ HASH_GROUP_BY  group by name          ← target
             └─ orders
 ```
 
-## virtual_catalog_provider
+## vcatprovider
 
 Back a catalog with your own functions: you register `list`, `schema` and `scan` UDFs (plus
 optional `insert`, `update`, `delete`), returning Arrow IPC, and DuckDB sees ordinary tables.
 Useful for serving data from an API, an in-memory structure, or another engine.
-See [docs/virtual-catalog-provider.md](docs/virtual-catalog-provider.md).
+See [docs/vcatprovider.md](docs/vcatprovider.md).
 
 ## Docs
 
 - [docs/sql-api.md](docs/sql-api.md) — every function
 - [docs/vcatbridge.md](docs/vcatbridge.md) — the bridge model: setup,
   policy, row filters, primary keys, transactions
-- [docs/virtual-catalog-provider.md](docs/virtual-catalog-provider.md) — the provider model and
+- [docs/vcatprovider.md](docs/vcatprovider.md) — the provider model and
   UDF contract
 - [docs/policy-v1.schema.json](docs/policy-v1.schema.json) — policy document schema
 - [CHANGELOG.md](CHANGELOG.md)

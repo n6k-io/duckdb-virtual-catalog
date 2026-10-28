@@ -7,7 +7,7 @@ duckdb_extension_load(vcatbridge
     LOAD_TESTS
 )
 
-duckdb_extension_load(virtual_catalog_provider
+duckdb_extension_load(vcatprovider
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/src/provider
     INCLUDE_DIR ${CMAKE_CURRENT_LIST_DIR}/src/provider/include
     TEST_DIR ${CMAKE_CURRENT_LIST_DIR}/test/sql/provider
