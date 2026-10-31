@@ -1,7 +1,9 @@
 """Rootdir conftest: CLI options and extension resolution for tests under src/*/__tests__/."""
 
+import contextlib
 import os
 from collections.abc import Iterator
+from typing import Any
 from urllib.parse import urlparse
 
 import duckdb
@@ -52,7 +54,7 @@ def _extension_source(request: FixtureRequest) -> Iterator[None]:
         os.environ[VIRTUAL_CATALOG_EXT_DIR_ENV] = saved
 
 
-def _parse_external_url(url):
+def _parse_external_url(url: str) -> tuple[str, str, str]:
     """Parse an external DB URL into (db_type, attach_string, schema).
 
     Supports:
@@ -63,7 +65,7 @@ def _parse_external_url(url):
     scheme = parsed.scheme.lower()
     if scheme in ("postgres", "postgresql"):
         db_type = "postgres"
-        parts = []
+        parts: list[str] = []
         if parsed.hostname:
             parts.append(f"host={parsed.hostname}")
         if parsed.port:
@@ -97,7 +99,7 @@ def _parse_external_url(url):
 
 
 @pytest.fixture
-def external_db(request):
+def external_db(request: FixtureRequest) -> Iterator[dict[str, Any]]:
     """Fixture providing a DuckDB connection with an external DB attached.
 
     Yields a dict with: type, attach_string, catalog, schema, source.
@@ -113,9 +115,9 @@ def external_db(request):
     source = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     source.execute(f"ATTACH '{attach_string}' AS {catalog} (TYPE {db_type})")
 
-    tables_created = []
+    tables_created: list[str] = []
 
-    def create_table(name, ddl):
+    def create_table(name: str, ddl: str) -> str:
         """Create a table on the external DB and track it for cleanup."""
         qualified = f'"{catalog}"."{schema}"."{name}"'
         source.execute(f"DROP TABLE IF EXISTS {qualified}")
@@ -123,7 +125,7 @@ def external_db(request):
         tables_created.append(qualified)
         return qualified
 
-    info = {
+    info: dict[str, Any] = {
         "type": db_type,
         "attach_string": attach_string,
         "catalog": catalog,
@@ -135,8 +137,6 @@ def external_db(request):
     yield info
 
     for qualified in tables_created:
-        try:
+        with contextlib.suppress(duckdb.Error):
             source.execute(f"DROP TABLE IF EXISTS {qualified}")
-        except Exception:
-            pass
     source.close()

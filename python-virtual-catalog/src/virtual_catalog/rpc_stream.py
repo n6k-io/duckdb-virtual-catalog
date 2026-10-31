@@ -61,21 +61,20 @@ A finite callable runs directly on the worker thread, which is already off the
 loop.
 """
 
-from __future__ import annotations
-
 import asyncio
 import io
 import json
 import logging
 import struct
 import uuid
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any
 
 import duckdb
 import pyarrow as pa
-import pyarrow.ipc as ipc
 from duckdb.func import FunctionNullHandling
+from pyarrow import ipc
 
 from virtual_catalog.extension import load_vcatprovider
 
@@ -90,9 +89,9 @@ _SPECIAL = FunctionNullHandling.SPECIAL
 RPC_SCHEMA = "main"
 
 # A finite RPC: (scalars, table) -> one fully materialized pa.Table.
-FiniteRpcFn = Callable[[List[Any], Optional[pa.Table]], pa.Table]
+FiniteRpcFn = Callable[[list[Any], pa.Table | None], pa.Table]
 # A streaming RPC: (scalars, table) -> an async iterator of record batches, possibly unbounded.
-StreamingRpcFn = Callable[[List[Any], Optional[pa.Table]], AsyncIterator[Any]]
+StreamingRpcFn = Callable[[list[Any], pa.Table | None], AsyncIterator[Any]]
 
 
 @dataclass(frozen=True)
@@ -108,8 +107,8 @@ class StreamingRpc:
     fn: StreamingRpcFn
 
 
-RpcEntryFn = Union[FiniteRpcFn, StreamingRpc]
-RpcRegistry = Dict[str, Tuple[RpcEntryFn, pa.Schema]]
+RpcEntryFn = FiniteRpcFn | StreamingRpc
+RpcRegistry = dict[str, tuple[RpcEntryFn, pa.Schema]]
 
 
 def _drop_leading_message(data: bytes) -> bytes:
@@ -196,7 +195,7 @@ def _run_async(coro: Any, loop: asyncio.AbstractEventLoop) -> Any:
     return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
 
-def _as_batches(value: Any) -> List[pa.RecordBatch]:
+def _as_batches(value: Any) -> list[pa.RecordBatch]:
     """One yielded value as record batches. A table becomes its batches; an
     empty one becomes none at all, which is not the end of the stream."""
     if isinstance(value, pa.RecordBatch):
@@ -214,19 +213,19 @@ class _LiveStream:
         encoder: ArrowFrameEncoder,
         loop: asyncio.AbstractEventLoop,
         *,
-        aiterator: Optional[AsyncIterator[Any]] = None,
-        batches: Optional[Iterator[pa.RecordBatch]] = None,
+        aiterator: AsyncIterator[Any] | None = None,
+        batches: Iterator[pa.RecordBatch] | None = None,
     ) -> None:
         self.encoder = encoder
         self._loop = loop
         self._aiterator = aiterator
         self._batches = batches
-        self._pending: List[pa.RecordBatch] = []
+        self._pending: list[pa.RecordBatch] = []
         # Holds the teardown task when close() runs on the loop thread, so it is not collected
         # mid-flight.
-        self._task: Optional["asyncio.Task[None]"] = None
+        self._task: asyncio.Task[None] | None = None
 
-    def next_batch(self) -> Optional[pa.RecordBatch]:
+    def next_batch(self) -> pa.RecordBatch | None:
         """The next batch, or None once the source is exhausted."""
         while True:
             if self._pending:
@@ -250,7 +249,7 @@ class _LiveStream:
         if aclose is None:
             return
         try:
-            running: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+            running: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
             running = None
         if running is self._loop:
@@ -273,7 +272,7 @@ class HostStreamUdfs:
         self.loop = loop
         self.registry: RpcRegistry = {}
         # (catalog, name) per created table function, so teardown can drop exactly those.
-        self.created: List[Tuple[str, str]] = []
+        self.created: list[tuple[str, str]] = []
         # create_function registers into the DATABASE catalog, not the connection, and a duplicate
         # name raises. Two connections sharing a DatabaseInstance would collide on a fixed name, so
         # the names carry a per-`register_rpc_streams` suffix. It is only uniqueness -- nothing looks it up.
@@ -282,11 +281,11 @@ class HostStreamUdfs:
             f"__n6k_rpc_next_{udf_suffix}",
             f"__n6k_rpc_close_{udf_suffix}",
         )
-        self._live: Dict[str, _LiveStream] = {}
+        self._live: dict[str, _LiveStream] = {}
 
     # ── the three UDFs the reactor calls ─────────────────────────────────────
 
-    def _open(self, handle: str, function: str, args_json: str, input_ipc: Optional[bytes]) -> bytes:
+    def _open(self, handle: str, function: str, args_json: str, input_ipc: bytes | None) -> bytes:
         entry = self.registry.get(function)
         if entry is None:
             raise KeyError(f"no host RPC named {function!r} is registered on this connection")
@@ -306,7 +305,7 @@ class HostStreamUdfs:
             self._live[handle] = _LiveStream(encoder, self.loop, batches=iter(result.to_batches()))
         return encoder.take_schema_message()
 
-    def _next(self, handle: str) -> Optional[bytes]:
+    def _next(self, handle: str) -> bytes | None:
         stream = self._live.get(handle)
         if stream is None:
             raise KeyError(f"RPC stream {handle!r} is not open")
@@ -372,7 +371,7 @@ class HostStreamUdfs:
         for handle, stream in list(self._live.items()):
             try:
                 stream.close()
-            except Exception:  # noqa: BLE001 - one stuck generator must not block the rest
+            except Exception:
                 log.exception("host RPC stream %s failed to close", handle)
         self.registry = {}
         self._live.clear()
@@ -383,7 +382,7 @@ def register_rpc_streams(
     *,
     catalog: str,
     registry: RpcRegistry,
-    main_loop: Optional[asyncio.AbstractEventLoop] = None,
+    main_loop: asyncio.AbstractEventLoop | None = None,
 ) -> HostStreamUdfs:
     """Register `registry`'s functions as table functions in `catalog`.main on `con`.
 

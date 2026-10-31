@@ -4,6 +4,7 @@ in-memory Arrow tables and pure Python.
 
 from datetime import date, datetime, time
 from decimal import Decimal
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -11,8 +12,8 @@ import pytest
 
 from virtual_catalog.filters import (
     FilterClause,
-    filters_from_wire,
     filter_and_project,
+    filters_from_wire,
     split_pyarrow_filters,
 )
 
@@ -263,7 +264,7 @@ def test_rebuilt_filters_work_in_filter_and_project() -> None:
     assert got.to_pydict() == {"name": ["b"]}
 
 
-def test_rebuilt_filters_work_for_pyarrow_dataset(tmp_path) -> None:
+def test_rebuilt_filters_work_for_pyarrow_dataset(tmp_path: Path) -> None:
     """The parquet path is the one `split_pyarrow_filters` feeds, and it does
     not rebuild either — so it needs the same treatment as filter_and_project."""
     table = _typed()
@@ -271,4 +272,4 @@ def test_rebuilt_filters_work_for_pyarrow_dataset(tmp_path) -> None:
     pq.write_table(table, path)
     arrow, leftover = split_pyarrow_filters(filters_from_wire([["day", ">=", "2026-05-21", "date"]]))
     assert leftover == []
-    assert pq.read_table(path, filters=arrow).num_rows == 1
+    assert pq.read_table(path, filters=arrow).num_rows == 1  # type: ignore[arg-type]

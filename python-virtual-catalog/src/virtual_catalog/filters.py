@@ -12,14 +12,14 @@ via `filter_and_project()`.
 
 import datetime
 import decimal
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
 FilterOp = Literal["=", "!=", "<", "<=", ">", ">=", "in", "is_null", "is_not_null"]
 FilterClause = tuple[str, FilterOp, Any]
-Filters = Optional[list[FilterClause]]
+Filters = list[FilterClause] | None
 
 # The network `filters` payload is a superset of the Provider-facing `Filters`
 # shape: alongside flat `(col, op, value)` triples it may carry nested
@@ -77,7 +77,7 @@ def _rebuild_value(value: Any, tag: str, col: str) -> Any:
         return rebuild(value)
     except (ValueError, ArithmeticError) as exc:
         raise ValueError(
-            f"n6k: filter on column {col!r} received {value!r}, which is not a " f"valid {tag} literal"
+            f"n6k: filter on column {col!r} received {value!r}, which is not a valid {tag} literal"
         ) from exc
 
 
@@ -134,7 +134,7 @@ def split_pyarrow_filters(
 
 def filter_and_project(
     table: pa.Table,
-    columns: Optional[list[str]],
+    columns: list[str] | None,
     filters: Filters,
 ) -> pa.Table:
     """Apply filters, then project, on an in-memory Arrow table.
@@ -148,7 +148,7 @@ def filter_and_project(
     all — load the full table and return `filter_and_project(tbl, columns, filters)`.
     """
     if filters:
-        expr: Optional[pc.Expression] = None
+        expr: pc.Expression | None = None
         for col, op, val in filters:
             field = pc.field(col)
             clause: pc.Expression
@@ -169,7 +169,7 @@ def filter_and_project(
             elif op == "is_null":
                 clause = field.is_null()
             elif op == "is_not_null":
-                clause = field.is_valid()
+                clause = pc.is_valid(field)
             else:
                 raise ValueError(f"filter_and_project: unsupported operator {op!r}")
             expr = clause if expr is None else expr & clause

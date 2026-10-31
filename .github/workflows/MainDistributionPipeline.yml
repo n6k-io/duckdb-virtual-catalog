@@ -37,6 +37,24 @@ jobs:
       # job deliberately does not check out the duckdb submodules.
       - run: python3 scripts/check_no_sql.py src
 
+  python-lint:
+    name: Python lint and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - working-directory: python-virtual-catalog
+        run: uv run --frozen --package duckdb-virtual-catalog ruff check
+      - working-directory: python-virtual-catalog
+        run: uv run --frozen --package duckdb-virtual-catalog ruff format --check
+      - working-directory: python-virtual-catalog
+        run: uv run --frozen --package duckdb-virtual-catalog mypy src conftest.py
+
   python-tests:
     name: Python package tests
     needs: duckdb-stable-build

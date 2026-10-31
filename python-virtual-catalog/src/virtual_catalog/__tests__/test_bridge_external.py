@@ -5,6 +5,9 @@ Run with: uv run pytest python-virtual-catalog/src/virtual_catalog/__tests__/tes
 Skip automatically when --external is not provided.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import duckdb
 import pytest
 
@@ -13,11 +16,11 @@ from virtual_catalog.bridge import Policy, bridge
 pytestmark = pytest.mark.external
 
 
-def _select(table):
+def _select(table: str) -> list[Policy]:
     return [Policy(table, "select", "true")]
 
 
-def _all_verbs(table):
+def _all_verbs(table: str) -> list[Policy]:
     return [
         Policy(table, "select", "true"),
         Policy(table, "insert", "true"),
@@ -26,7 +29,12 @@ def _all_verbs(table):
     ]
 
 
-def _bridge_external(external_db, table_name, grants=_all_verbs, primary_keys=None):
+def _bridge_external(
+    external_db: dict[str, Any],
+    table_name: str,
+    grants: Callable[[str], list[Policy]] = _all_verbs,
+    primary_keys: dict[str, list[str]] | None = None,
+) -> tuple[duckdb.DuckDBPyConnection, str]:
     """Bridge one source table into a fresh bridge catalog on the source connection
     and return (conn, qualified).
 
@@ -50,7 +58,7 @@ def _bridge_external(external_db, table_name, grants=_all_verbs, primary_keys=No
     return conn, qualified
 
 
-def test_update_integer_pk(external_db):
+def test_update_integer_pk(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_int_pk", "id INTEGER PRIMARY KEY, val INTEGER")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_int_pk"'
@@ -63,7 +71,7 @@ def test_update_integer_pk(external_db):
     assert result == (999,)
 
 
-def test_delete_integer_pk(external_db):
+def test_delete_integer_pk(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_int_del", "id INTEGER PRIMARY KEY, val INTEGER")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_int_del"'
@@ -76,7 +84,7 @@ def test_delete_integer_pk(external_db):
     assert result == [(1,), (3,)]
 
 
-def test_update_varchar_pk(external_db):
+def test_update_varchar_pk(external_db: dict[str, Any]) -> None:
     if external_db["type"] == "mysql":
         pytest.skip("MySQL maps VARCHAR to TEXT which can't be a PK via DuckDB CREATE TABLE")
     external_db["create_table"]("bridge_varchar_pk", "code VARCHAR(50) PRIMARY KEY, val INTEGER")
@@ -91,7 +99,7 @@ def test_update_varchar_pk(external_db):
     assert result == (77,)
 
 
-def test_delete_varchar_pk(external_db):
+def test_delete_varchar_pk(external_db: dict[str, Any]) -> None:
     if external_db["type"] == "mysql":
         pytest.skip("MySQL maps VARCHAR to TEXT which can't be a PK via DuckDB CREATE TABLE")
     external_db["create_table"]("bridge_varchar_del", "code VARCHAR(50) PRIMARY KEY, val INTEGER")
@@ -106,7 +114,7 @@ def test_delete_varchar_pk(external_db):
     assert result == [("abc",), ("ghi",)]
 
 
-def test_insert_through_bridge(external_db):
+def test_insert_through_bridge(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_insert", "id INTEGER PRIMARY KEY, name VARCHAR(100)")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_insert"'
@@ -118,7 +126,7 @@ def test_insert_through_bridge(external_db):
     assert result == [(1, "hello")]
 
 
-def test_update_expression(external_db):
+def test_update_expression(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_expr", "id INTEGER PRIMARY KEY, counter INTEGER")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_expr"'
@@ -131,7 +139,7 @@ def test_update_expression(external_db):
     assert result == (15,)
 
 
-def test_composite_pk_update(external_db):
+def test_composite_pk_update(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_cpk", "a INTEGER, b INTEGER, val VARCHAR(50), PRIMARY KEY(a, b)")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_cpk"'
@@ -144,7 +152,7 @@ def test_composite_pk_update(external_db):
     assert result == ("changed",)
 
 
-def test_composite_pk_delete(external_db):
+def test_composite_pk_delete(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_cpk_del", "a INTEGER, b INTEGER, val VARCHAR(50), PRIMARY KEY(a, b)")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_cpk_del"'
@@ -157,7 +165,7 @@ def test_composite_pk_delete(external_db):
     assert result == [(1, 1), (2, 1)]
 
 
-def test_pk_auto_discovery(external_db):
+def test_pk_auto_discovery(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_auto_pk", "id INTEGER PRIMARY KEY, val INTEGER")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_auto_pk"'
@@ -171,7 +179,7 @@ def test_pk_auto_discovery(external_db):
     assert result == (99,)
 
 
-def test_no_pk_refuses_keyed_writes_on_external(external_db):
+def test_no_pk_refuses_keyed_writes_on_external(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_no_pk", "x INTEGER, y INTEGER")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_no_pk"'
@@ -185,7 +193,7 @@ def test_no_pk_refuses_keyed_writes_on_external(external_db):
         target.sql(f"DELETE FROM {tq} WHERE x = 1")
 
 
-def test_join_optional_filter_pushdown(external_db):
+def test_join_optional_filter_pushdown(external_db: dict[str, Any]) -> None:
     """Regression: a hash join over bridged tables must not emit non-SQL filters.
 
     DuckDB pushes a hash join's dynamic min/max into the build-side scan as an
@@ -229,7 +237,7 @@ def test_join_optional_filter_pushdown(external_db):
     assert rows == expected
 
 
-def test_read_through_bridge(external_db):
+def test_read_through_bridge(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_read", "id INTEGER PRIMARY KEY, name VARCHAR(100)")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_read"'
@@ -241,7 +249,7 @@ def test_read_through_bridge(external_db):
     assert result == [(1, "alice"), (2, "bob")]
 
 
-def test_multi_column_update(external_db):
+def test_multi_column_update(external_db: dict[str, Any]) -> None:
     external_db["create_table"]("bridge_multi", "id INTEGER PRIMARY KEY, a INTEGER, b VARCHAR(50)")
     src = external_db["source"]
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_multi"'
@@ -254,7 +262,7 @@ def test_multi_column_update(external_db):
     assert result == (99, "new")
 
 
-def test_sequential_scans_no_segfault(external_db):
+def test_sequential_scans_no_segfault(external_db: dict[str, Any]) -> None:
     """Multiple sequential scans on a readwrite bridge table must not segfault.
 
     Regression test: the first scan consumed the Arrow stream in the cached

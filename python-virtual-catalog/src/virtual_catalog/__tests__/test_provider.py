@@ -14,7 +14,7 @@ import gc
 import weakref
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 import duckdb
 import pyarrow as pa
@@ -55,7 +55,7 @@ class _FakeStore(Provider):
         self.list_calls = 0
         self.scan_calls = 0
 
-    def set_table(self, name: str, table: pa.Table, pks: Optional[list[str]] = None) -> None:
+    def set_table(self, name: str, table: pa.Table, pks: list[str] | None = None) -> None:
         if pks:
             meta = {PK_METADATA_KEY: ",".join(pks).encode("utf-8")}
             table = table.replace_schema_metadata({**(table.schema.metadata or {}), **meta})
@@ -75,7 +75,7 @@ class _FakeStore(Provider):
     async def scan(
         self,
         name: str,
-        columns: Optional[list[str]],
+        columns: list[str] | None,
         filters: Filters,
     ) -> pa.Table:
         self.scan_calls += 1
@@ -135,8 +135,7 @@ async def test_invalidate_reveals_new_table() -> None:
 
     rows = await asyncio.to_thread(
         lambda: conn.sql(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_catalog='workspace' AND table_schema='public'"
+            "SELECT table_name FROM information_schema.tables WHERE table_catalog='workspace' AND table_schema='public'"
         ).fetchall()
     )
     assert [r[0] for r in rows] == ["a"]
@@ -195,8 +194,7 @@ async def test_unregister_removes_provider_tables() -> None:
 
     rows = await asyncio.to_thread(
         lambda: conn.sql(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_catalog='workspace' AND table_schema='public'"
+            "SELECT table_name FROM information_schema.tables WHERE table_catalog='workspace' AND table_schema='public'"
         ).fetchall()
     )
     assert [r[0] for r in rows] == ["a"]
@@ -205,8 +203,7 @@ async def test_unregister_removes_provider_tables() -> None:
 
     rows = await asyncio.to_thread(
         lambda: conn.sql(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_catalog='workspace' AND table_schema='public'"
+            "SELECT table_name FROM information_schema.tables WHERE table_catalog='workspace' AND table_schema='public'"
         ).fetchall()
     )
     assert rows == []
@@ -247,8 +244,7 @@ async def test_unregister_then_reregister_same_schema() -> None:
 
     rows = await asyncio.to_thread(
         lambda: conn.sql(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_catalog='workspace' AND table_schema='public'"
+            "SELECT table_name FROM information_schema.tables WHERE table_catalog='workspace' AND table_schema='public'"
         ).fetchall()
     )
     assert [r[0] for r in rows] == ["b"]
@@ -498,12 +494,12 @@ async def test_scan_receives_projected_columns() -> None:
     class TrackStore(_FakeStore):
         def __init__(self) -> None:
             super().__init__()
-            self.scan_calls_with_columns: list[Optional[list[str]]] = []
+            self.scan_calls_with_columns: list[list[str] | None] = []
 
         async def scan(
             self,
             name: str,
-            columns: Optional[list[str]],
+            columns: list[str] | None,
             filters: Filters,
         ) -> pa.Table:
             self.scan_calls_with_columns.append(columns)
@@ -531,7 +527,7 @@ async def test_scan_post_projection_fallback() -> None:
         async def scan(
             self,
             name: str,
-            columns: Optional[list[str]],
+            columns: list[str] | None,
             filters: Filters,
         ) -> pa.Table:
             # Intentionally ignore `columns` — always return the full table.
@@ -574,7 +570,7 @@ class _CapturingStore(Provider):
     async def scan(
         self,
         name: str,
-        columns: Optional[list[str]],
+        columns: list[str] | None,
         filters: Filters,
     ) -> pa.Table:
         self.captured.append(filters)
@@ -654,7 +650,7 @@ class _ReadOnlyStore(Provider):
             raise TableNotFound(name)
         return self.tables[name].schema
 
-    async def scan(self, name: str, columns: Optional[list[str]], filters: Filters) -> pa.Table:
+    async def scan(self, name: str, columns: list[str] | None, filters: Filters) -> pa.Table:
         table = self.tables[name]
         if columns is not None:
             table = table.select(columns)
@@ -676,8 +672,8 @@ async def _permissions(
     conn: duckdb.DuckDBPyConnection,
     *,
     catalog: str = "workspace",
-    schema: Optional[str] = None,
-    table: Optional[str] = None,
+    schema: str | None = None,
+    table: str | None = None,
 ) -> list[tuple[Any, ...]]:
     parts = [repr(catalog)]
     if schema is not None:
@@ -799,7 +795,7 @@ class _RecordingStore(_FakeStore):
     async def scan(
         self,
         name: str,
-        columns: Optional[list[str]],
+        columns: list[str] | None,
         filters: Filters,
     ) -> pa.Table:
         self.scan_calls += 1
@@ -983,7 +979,7 @@ async def test_delete_with_a_large_string_primary_key() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_a_key_column_layout_the_key_reader_cannot_read_is_refused(column: pa.Array, refusal: str) -> None:
+async def test_a_key_column_layout_the_key_reader_cannot_read_is_refused(column: "pa.Array[Any]", refusal: str) -> None:
     """Both of these are still a VARCHAR to DuckDB while their buffers hold something
     else — dictionary indices, or views into a buffer list. Dictionary columns
     decode and scan fine, but the DML key reader reads raw Arrow buffers by layout,
@@ -1020,7 +1016,7 @@ async def test_a_key_column_layout_the_key_reader_cannot_read_is_refused(column:
     ],
 )
 @pytest.mark.asyncio
-async def test_dictionary_encoded_columns_describe_and_scan_as_their_value_type(column: pa.Array) -> None:
+async def test_dictionary_encoded_columns_describe_and_scan_as_their_value_type(column: "pa.Array[Any]") -> None:
     conn = _new_conn()
     store = _FakeStore()
     store.set_table("t", pa.table({"id": [1, 2, 3], "cat": column}), pks=["id"])
@@ -1059,7 +1055,7 @@ async def test_a_pandas_categorical_column_round_trips() -> None:
 async def test_nested_dictionary_columns_scan_as_their_value_type() -> None:
     dict_child = pa.DictionaryArray.from_arrays(pa.array([0, 1], type=pa.int8()), pa.array(["a", "b"]))
     struct_col = pa.StructArray.from_arrays([dict_child], names=["tag"])
-    list_col = pa.ListArray.from_arrays(pa.array([0, 1, 2]), dict_child)
+    list_col = pa.ListArray.from_arrays(pa.array([0, 1, 2]), dict_child)  # type: ignore[call-overload]
 
     conn = _new_conn()
     store = _FakeStore()
@@ -1124,7 +1120,7 @@ async def test_update_on_a_table_with_a_dictionary_data_column() -> None:
         ),
     ],
 )
-async def test_a_typed_filter_literal_arrives_as_a_scalar(column: pa.Array, where: str, expected: Any) -> None:
+async def test_a_typed_filter_literal_arrives_as_a_scalar(column: "pa.Array[Any]", where: str, expected: Any) -> None:
     conn = _new_conn()
     store = _CapturingStore(pa.table({"d": column, "n": [1, 2]}))
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
@@ -1171,7 +1167,7 @@ def _error_of(conn: duckdb.DuckDBPyConnection, sql: str) -> str:
     raise AssertionError(f"expected {sql!r} to fail")
 
 
-async def _register_query_release() -> tuple["weakref.ref[_FakeStore]", "weakref.ref[duckdb.DuckDBPyConnection]"]:
+async def _register_query_release() -> tuple[weakref.ref[_FakeStore], weakref.ref[duckdb.DuckDBPyConnection]]:
     conn = _new_conn()
     store = _registered_store(conn)
     await asyncio.to_thread(lambda: conn.sql("SELECT * FROM workspace.public.a").fetchall())

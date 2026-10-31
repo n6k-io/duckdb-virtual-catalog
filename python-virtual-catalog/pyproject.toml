@@ -1,12 +1,13 @@
 [project]
 name = "duckdb-virtual-catalog"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python helpers for the vcatbridge and vcatprovider DuckDB extensions"
 readme = "README.md"
 authors = [
     { email = "srossross@gmail.com" }
 ]
-requires-python = ">=3.9"
+license = "MIT"
+requires-python = ">=3.10"
 dependencies = ["duckdb>=1.5.6", "pyarrow", "numpy"]
 
 [build-system]
@@ -21,6 +22,9 @@ dev = [
     "pytest>=7",
     "pytest-asyncio>=0.23",
     "python-dotenv>=1",
+    "mypy>=1.13",
+    "ruff>=0.8",
+    "pyarrow-stubs",
 ]
 
 [tool.pytest.ini_options]
@@ -28,3 +32,11 @@ testpaths = ["src"]
 
 [tool.black]
 line-length = 120
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.mypy]
+strict = true
+python_version = "3.10"
