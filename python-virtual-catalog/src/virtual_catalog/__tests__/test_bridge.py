@@ -1,3 +1,6 @@
+from collections.abc import Callable
+from typing import Any
+
 import duckdb
 import pytest
 
@@ -22,15 +25,17 @@ def _source(*statements: str) -> duckdb.DuckDBPyConnection:
     return source
 
 
-def _bridge(source, target, policies, **kwargs):
+def _bridge(
+    source: duckdb.DuckDBPyConnection, target: duckdb.DuckDBPyConnection, policies: list[Policy], **kwargs: Any
+) -> str:
     return bridge(source, target, "workspace", source_catalog="memory", policies=policies, **kwargs)
 
 
-def _select(table):
+def _select(table: str) -> list[Policy]:
     return [Policy(table, "select", "true")]
 
 
-def _all_verbs(table):
+def _all_verbs(table: str) -> list[Policy]:
     return [
         Policy(table, "select", "true"),
         Policy(table, "insert", "true"),
@@ -39,7 +44,7 @@ def _all_verbs(table):
     ]
 
 
-def test_read_through_bridge():
+def test_read_through_bridge() -> None:
     source = _source("CREATE TABLE t AS SELECT i, i * 2 AS doubled FROM range(100) t(i)")
     target = _target()
     _bridge(source, target, _select("main.t"))
@@ -47,7 +52,7 @@ def test_read_through_bridge():
     assert target.sql(f"SELECT count(*) FROM {T}").fetchone() == (100,)
 
 
-def test_non_permitted_table_blocked():
+def test_non_permitted_table_blocked() -> None:
     source = _source("CREATE TABLE allowed(x INTEGER)", "CREATE TABLE secret(x INTEGER)")
     target = _target()
     _bridge(source, target, _select("main.allowed"))
@@ -57,7 +62,7 @@ def test_non_permitted_table_blocked():
         target.sql('SELECT * FROM "workspace"."main".secret')
 
 
-def test_readwrite_insert():
+def test_readwrite_insert() -> None:
     source = _source("CREATE TABLE t(x INTEGER PRIMARY KEY, y VARCHAR)")
     target = _target()
     _bridge(source, target, _all_verbs("main.t"))
@@ -66,7 +71,7 @@ def test_readwrite_insert():
     assert source.sql("SELECT x, y FROM t").fetchall() == [(1, "hello")]
 
 
-def test_read_only_blocks_insert():
+def test_read_only_blocks_insert() -> None:
     source = _source("CREATE TABLE t(x INTEGER)")
     target = _target()
     _bridge(source, target, _select("main.t"))
@@ -75,7 +80,7 @@ def test_read_only_blocks_insert():
         target.sql(f"INSERT INTO {T} VALUES (1)")
 
 
-def test_readwrite_update():
+def test_readwrite_update() -> None:
     source = _source(
         "CREATE TABLE t(id INTEGER PRIMARY KEY, name VARCHAR)", "INSERT INTO t VALUES (1, 'alice'), (2, 'bob')"
     )
@@ -86,7 +91,7 @@ def test_readwrite_update():
     assert source.sql("SELECT name FROM t WHERE id = 1").fetchone() == ("updated",)
 
 
-def test_readwrite_delete():
+def test_readwrite_delete() -> None:
     source = _source(
         "CREATE TABLE t(id INTEGER PRIMARY KEY, name VARCHAR)",
         "INSERT INTO t VALUES (1, 'alice'), (2, 'bob'), (3, 'charlie')",
@@ -98,7 +103,7 @@ def test_readwrite_delete():
     assert source.sql("SELECT id, name FROM t ORDER BY id").fetchall() == [(1, "alice"), (3, "charlie")]
 
 
-def test_read_only_blocks_update():
+def test_read_only_blocks_update() -> None:
     source = _source("CREATE TABLE t(id INTEGER)", "INSERT INTO t VALUES (1)")
     target = _target()
     _bridge(source, target, _select("main.t"))
@@ -107,7 +112,7 @@ def test_read_only_blocks_update():
         target.sql(f"UPDATE {T} SET id = 2 WHERE id = 1")
 
 
-def test_read_only_blocks_delete():
+def test_read_only_blocks_delete() -> None:
     source = _source("CREATE TABLE t(id INTEGER)", "INSERT INTO t VALUES (1)")
     target = _target()
     _bridge(source, target, _select("main.t"))
@@ -116,7 +121,7 @@ def test_read_only_blocks_delete():
         target.sql(f"DELETE FROM {T} WHERE id = 1")
 
 
-def test_filter_pushdown():
+def test_filter_pushdown() -> None:
     source = _source("CREATE TABLE t AS SELECT i FROM range(1000) t(i)")
     target = _target()
     _bridge(source, target, _select("main.t"))
@@ -126,7 +131,7 @@ def test_filter_pushdown():
     assert all(row[0] > 995 for row in result)
 
 
-def test_live_data_visibility():
+def test_live_data_visibility() -> None:
     source = _source("CREATE TABLE t(x INTEGER)")
     target = _target()
     _bridge(source, target, _select("main.t"))
@@ -136,12 +141,12 @@ def test_live_data_visibility():
     assert target.sql(f"SELECT count(*) FROM {T}").fetchone() == (3,)
 
 
-def test_empty_policies_raises():
+def test_empty_policies_raises() -> None:
     with pytest.raises(duckdb.Error, match="policies must be provided"):
         _bridge(_source(), _target(), [])
 
 
-def test_source_schema_lands_in_same_target_schema():
+def test_source_schema_lands_in_same_target_schema() -> None:
     source = _source("CREATE SCHEMA mysrc", "CREATE TABLE mysrc.t(x INTEGER)", "INSERT INTO mysrc.t VALUES (42)")
     target = _target()
     _bridge(source, target, _select("mysrc.t"))
@@ -149,7 +154,7 @@ def test_source_schema_lands_in_same_target_schema():
     assert target.sql('SELECT * FROM "workspace"."mysrc".t').fetchone() == (42,)
 
 
-def test_two_source_schemas_in_one_bridge():
+def test_two_source_schemas_in_one_bridge() -> None:
     source = _source(
         "CREATE SCHEMA other",
         "CREATE TABLE t(x INTEGER)",
@@ -164,7 +169,7 @@ def test_two_source_schemas_in_one_bridge():
     assert target.sql('SELECT x FROM "workspace"."other".t').fetchone() == (2,)
 
 
-def test_insert_select_roundtrip():
+def test_insert_select_roundtrip() -> None:
     source = _source("CREATE TABLE t(x INTEGER PRIMARY KEY)")
     target = _target()
     _bridge(source, target, _all_verbs("main.t"))
@@ -173,7 +178,7 @@ def test_insert_select_roundtrip():
     assert target.sql(f"SELECT * FROM {T} ORDER BY x").fetchall() == [(10,), (20,), (30,)]
 
 
-def test_readwrite_update_expression():
+def test_readwrite_update_expression() -> None:
     source = _source("CREATE TABLE t(id INTEGER PRIMARY KEY, counter INTEGER)", "INSERT INTO t VALUES (1, 10), (2, 20)")
     target = _target()
     _bridge(source, target, _all_verbs("main.t"))
@@ -182,7 +187,7 @@ def test_readwrite_update_expression():
     assert source.sql("SELECT counter FROM t WHERE id = 1").fetchone() == (15,)
 
 
-def test_table_name_with_comma():
+def test_table_name_with_comma() -> None:
     source = _source(
         'CREATE TABLE "my,table"(x INTEGER)', 'INSERT INTO "my,table" VALUES (1)', "CREATE TABLE secret(x INTEGER)"
     )
@@ -194,7 +199,7 @@ def test_table_name_with_comma():
         target.sql('SELECT * FROM "workspace"."main".secret')
 
 
-def test_table_name_with_colon():
+def test_table_name_with_colon() -> None:
     source = _source('CREATE TABLE "a:b"(x INTEGER)', 'INSERT INTO "a:b" VALUES (42)')
     target = _target()
     _bridge(source, target, _select("main.a:b"))
@@ -202,19 +207,19 @@ def test_table_name_with_colon():
     assert target.sql('SELECT * FROM "workspace"."main"."a:b"').fetchone() == (42,)
 
 
-def test_nonexistent_source_table_rejected():
+def test_nonexistent_source_table_rejected() -> None:
     with pytest.raises(duckdb.Error):
         _bridge(_source(), _target(), _select("main.nonexistent"))
 
 
-def test_bridge_name_already_attached_rejected():
+def test_bridge_name_already_attached_rejected() -> None:
     source = _source("CREATE TABLE t(x INTEGER)")
     target = _target()
     with pytest.raises(duckdb.Error):
         bridge(source, target, "memory", source_catalog="memory", policies=_select("main.t"))
 
 
-def test_unbridge_detaches_catalog():
+def test_unbridge_detaches_catalog() -> None:
     source = _source("CREATE TABLE t(x INTEGER)")
     target = _target()
     _bridge(source, target, _select("main.t"))
@@ -228,7 +233,7 @@ def test_unbridge_detaches_catalog():
     assert target.sql(f"SELECT count(*) FROM {T}").fetchone() == (0,)
 
 
-def test_create_view_over_bridge_table_works():
+def test_create_view_over_bridge_table_works() -> None:
     source = _source("CREATE TABLE t(id INT, active BOOL)", "INSERT INTO t VALUES (1, true), (2, false)")
     target = _target()
     _bridge(source, target, _select("main.t"))
@@ -237,7 +242,7 @@ def test_create_view_over_bridge_table_works():
     assert target.sql('SELECT id FROM "workspace"."main"."active_t"').fetchall() == [(1,)]
 
 
-def test_readwrite_no_pk_refuses_keyed_writes():
+def test_readwrite_no_pk_refuses_keyed_writes() -> None:
     source = _source("CREATE TABLE nopk(x INTEGER, y INTEGER)", "INSERT INTO nopk VALUES (1, 10)")
     target = _target()
     _bridge(source, target, _all_verbs("main.nopk"))
@@ -250,7 +255,7 @@ def test_readwrite_no_pk_refuses_keyed_writes():
         target.sql('DELETE FROM "workspace"."main".nopk WHERE x = 1')
 
 
-def test_readwrite_update_manual_pk_override():
+def test_readwrite_update_manual_pk_override() -> None:
     source = _source("CREATE TABLE nopk(x INTEGER, y INTEGER)", "INSERT INTO nopk VALUES (1, 10), (2, 20)")
     target = _target()
     _bridge(source, target, [Policy("main.nopk", "primary_key", ["x"]), *_all_verbs("main.nopk")])
@@ -259,7 +264,7 @@ def test_readwrite_update_manual_pk_override():
     assert source.sql("SELECT y FROM nopk WHERE x = 1").fetchone() == (99,)
 
 
-def test_composite_pk_update():
+def test_composite_pk_update() -> None:
     source = _source(
         "CREATE TABLE cpk(a INTEGER, b INTEGER, val TEXT, PRIMARY KEY(a, b))",
         "INSERT INTO cpk VALUES (1, 1, 'orig'), (1, 2, 'orig')",
@@ -271,7 +276,7 @@ def test_composite_pk_update():
     assert source.sql("SELECT val FROM cpk WHERE a = 1 AND b = 1").fetchone() == ("changed",)
 
 
-def test_composite_pk_delete():
+def test_composite_pk_delete() -> None:
     source = _source(
         "CREATE TABLE cpk(a INTEGER, b INTEGER, val TEXT, PRIMARY KEY(a, b))",
         "INSERT INTO cpk VALUES (1, 1, 'x'), (1, 2, 'y'), (2, 1, 'z')",
@@ -283,7 +288,7 @@ def test_composite_pk_delete():
     assert source.sql("SELECT a, b FROM cpk ORDER BY a, b").fetchall() == [(1, 1), (2, 1)]
 
 
-def test_varchar_pk_update():
+def test_varchar_pk_update() -> None:
     source = _source(
         "CREATE TABLE vt(code VARCHAR PRIMARY KEY, val INTEGER)", "INSERT INTO vt VALUES ('abc', 10), ('def', 20)"
     )
@@ -294,7 +299,7 @@ def test_varchar_pk_update():
     assert source.sql("SELECT val FROM vt WHERE code = 'abc'").fetchone() == (99,)
 
 
-def test_varchar_pk_delete():
+def test_varchar_pk_delete() -> None:
     source = _source(
         "CREATE TABLE vt(code VARCHAR PRIMARY KEY, val INTEGER)",
         "INSERT INTO vt VALUES ('abc', 10), ('def', 20), ('ghi', 30)",
@@ -306,7 +311,7 @@ def test_varchar_pk_delete():
     assert source.sql("SELECT code FROM vt ORDER BY code").fetchall() == [("abc",), ("ghi",)]
 
 
-def test_varchar_pk_with_single_quote_delete():
+def test_varchar_pk_with_single_quote_delete() -> None:
     source = _source(
         "CREATE TABLE qt(code VARCHAR PRIMARY KEY, val INTEGER)", "INSERT INTO qt VALUES ('it''s', 10), ('fine', 20)"
     )
@@ -317,7 +322,7 @@ def test_varchar_pk_with_single_quote_delete():
     assert source.sql("SELECT code FROM qt").fetchall() == [("fine",)]
 
 
-def test_table_name_with_single_quote_pk_discovery():
+def test_table_name_with_single_quote_pk_discovery() -> None:
     source = _source(
         """CREATE TABLE "tab'le"(id INTEGER PRIMARY KEY, val TEXT)""", """INSERT INTO "tab'le" VALUES (1, 'hello')"""
     )
@@ -328,7 +333,7 @@ def test_table_name_with_single_quote_pk_discovery():
     assert source.sql("""SELECT val FROM "tab'le" WHERE id = 1""").fetchone() == ("updated",)
 
 
-def test_filter_value_containing_from():
+def test_filter_value_containing_from() -> None:
     source = _source(
         "CREATE TABLE ft(code VARCHAR PRIMARY KEY, val INTEGER)",
         "INSERT INTO ft VALUES ('SELECT x FROM y', 10), ('normal', 20)",
@@ -340,7 +345,7 @@ def test_filter_value_containing_from():
     assert source.sql("SELECT val FROM ft WHERE code = 'SELECT x FROM y'").fetchone() == (99,)
 
 
-def test_read_only_table_without_pk_is_fine():
+def test_read_only_table_without_pk_is_fine() -> None:
     source = _source("CREATE TABLE nopk(x INTEGER)", "INSERT INTO nopk VALUES (1)")
     target = _target()
     _bridge(source, target, _select("main.nopk"))
@@ -348,7 +353,7 @@ def test_read_only_table_without_pk_is_fine():
     assert target.sql('SELECT x FROM "workspace"."main".nopk').fetchone() == (1,)
 
 
-def test_readwrite_sequential_scans():
+def test_readwrite_sequential_scans() -> None:
     source = _source(
         "CREATE TABLE t(id INTEGER PRIMARY KEY, name VARCHAR, score INTEGER)",
         "INSERT INTO t VALUES (1, 'alice', 100), (2, 'bob', 200)",
@@ -360,7 +365,7 @@ def test_readwrite_sequential_scans():
     assert target.sql(f"SELECT id, score FROM {T} ORDER BY id").fetchall() == [(1, 100), (2, 200)]
 
 
-def test_insert_partial_column_list():
+def test_insert_partial_column_list() -> None:
     source = _source("CREATE TABLE t(id INTEGER PRIMARY KEY, name VARCHAR, score INTEGER)")
     target = _target()
     _bridge(source, target, _all_verbs("main.t"))
@@ -369,7 +374,7 @@ def test_insert_partial_column_list():
     assert source.sql("SELECT id, name, score FROM t").fetchall() == [(1, "alice", None)]
 
 
-def test_insert_reordered_column_list():
+def test_insert_reordered_column_list() -> None:
     source = _source("CREATE TABLE t(id INTEGER PRIMARY KEY, name VARCHAR, score INTEGER)")
     target = _target()
     _bridge(source, target, _all_verbs("main.t"))
@@ -378,7 +383,7 @@ def test_insert_reordered_column_list():
     assert source.sql("SELECT id, name, score FROM t").fetchall() == [(1, "alice", 42)]
 
 
-def test_drop_bridge_table_rejected():
+def test_drop_bridge_table_rejected() -> None:
     source = _source("CREATE TABLE t(x INTEGER)")
     target = _target()
     _bridge(source, target, _select("main.t"))
@@ -388,7 +393,7 @@ def test_drop_bridge_table_rejected():
     assert target.sql(f"SELECT count(*) FROM {T}").fetchone() == (0,)
 
 
-def test_alter_bridge_table_rejected():
+def test_alter_bridge_table_rejected() -> None:
     source = _source("CREATE TABLE t(id INTEGER PRIMARY KEY, val VARCHAR)")
     target = _target()
     _bridge(source, target, _all_verbs("main.t"))
@@ -397,10 +402,10 @@ def test_alter_bridge_table_rejected():
         target.execute(f"ALTER TABLE {T} ADD COLUMN extra INTEGER")
 
 
-def _permissions(target, **filters):
+def _permissions(target: duckdb.DuckDBPyConnection, **filters: str) -> list[tuple[Any, ...]]:
     parts = ["'workspace'"] + [f'"{k}" := {v!r}' for k, v in filters.items()]
     rows = target.sql(
-        "SELECT name, kind, verbs, primary_key " f"FROM vcatbridge_table_permissions({', '.join(parts)}) ORDER BY name"
+        f"SELECT name, kind, verbs, primary_key FROM vcatbridge_table_permissions({', '.join(parts)}) ORDER BY name"
     ).fetchall()
     # Each row's verbs as (writes insert/update/delete, alters).
     return [
@@ -409,7 +414,7 @@ def _permissions(target, **filters):
     ]
 
 
-def test_table_permissions_bridge_capabilities():
+def test_table_permissions_bridge_capabilities() -> None:
     source = _source("CREATE TABLE rw(id INTEGER PRIMARY KEY, v VARCHAR)", "CREATE TABLE ro(x INTEGER)")
     target = _target()
     _bridge(source, target, _all_verbs("main.rw") + _select("main.ro"))
@@ -420,7 +425,7 @@ def test_table_permissions_bridge_capabilities():
     ]
 
 
-def test_table_permissions_native_and_bridge_coexist():
+def test_table_permissions_native_and_bridge_coexist() -> None:
     source = _source("CREATE TABLE bt(x INTEGER)")
     target = _target()
     _bridge(source, target, _select("main.bt"))
@@ -433,7 +438,7 @@ def test_table_permissions_native_and_bridge_coexist():
     ]
 
 
-def test_table_permissions_table_filter():
+def test_table_permissions_table_filter() -> None:
     source = _source("CREATE TABLE rw(id INTEGER PRIMARY KEY, v VARCHAR)", "CREATE TABLE ro(x INTEGER)")
     target = _target()
     _bridge(source, target, _all_verbs("main.rw") + _select("main.ro"))
@@ -441,19 +446,19 @@ def test_table_permissions_table_filter():
     assert [r[:2] for r in _permissions(target, schema="main", table="rw")] == [("rw", "crossing")]
 
 
-def _bridged_struct_source():
+def _bridged_struct_source() -> tuple[duckdb.DuckDBPyConnection, duckdb.DuckDBPyConnection]:
     source = _source("CREATE TABLE t AS SELECT i, {'x': i, 'y': i * 2} AS s FROM range(10) t(i)")
     target = _target()
     _bridge(source, target, _select("main.t"))
     return source, target
 
 
-def test_struct_field_filter_still_correct():
+def test_struct_field_filter_still_correct() -> None:
     _source_conn, target = _bridged_struct_source()
     assert target.sql(f"SELECT count(*) FROM {T} WHERE s.x = 3").fetchone() == (1,)
 
 
-def test_pushed_filter_applies():
+def test_pushed_filter_applies() -> None:
     _source_conn, target = _bridged_struct_source()
     assert target.sql(f"SELECT count(*) FROM {T} WHERE i = 3").fetchone() == (1,)
     assert target.sql(f"SELECT count(*) FROM {T} WHERE i >= 7").fetchone() == (3,)
@@ -476,7 +481,7 @@ NATIVE = '"memory"."main"."nat_t"'
 BRIDGED = T
 
 
-def _txn_fixture():
+def _txn_fixture() -> tuple[duckdb.DuckDBPyConnection, duckdb.DuckDBPyConnection, duckdb.DuckDBPyConnection]:
     source = _source("CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR)", "INSERT INTO t VALUES (1, 'a'), (2, 'b')")
     target = _target()
     target.execute("CREATE TABLE memory.main.nat_t(id INTEGER PRIMARY KEY, v VARCHAR)")
@@ -485,7 +490,7 @@ def _txn_fixture():
     return source, target, target.cursor()
 
 
-def _both(body):
+def _both(body: Callable[[duckdb.DuckDBPyConnection, duckdb.DuckDBPyConnection, str], None]) -> None:
     for table in (NATIVE, BRIDGED):
         _source_conn, a, b = _txn_fixture()
         try:
@@ -498,12 +503,12 @@ def _both(body):
                     pass
 
 
-def _rows(conn, table):
+def _rows(conn: duckdb.DuckDBPyConnection, table: str) -> list[tuple[Any, ...]]:
     return conn.sql(f"SELECT id, v FROM {table} ORDER BY id").fetchall()
 
 
-def test_txn_uncommitted_write_invisible_to_other_connection():
-    def body(a, b, table):
+def test_txn_uncommitted_write_invisible_to_other_connection() -> None:
+    def body(a: duckdb.DuckDBPyConnection, b: duckdb.DuckDBPyConnection, table: str) -> None:
         a.execute("BEGIN")
         a.execute(f"INSERT INTO {table} VALUES (3, 'c')")
         assert _rows(a, table) == [(1, "a"), (2, "b"), (3, "c")]
@@ -514,8 +519,8 @@ def test_txn_uncommitted_write_invisible_to_other_connection():
     _both(body)
 
 
-def test_txn_repeatable_read():
-    def body(a, b, table):
+def test_txn_repeatable_read() -> None:
+    def body(a: duckdb.DuckDBPyConnection, b: duckdb.DuckDBPyConnection, table: str) -> None:
         a.execute("BEGIN")
         assert _rows(a, table) == [(1, "a"), (2, "b")]
         b.execute(f"INSERT INTO {table} VALUES (3, 'c')")
@@ -526,8 +531,8 @@ def test_txn_repeatable_read():
     _both(body)
 
 
-def test_txn_rollback_leaves_other_connections_writes_alone():
-    def body(a, b, table):
+def test_txn_rollback_leaves_other_connections_writes_alone() -> None:
+    def body(a: duckdb.DuckDBPyConnection, b: duckdb.DuckDBPyConnection, table: str) -> None:
         b.execute(f"INSERT INTO {table} VALUES (3, 'c')")
         a.execute("BEGIN")
         a.execute(f"INSERT INTO {table} VALUES (4, 'd')")
@@ -537,8 +542,8 @@ def test_txn_rollback_leaves_other_connections_writes_alone():
     _both(body)
 
 
-def test_txn_write_write_conflict_fails_fast():
-    def body(a, b, table):
+def test_txn_write_write_conflict_fails_fast() -> None:
+    def body(a: duckdb.DuckDBPyConnection, b: duckdb.DuckDBPyConnection, table: str) -> None:
         a.execute("BEGIN")
         a.execute(f"UPDATE {table} SET v = 'from_a' WHERE id = 1")
         b.execute("BEGIN")
@@ -548,8 +553,8 @@ def test_txn_write_write_conflict_fails_fast():
     _both(body)
 
 
-def test_txn_constraint_error_aborts_transaction():
-    def body(a, _b, table):
+def test_txn_constraint_error_aborts_transaction() -> None:
+    def body(a: duckdb.DuckDBPyConnection, _b: duckdb.DuckDBPyConnection, table: str) -> None:
         a.execute("BEGIN")
         with pytest.raises(duckdb.Error):
             a.execute(f"INSERT INTO {table} VALUES (1, 'dup')")
@@ -561,8 +566,8 @@ def test_txn_constraint_error_aborts_transaction():
     _both(body)
 
 
-def test_txn_binder_error_does_not_abort_transaction():
-    def body(a, _b, table):
+def test_txn_binder_error_does_not_abort_transaction() -> None:
+    def body(a: duckdb.DuckDBPyConnection, _b: duckdb.DuckDBPyConnection, table: str) -> None:
         a.execute("BEGIN")
         with pytest.raises(duckdb.BinderException):
             a.execute(f"SELECT no_such_column FROM {table}")
@@ -573,7 +578,7 @@ def test_txn_binder_error_does_not_abort_transaction():
     _both(body)
 
 
-def test_txn_self_join_inside_transaction():
+def test_txn_self_join_inside_transaction() -> None:
     _source_conn, target, _b = _txn_fixture()
     target.execute("BEGIN")
     for table in (NATIVE, BRIDGED):
@@ -591,8 +596,8 @@ def test_txn_self_join_inside_transaction():
 # ---------------------------------------------------------------------------
 
 
-def _two_source_target():
-    sources = []
+def _two_source_target() -> tuple[list[duckdb.DuckDBPyConnection], duckdb.DuckDBPyConnection]:
+    sources: list[duckdb.DuckDBPyConnection] = []
     target = _target()
     target.execute("CREATE TABLE memory.main.nat_t(id INTEGER PRIMARY KEY, v VARCHAR)")
     for catalog in ("src_a", "src_b"):
@@ -605,7 +610,7 @@ def _two_source_target():
 SINGLE_WRITER = "single transaction can only write to a single attached database"
 
 
-def test_single_writer_two_sources_rejected():
+def test_single_writer_two_sources_rejected() -> None:
     (source_a, source_b), target = _two_source_target()
     target.execute("BEGIN")
     target.execute('UPDATE "src_a"."main"."t" SET v = \'x\' WHERE id = 1')
@@ -617,7 +622,7 @@ def test_single_writer_two_sources_rejected():
     assert source_b.sql("SELECT v FROM t WHERE id = 1").fetchone() == ("a",)
 
 
-def test_single_writer_target_then_source_rejected():
+def test_single_writer_target_then_source_rejected() -> None:
     (source_a, _source_b), target = _two_source_target()
     target.execute("BEGIN")
     target.execute("INSERT INTO memory.main.nat_t VALUES (1, 'n')")
@@ -629,7 +634,7 @@ def test_single_writer_target_then_source_rejected():
     assert target.sql("SELECT count(*) FROM memory.main.nat_t").fetchone() == (0,)
 
 
-def test_single_writer_readers_are_unrestricted():
+def test_single_writer_readers_are_unrestricted() -> None:
     (source_a, _source_b), target = _two_source_target()
     target.execute("BEGIN")
     assert target.sql('SELECT count(*) FROM "src_a"."main"."t"').fetchone() == (1,)
@@ -651,7 +656,7 @@ SEPARATE_TXN = "source connection is a separate transaction on the same instance
 SAME_INST_BRIDGED = '"workspace"."main"."src_t"'
 
 
-def _same_instance_fixture():
+def _same_instance_fixture() -> duckdb.DuckDBPyConnection:
     conn = _target()
     conn.execute("CREATE TABLE memory.main.src_t(id INTEGER PRIMARY KEY, v VARCHAR)")
     conn.execute("INSERT INTO memory.main.src_t VALUES (1, 'a'), (2, 'b')")
@@ -661,7 +666,7 @@ def _same_instance_fixture():
     return conn
 
 
-def test_same_instance_read_and_write():
+def test_same_instance_read_and_write() -> None:
     conn = _same_instance_fixture()
     assert conn.sql(f"SELECT count(*) FROM {SAME_INST_BRIDGED}").fetchone() == (2,)
     conn.execute(f"UPDATE {SAME_INST_BRIDGED} SET v = 'z' WHERE id = 1")
@@ -669,7 +674,7 @@ def test_same_instance_read_and_write():
 
 
 @pytest.mark.xfail(strict=True, reason=SEPARATE_TXN)
-def test_txn_source_write_visible_through_bridge():
+def test_txn_source_write_visible_through_bridge() -> None:
     conn = _same_instance_fixture()
     conn.execute("BEGIN")
     conn.execute("INSERT INTO memory.main.src_t VALUES (3, 'c')")
@@ -679,7 +684,7 @@ def test_txn_source_write_visible_through_bridge():
 
 
 @pytest.mark.xfail(strict=True, reason=SEPARATE_TXN)
-def test_txn_bridge_write_visible_to_source_read():
+def test_txn_bridge_write_visible_to_source_read() -> None:
     conn = _same_instance_fixture()
     conn.execute("BEGIN")
     conn.execute(f"INSERT INTO {SAME_INST_BRIDGED} VALUES (3, 'c')")
@@ -687,21 +692,21 @@ def test_txn_bridge_write_visible_to_source_read():
     conn.execute("ROLLBACK")
 
 
-def _tenant_source():
+def _tenant_source() -> duckdb.DuckDBPyConnection:
     return _source(
         "CREATE TABLE t(id INTEGER PRIMARY KEY, tenant_id INTEGER, name VARCHAR)",
         "INSERT INTO t VALUES (1, 42, 'mine'), (2, 7, 'theirs')",
     )
 
 
-def test_policies_select_restricts_rows():
+def test_policies_select_restricts_rows() -> None:
     target = _target()
     _bridge(_tenant_source(), target, [Policy("main.t", "select", "tenant_id = 42")])
 
     assert target.sql(f"SELECT id FROM {T}").fetchall() == [(1,)]
 
 
-def test_policies_select_only_blocks_update():
+def test_policies_select_only_blocks_update() -> None:
     target = _target()
     _bridge(_tenant_source(), target, [Policy("main.t", "select", "true")])
 
@@ -709,7 +714,7 @@ def test_policies_select_only_blocks_update():
         target.sql(f"UPDATE {T} SET name = 'x' WHERE id = 1")
 
 
-def test_policies_update_reaches_only_permitted_rows():
+def test_policies_update_reaches_only_permitted_rows() -> None:
     source = _tenant_source()
     target = _target()
     _bridge(
@@ -722,7 +727,7 @@ def test_policies_update_reaches_only_permitted_rows():
     assert source.sql("SELECT id, name FROM t ORDER BY id").fetchall() == [(1, "edited"), (2, "theirs")]
 
 
-def test_policies_insert_check_rejects_row():
+def test_policies_insert_check_rejects_row() -> None:
     source = _tenant_source()
     target = _target()
     _bridge(
@@ -737,7 +742,7 @@ def test_policies_insert_check_rejects_row():
     assert source.sql("SELECT id FROM t ORDER BY id").fetchall() == [(1,), (2,), (3,)]
 
 
-def test_policies_delete_reaches_rows_select_hides():
+def test_policies_delete_reaches_rows_select_hides() -> None:
     source = _tenant_source()
     target = _target()
     _bridge(
@@ -750,12 +755,12 @@ def test_policies_delete_reaches_rows_select_hides():
     assert source.sql("SELECT id FROM t ORDER BY id").fetchall() == []
 
 
-def test_unqualified_policy_table_rejected():
+def test_unqualified_policy_table_rejected() -> None:
     with pytest.raises(duckdb.Error, match="schema.table"):
         _bridge(_source(), _target(), [Policy("t", "select", "true")])
 
 
-def test_policies_primary_key_override():
+def test_policies_primary_key_override() -> None:
     source = _source(
         "CREATE TABLE t(id INTEGER, name VARCHAR)",
         "INSERT INTO t VALUES (1, 'a'), (2, 'b')",
@@ -775,14 +780,14 @@ def test_policies_primary_key_override():
     assert source.sql("SELECT id, name FROM t ORDER BY id").fetchall() == [(1, "a"), (2, "z")]
 
 
-def test_context_select_restricts_rows():
+def test_context_select_restricts_rows() -> None:
     target = _target()
     _bridge(_tenant_source(), target, [Policy("main.t", "select", "tenant_id = $tenant")], context={"tenant": 42})
 
     assert target.sql(f"SELECT id FROM {T}").fetchall() == [(1,)]
 
 
-def test_context_insert_check_rejects_row():
+def test_context_insert_check_rejects_row() -> None:
     source = _tenant_source()
     target = _target()
     _bridge(
@@ -798,12 +803,12 @@ def test_context_insert_check_rejects_row():
     assert source.sql("SELECT id FROM t ORDER BY id").fetchall() == [(1,), (2,), (3,)]
 
 
-def test_context_unset_name_rejected():
+def test_context_unset_name_rejected() -> None:
     with pytest.raises(duckdb.Error, match="which is not set"):
         _bridge(_tenant_source(), _target(), [Policy("main.t", "select", "tenant_id = $tenant")])
 
 
-def test_context_finalized_after_bridge():
+def test_context_finalized_after_bridge() -> None:
     source = _tenant_source()
     target = _target()
     bridge_id = _bridge(source, target, [Policy("main.t", "select", "tenant_id = $tenant")], context={"tenant": 42})
@@ -812,7 +817,7 @@ def test_context_finalized_after_bridge():
         source.sql("SELECT vcatbridge_set_context($1, 'tenant', 7)", params=[bridge_id]).fetchone()
 
 
-def test_context_none_value_rejected():
+def test_context_none_value_rejected() -> None:
     with pytest.raises(duckdb.Error, match="cannot be NULL"):
         _bridge(
             _tenant_source(), _target(), [Policy("main.t", "select", "tenant_id = $tenant")], context={"tenant": None}

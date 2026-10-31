@@ -7,7 +7,6 @@ unsigned extensions.
 
 import logging
 import os
-from typing import Optional
 
 import duckdb
 
@@ -20,7 +19,7 @@ VCATBRIDGE = "vcatbridge"
 VCATPROVIDER = "vcatprovider"
 
 
-def local_extension_path(name: str, dir_env: str = VIRTUAL_CATALOG_EXT_DIR_ENV) -> Optional[str]:
+def local_extension_path(name: str, dir_env: str = VIRTUAL_CATALOG_EXT_DIR_ENV) -> str | None:
     base = os.environ.get(dir_env)
     if not base:
         return None

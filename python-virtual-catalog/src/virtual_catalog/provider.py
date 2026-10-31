@@ -79,12 +79,13 @@ import json
 import uuid
 import weakref
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
 import duckdb
 import pyarrow as pa
-import pyarrow.ipc as ipc
+from pyarrow import ipc
 
 from virtual_catalog.extension import load_vcatprovider
 from virtual_catalog.filters import Filters, filters_from_wire
@@ -117,7 +118,7 @@ class AlterChange:
 class Provider(ABC):
     """Abstract base for a Python-backed virtual-table namespace. Subclass and implement."""
 
-    _binding: Optional[tuple["weakref.ref[duckdb.DuckDBPyConnection]", str, str, asyncio.AbstractEventLoop]] = None
+    _binding: tuple[weakref.ref[duckdb.DuckDBPyConnection], str, str, asyncio.AbstractEventLoop] | None = None
 
     @abstractmethod
     async def list_tables(self) -> list[str]: ...
@@ -130,7 +131,7 @@ class Provider(ABC):
     async def scan(
         self,
         name: str,
-        columns: Optional[list[str]],
+        columns: list[str] | None,
         filters: Filters,
     ) -> pa.Table:
         """Read rows from `name`.
@@ -194,18 +195,18 @@ class Provider(ABC):
 _OPTIONAL_OPS = ("insert", "update", "delete", "alter")
 
 
-def _live(con_ref: "weakref.ref[duckdb.DuckDBPyConnection]") -> duckdb.DuckDBPyConnection:
+def _live(con_ref: weakref.ref[duckdb.DuckDBPyConnection]) -> duckdb.DuckDBPyConnection:
     con = con_ref()
     if con is None:
         raise RuntimeError("the connection this provider was registered on no longer exists")
     return con
 
 
-def _implemented_optional_ops(provider: "Provider") -> set[str]:
+def _implemented_optional_ops(provider: Provider) -> set[str]:
     return {op for op in _OPTIONAL_OPS if getattr(type(provider), op) is not getattr(Provider, op)}
 
 
-def _run_async(coro: Any, loop: asyncio.AbstractEventLoop, timeout: Optional[float] = None) -> Any:
+def _run_async(coro: Any, loop: asyncio.AbstractEventLoop, timeout: float | None = None) -> Any:
     """Bridge an async call to a sync context. Called from DuckDB worker
     threads — never from the event-loop thread (would deadlock)."""
     fut = asyncio.run_coroutine_threadsafe(coro, loop)
@@ -277,13 +278,13 @@ class _CatalogProviders:
         provider, table = self._split(name)
         schema = _run_async(provider.schema(table), self._loop(provider))
         if not isinstance(schema, pa.Schema):
-            raise TypeError(f"Provider.schema({table!r}) must return pa.Schema, " f"got {type(schema).__name__}")
+            raise TypeError(f"Provider.schema({table!r}) must return pa.Schema, got {type(schema).__name__}")
         # One Arrow IPC schema message. Column names, types and the primary keys
         # (metadata, PK_METADATA_KEY) all travel inside it, so C++ reads the
         # provider's own declaration rather than a re-rendering of it.
         return bytes(schema.serialize().to_pybytes())
 
-    def _do_scan(self, name: str, columns: Optional[list[str]], filters_json: str) -> bytes:
+    def _do_scan(self, name: str, columns: list[str] | None, filters_json: str) -> bytes:
         provider, table_name = self._split(name)
         # `columns` is the exact output layout C++ wants: the projection with the
         # primary key columns trailing it, which repeats a key that is also
@@ -298,7 +299,7 @@ class _CatalogProviders:
         filters: Filters = filters_from_wire(json.loads(filters_json)) if filters_json else None
         table = _run_async(provider.scan(table_name, columns=wanted, filters=filters), self._loop(provider))
         if not isinstance(table, pa.Table):
-            raise TypeError(f"Provider.scan({table_name!r}) must return pa.Table, " f"got {type(table).__name__}")
+            raise TypeError(f"Provider.scan({table_name!r}) must return pa.Table, got {type(table).__name__}")
         # Post-project as a safety net for providers that ignored `columns` or
         # returned a superset, and as the step that lays the columns out the way
         # C++ reads them.
@@ -354,7 +355,7 @@ class _CatalogProviders:
         self.registered_ops = set()
 
 
-_catalogs: "weakref.WeakKeyDictionary[duckdb.DuckDBPyConnection, dict[str, _CatalogProviders]]" = (
+_catalogs: weakref.WeakKeyDictionary[duckdb.DuckDBPyConnection, dict[str, _CatalogProviders]] = (
     weakref.WeakKeyDictionary()
 )
 
@@ -365,7 +366,7 @@ def register_provider(
     catalog: str,
     schema_name: str,
     provider: Provider,
-    main_loop: Optional[asyncio.AbstractEventLoop] = None,
+    main_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     """Bind `provider` to `(con, catalog, schema_name)`.
 
@@ -472,7 +473,7 @@ def release_providers(con: duckdb.DuckDBPyConnection) -> None:
     entries = _catalogs.pop(con, None)
     if not entries:
         return
-    first_error: Optional[BaseException] = None
+    first_error: BaseException | None = None
     for entry in entries.values():
         for provider in entry.providers.values():
             provider._binding = None

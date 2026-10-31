@@ -44,7 +44,7 @@ def test_drop_table() -> None:
     conn.execute("CREATE TABLE workspace.main.t(id INTEGER)")
     conn.execute("DROP TABLE workspace.main.t")
     rows = conn.execute(
-        "SELECT table_name FROM information_schema.tables " "WHERE table_catalog='workspace' AND table_schema='main'"
+        "SELECT table_name FROM information_schema.tables WHERE table_catalog='workspace' AND table_schema='main'"
     ).fetchall()
     assert rows == []
 

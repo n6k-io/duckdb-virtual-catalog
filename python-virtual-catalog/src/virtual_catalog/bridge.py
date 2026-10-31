@@ -3,7 +3,8 @@
 import logging
 import threading
 import uuid
-from typing import NamedTuple, Optional, Sequence
+from collections.abc import Sequence
+from typing import NamedTuple
 
 import duckdb
 
@@ -27,8 +28,8 @@ def bridge(
     *,
     source_catalog: str,
     policies: Sequence[Policy],
-    context: Optional[dict[str, object]] = None,
-    lock: Optional[threading.Lock] = None,
+    context: dict[str, object] | None = None,
+    lock: threading.Lock | None = None,
 ) -> str:
     """Mirror tables from `source` into a new catalog `name` on `target`.
 
@@ -138,7 +139,7 @@ def bridge(
     return bridge_id
 
 
-def connect_main(bridge_id: str, token: str, **config: str) -> duckdb.DuckDBPyConnection:
+def connect_main(bridge_id: str, token: str, **config: str | bool | float | list[str]) -> duckdb.DuckDBPyConnection:
     """A new database whose main database is the bridge. The extension loads by name as it opens, so it must
     already be installed, and the source must have loaded that same installed copy."""
     target = duckdb.connect("vcatbridge:", config=config)

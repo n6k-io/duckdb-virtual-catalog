@@ -11,12 +11,14 @@ loop thread would deadlock.
 """
 
 import asyncio
-from typing import Any, AsyncIterator, List, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 import duckdb
 import pyarrow as pa
-import pyarrow.ipc as ipc
+import pyarrow.compute as pc
 import pytest
+from pyarrow import ipc
 
 from virtual_catalog.extension import local_extension_path
 from virtual_catalog.rpc_stream import (
@@ -49,8 +51,8 @@ def _drive(
     scope: HostStreamUdfs,
     function: str,
     args_json: str = "[]",
-    body: Optional[bytes] = None,
-    stop_after: Optional[int] = None,
+    body: bytes | None = None,
+    stop_after: int | None = None,
 ) -> tuple[list[bytes], int]:
     """Run the reactor's loop against `function`; returns (ipc messages, chunks).
 
@@ -78,11 +80,11 @@ def _drive(
     return messages, chunks
 
 
-def _read(messages: List[bytes]) -> pa.Table:
+def _read(messages: list[bytes]) -> pa.Table:
     return ipc.open_stream(b"".join(messages)).read_all()
 
 
-def test_arrow_frame_encoder_splits_one_stream_across_messages():
+def test_arrow_frame_encoder_splits_one_stream_across_messages() -> None:
     enc = ArrowFrameEncoder(TICK)
     parts = [enc.take_schema_message()]
     parts.append(enc.encode_batch(pa.record_batch({"seq": [1]}, schema=TICK)))
@@ -94,8 +96,8 @@ def test_arrow_frame_encoder_splits_one_stream_across_messages():
 
 
 @pytest.mark.asyncio
-async def test_finite_rpc_sends_a_table_and_ends():
-    def echo(scalars: List[Any], table: Optional[pa.Table]) -> pa.Table:
+async def test_finite_rpc_sends_a_table_and_ends() -> None:
+    def echo(scalars: list[Any], table: pa.Table | None) -> pa.Table:
         return pa.table({"seq": [int(scalars[0])]}, schema=TICK)
 
     con, scope = _scope({"echo": (echo, TICK)}, asyncio.get_running_loop())
@@ -105,8 +107,8 @@ async def test_finite_rpc_sends_a_table_and_ends():
 
 
 @pytest.mark.asyncio
-async def test_streaming_rpc_yields_one_chunk_per_yield():
-    async def ticker(scalars: List[Any], table: Optional[pa.Table]) -> AsyncIterator[pa.RecordBatch]:
+async def test_streaming_rpc_yields_one_chunk_per_yield() -> None:
+    async def ticker(scalars: list[Any], table: pa.Table | None) -> AsyncIterator[pa.RecordBatch]:
         for seq in range(int(scalars[0])):
             yield pa.record_batch({"seq": [seq]}, schema=TICK)
 
@@ -117,11 +119,11 @@ async def test_streaming_rpc_yields_one_chunk_per_yield():
 
 
 @pytest.mark.asyncio
-async def test_empty_yield_is_not_end_of_stream():
+async def test_empty_yield_is_not_end_of_stream() -> None:
     """A yield carrying no rows must not truncate the stream — the generator has
     not finished, it just had nothing this tick."""
 
-    async def sparse(scalars: List[Any], table: Optional[pa.Table]) -> AsyncIterator[pa.Table]:
+    async def sparse(scalars: list[Any], table: pa.Table | None) -> AsyncIterator[pa.Table | pa.RecordBatch]:
         yield pa.table({"seq": []}, schema=TICK)
         yield pa.record_batch({"seq": [42]}, schema=TICK)
 
@@ -132,12 +134,12 @@ async def test_empty_yield_is_not_end_of_stream():
 
 
 @pytest.mark.asyncio
-async def test_unbounded_stream_stops_at_close_and_runs_teardown():
+async def test_unbounded_stream_stops_at_close_and_runs_teardown() -> None:
     """Closing an endless generator early runs its `finally` — this is what a
     CANCEL does, and it is how a real subscription unsubscribes."""
     closed = asyncio.Event()
 
-    async def forever(scalars: List[Any], table: Optional[pa.Table]) -> AsyncIterator[pa.RecordBatch]:
+    async def forever(scalars: list[Any], table: pa.Table | None) -> AsyncIterator[pa.RecordBatch]:
         seq = 0
         try:
             while True:
@@ -154,12 +156,12 @@ async def test_unbounded_stream_stops_at_close_and_runs_teardown():
 
 
 @pytest.mark.asyncio
-async def test_pushed_rows_arrive_as_a_table():
+async def test_pushed_rows_arrive_as_a_table() -> None:
     """The OP_RPC_TABLE body reaches the function as `table`, untouched."""
 
-    def total(scalars: List[Any], table: Optional[pa.Table]) -> pa.Table:
+    def total(scalars: list[Any], table: pa.Table | None) -> pa.Table:
         assert table is not None
-        return pa.table({"seq": [sum(table.column(0).to_pylist())]}, schema=TICK)
+        return pa.table({"seq": [pc.sum(table.column(0)).as_py()]}, schema=TICK)
 
     body = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
     sink = pa.BufferOutputStream()
@@ -172,8 +174,8 @@ async def test_pushed_rows_arrive_as_a_table():
 
 
 @pytest.mark.asyncio
-async def test_generator_error_surfaces_as_a_query_error():
-    async def boom(scalars: List[Any], table: Optional[pa.Table]) -> AsyncIterator[pa.RecordBatch]:
+async def test_generator_error_surfaces_as_a_query_error() -> None:
+    async def boom(scalars: list[Any], table: pa.Table | None) -> AsyncIterator[pa.RecordBatch]:
         yield pa.record_batch({"seq": [0]}, schema=TICK)
         raise ValueError("upstream is down")
 
@@ -183,19 +185,19 @@ async def test_generator_error_surfaces_as_a_query_error():
 
 
 @pytest.mark.asyncio
-async def test_unknown_function_is_an_error():
+async def test_unknown_function_is_an_error() -> None:
     con, scope = _scope({}, asyncio.get_running_loop())
     with pytest.raises(duckdb.Error, match="no host RPC named"):
         await asyncio.to_thread(_drive, con, scope, "nope")
 
 
 @pytest.mark.asyncio
-async def test_register_rpc_streams_creates_a_callable_table_function():
+async def test_register_rpc_streams_creates_a_callable_table_function() -> None:
     """The point of the catalog form: a host RPC is ordinary SQL on the connection
     that registered it, with no server and no reactor in the picture."""
     from virtual_catalog.extension import VCATPROVIDER, load_vcatprovider
 
-    def echo(scalars: List[Any], table: Optional[pa.Table]) -> pa.Table:
+    def echo(scalars: list[Any], table: pa.Table | None) -> pa.Table:
         return pa.table({"seq": [7, 8]}, schema=TICK)
 
     if local_extension_path(VCATPROVIDER) is None:
@@ -222,13 +224,13 @@ async def test_register_rpc_streams_creates_a_callable_table_function():
 
 
 @pytest.mark.asyncio
-async def test_unregister_tears_down_a_still_open_stream():
+async def test_unregister_tears_down_a_still_open_stream() -> None:
     """Shutting the reactor down interrupts its workers, so a stream can outlive
     the request that opened it. Scope teardown must still close it — from the
     loop thread, where blocking on the generator would deadlock."""
     closed = asyncio.Event()
 
-    async def forever(scalars: List[Any], table: Optional[pa.Table]) -> AsyncIterator[pa.RecordBatch]:
+    async def forever(scalars: list[Any], table: pa.Table | None) -> AsyncIterator[pa.RecordBatch]:
         try:
             while True:
                 yield pa.record_batch({"seq": [0]}, schema=TICK)
