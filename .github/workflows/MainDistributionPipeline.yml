@@ -53,7 +53,7 @@ jobs:
       - working-directory: python-virtual-catalog
         run: uv run --frozen --package duckdb-virtual-catalog ruff format --check
       - working-directory: python-virtual-catalog
-        run: uv run --frozen --package duckdb-virtual-catalog mypy src
+        run: uv run --frozen --package duckdb-virtual-catalog mypy src conftest.py
 
   python-tests:
     name: Python package tests
