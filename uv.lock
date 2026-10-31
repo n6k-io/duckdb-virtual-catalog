@@ -130,7 +130,7 @@ wheels = [
 
 [[package]]
 name = "duckdb-virtual-catalog"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "python-virtual-catalog" }
 dependencies = [
     { name = "duckdb" },
