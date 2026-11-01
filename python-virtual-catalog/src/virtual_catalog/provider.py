@@ -88,7 +88,7 @@ import pyarrow as pa
 from pyarrow import ipc
 
 from virtual_catalog.extension import load_vcatprovider
-from virtual_catalog.filters import Filters, filters_from_wire
+from virtual_catalog.filters import Filters, filter_and_project, filters_from_wire
 
 _VARCHAR = duckdb.sqltype("VARCHAR")
 _VARCHAR_LIST = duckdb.sqltype("VARCHAR[]")
@@ -190,6 +190,26 @@ class Provider(ABC):
             raise RuntimeError("Provider is not registered; call register_provider(...) first")
         con_ref, catalog, schema_name, _ = self._binding
         await unregister_provider(_live(con_ref), catalog=catalog, schema_name=schema_name, provider=self)
+
+
+class TableProvider(Provider):
+    """A `Provider` over whole Arrow tables: `scan` filters and projects what `table` returns."""
+
+    @abstractmethod
+    async def tables(self) -> list[str]: ...
+
+    @abstractmethod
+    async def table(self, name: str) -> pa.Table:
+        """Return all of `name`. Raise `TableNotFound` if unknown."""
+
+    async def list_tables(self) -> list[str]:
+        return await self.tables()
+
+    async def schema(self, name: str) -> pa.Schema:
+        return (await self.table(name)).schema
+
+    async def scan(self, name: str, columns: list[str] | None, filters: Filters) -> pa.Table:
+        return filter_and_project(await self.table(name), columns, filters)
 
 
 _OPTIONAL_OPS = ("insert", "update", "delete", "alter")
@@ -378,7 +398,7 @@ def register_provider(
     uses (e.g. an asyncpg pool). After registration, the loop thread must
     not make synchronous DuckDB calls against `con` — use `asyncio.to_thread`.
 
-    Call `release_providers(con)` before closing `con`; `serve_and_close_connection` does.
+    Call `release_providers(con)` before closing `con`; to serve `con`, pass it as `on_close` to `serve_and_close_connection`.
     """
     if main_loop is None:
         main_loop = asyncio.get_running_loop()
