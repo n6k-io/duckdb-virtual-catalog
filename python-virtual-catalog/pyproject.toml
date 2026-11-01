@@ -1,6 +1,6 @@
 [project]
 name = "duckdb-virtual-catalog"
-version = "0.1.1"
+version = "0.1.2"
 description = "Python helpers for the vcatbridge and vcatprovider DuckDB extensions"
 readme = "README.md"
 authors = [
