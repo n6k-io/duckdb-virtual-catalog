@@ -6,8 +6,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - "duckdb/v*"
   pull_request:
   workflow_dispatch:
 
@@ -25,7 +23,7 @@ jobs:
       extension_name: virtual_catalog
       # coi-only: build wasm_threads, never eh/mvp (they can't load a shared-memory
       # extension). On PRs also drop the non-amd64 native arches for speed.
-      exclude_archs: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/duckdb/v')) && 'wasm_mvp;wasm_eh' || 'linux_arm64;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh' }}
+      exclude_archs: ${{ github.ref != 'refs/heads/main' && 'linux_arm64;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh' || 'wasm_mvp;wasm_eh' }}
       opt_in_archs: 'linux_amd64_musl'
       upload_all_extensions: true
 
@@ -50,21 +48,6 @@ jobs:
           fi
           if [[ "$head" == "$base" || "$(printf '%s\n%s\n' "$base" "$head" | sort -V | tail -1)" != "$head" ]]; then
             echo "::error::VERSION must be bumped above $base (is $head)"
-            exit 1
-          fi
-
-  release-tag-matches-version:
-    name: Release tag matches VERSION
-    if: startsWith(github.ref, 'refs/tags/duckdb/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: |
-          file_version="v$(tr -d '[:space:]' < VERSION)"
-          tag="${GITHUB_REF#refs/tags/duckdb/}"
-          echo "tag=$tag VERSION=$file_version"
-          if [[ "$tag" != "$file_version" ]]; then
-            echo "::error::tag duckdb/$tag does not match VERSION $file_version"
             exit 1
           fi
 
@@ -138,13 +121,8 @@ jobs:
 
   duckdb-stable-deploy:
     name: Deploy vcatbridge + vcatprovider (${{ matrix.duckdb_arch }})
-    needs: [duckdb-stable-build, release-tag-matches-version]
-    if: >-
-      !cancelled()
-      && needs.duckdb-stable-build.result == 'success'
-      && contains(fromJSON('["success", "skipped"]'), needs.release-tag-matches-version.result)
-      && github.event_name == 'push'
-      && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/duckdb/v'))
+    needs: duckdb-stable-build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -191,18 +169,7 @@ jobs:
         run: |
           DUCKDB_VERSION=$(git -C duckdb tag --points-at HEAD)
           DUCKDB_VERSION=${DUCKDB_VERSION:=$(git -C duckdb log -1 --format=%h)}
-          if [[ "$GITHUB_REF" == refs/tags/duckdb/* ]]; then
-            tag="${GITHUB_REF#refs/tags/duckdb/}"
-            if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-              echo "::error::tag duckdb/$tag is not duckdb/v<major>.<minor>.<patch>"
-              exit 1
-            fi
-            versions=("v${BASH_REMATCH[1]}" "v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" "$tag")
-            copy_to_latest=false
-          else
-            versions=("$(git log -1 --format=%h)")
-            copy_to_latest=true
-          fi
+          EXT_VERSION=$(git log -1 --format=%h)
 
           if [[ "$DUCKDB_ARCH" == wasm* ]]; then
             suffix=".duckdb_extension.wasm"
@@ -218,10 +185,5 @@ jobs:
               exit 1
             fi
             cp "$built" "/tmp/extension/$name$suffix"
-            for version in "${versions[@]}"; do
-              ./scripts/extension-upload.sh "$name" "$version" "$DUCKDB_VERSION" "$DUCKDB_ARCH" "$BUCKET_NAME" false true
-            done
-            if [[ "$copy_to_latest" == true ]]; then
-              ./scripts/extension-upload.sh "$name" "${versions[0]}" "$DUCKDB_VERSION" "$DUCKDB_ARCH" "$BUCKET_NAME" true false
-            fi
+            ./scripts/extension-upload.sh "$name" "$EXT_VERSION" "$DUCKDB_VERSION" "$DUCKDB_ARCH" "$BUCKET_NAME" true true
           done
