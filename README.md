@@ -1,9 +1,28 @@
-# virtual_catalog
+# duckdb-virtual-catalog
 
 Two DuckDB extensions:
 
 - **`vcatbridge`** — share tables with another DuckDB database, with permissions.
 - **`vcatprovider`** — make tables from Python functions.
+
+## Install
+
+Requires DuckDB 1.5.6. The extensions aren't signed by DuckDB, so DuckDB must start with unsigned extensions allowed (`duckdb -unsigned`, or
+`duckdb.connect(config={"allow_unsigned_extensions": "true"})` in Python).
+
+```sql
+INSTALL vcatbridge FROM 'https://storage.googleapis.com/n6k-duckdb-release';
+LOAD vcatbridge;
+```
+
+Pin a release with `VERSION`: `'v0.1.0'` exactly, `'v0.1'` for the latest `0.1.x`, or `'v0'`
+for the latest `0.x`:
+
+```sql
+INSTALL vcatbridge FROM 'https://storage.googleapis.com/n6k-duckdb-release' VERSION 'v0.1';
+```
+
+`vcatprovider` installs the same way.
 
 ## Quick start
 
@@ -22,9 +41,6 @@ Two DuckDB extensions:
 - **Source** — the DuckDB database that has the data. It decides what to share.
 - **Target** — a separate DuckDB database in the same process. It `ATTACH`es the bridge and
   queries the shared tables as if they were its own.
-
-Source and target are two `duckdb.connect()` calls in one program, each its own database — not
-two files `ATTACH`ed to one connection.
 
 ### Setup
 
@@ -47,7 +63,7 @@ Only the source can change the policy. Ungranted tables do not exist on the targ
 
 ### Pushdown
 
-The bridge is built on [crossing](third_party/crossing): it pushes as much of each query as it
+The bridge is built on [crossing](https://github.com/n6k-io/duckdb-crossing): it pushes as much of each query as it
 safely can to the source — joins, aggregates, filters, functions — and runs the rest on the
 target. Each table's row filter is applied on the source. The query crosses as a plan, never as
 SQL text.
@@ -78,26 +94,8 @@ CROSSING_READ                      ← everything below runs on the source
          └─ orders
 ```
 
-**A function that can't cross** — `upper`, removed from the whitelist above. Only `upper` stays
-on the target; the join and aggregate still cross:
-
-```sql
-EXPLAIN SELECT upper(u.name), sum(o.amount)
-FROM app.main.users u JOIN app.main.orders o ON o.user_id = u.id
-GROUP BY u.name;
-```
-
-```
-PROJECTION   upper(name), sum(amount)   ← runs on the target
-└─ CROSSING_READ                        ← same join + aggregate on the source
-   └─ AGGREGATE  group by name
-      └─ JOIN    id = user_id
-         ├─ users    (row filter: tenant_id = $tenant)
-         └─ orders
-```
-
-A UDF defined on the target stays on the target the same way: target code never runs on the
-source.
+A function that isn't whitelisted — `upper` above, or a UDF defined on the target — runs on the
+target, and the rest of the query still crosses: target code never runs on the source.
 
 **A join across two bridges** — two sources, one with `users` and one with `orders`, attached
 on the target as `crm` and `shop`:
@@ -129,13 +127,6 @@ HASH_GROUP_BY  group by name          ← target
             └─ orders
 ```
 
-## vcatprovider
-
-Back a catalog with your own functions: you register `list`, `schema` and `scan` UDFs (plus
-optional `insert`, `update`, `delete`), returning Arrow IPC, and DuckDB sees ordinary tables.
-Useful for serving data from an API, an in-memory structure, or another engine.
-See [docs/vcatprovider.md](docs/vcatprovider.md).
-
 ## Docs
 
 - [docs/sql-api.md](docs/sql-api.md) — every function
@@ -143,7 +134,6 @@ See [docs/vcatprovider.md](docs/vcatprovider.md).
   policy, row filters, primary keys, transactions
 - [docs/vcatprovider.md](docs/vcatprovider.md) — the provider model and
   UDF contract
-- [docs/policy-v1.schema.json](docs/policy-v1.schema.json) — policy document schema
 - [CHANGELOG.md](CHANGELOG.md)
 
 ## Building
@@ -156,20 +146,3 @@ make release
 ```
 
 This builds both extensions under `build/release/extension/`.
-
-## Testing
-
-```sh
-make test                  # sqllogictests under test/sql/
-make test-cpp              # C++ unit tests
-uv run pytest test/python/ # cross-instance tests (needs make release)
-```
-
-## Formatting
-
-```sh
-make format-fix    # clang-format (make format-check to verify)
-make tidy-check    # clang-tidy
-```
-
-Both need `black` and the clang tools on PATH.
