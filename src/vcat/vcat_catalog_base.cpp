@@ -4,6 +4,7 @@
 
 #include "duckdb/catalog/catalog_set.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 
 namespace duckdb {
@@ -15,7 +16,8 @@ VirtualCatalogBase::~VirtualCatalogBase() = default;
 
 VirtualCatalogSchemaEntryBase &VirtualCatalogBase::GetOrCreateWrapper(SchemaCatalogEntry &target_schema) {
 	lock_guard<mutex> lock(wrappers_lock);
-	auto it = wrappers.find(target_schema.name);
+	auto &schema_name = target_schema.name.GetIdentifierName();
+	auto it = wrappers.find(schema_name);
 	if (it != wrappers.end()) {
 		// Match on address, not name: DROP SCHEMA s; CREATE SCHEMA s; yields a fresh DuckSchemaEntry,
 		// and the old wrapper's target_schema reference now dangles. The fresh entry can reuse the freed
@@ -28,8 +30,15 @@ VirtualCatalogSchemaEntryBase &VirtualCatalogBase::GetOrCreateWrapper(SchemaCata
 	}
 	auto wrapper = CreateSchemaWrapper(target_schema);
 	auto &ref = *wrapper;
-	wrappers[target_schema.name] = std::move(wrapper);
+	wrappers[schema_name] = std::move(wrapper);
 	return ref;
+}
+
+optional_ptr<CatalogEntry> VirtualCatalogBase::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
+	if (info.IsNested()) {
+		throw CatalogException("virtual_catalog: catalog '%s' does not support nested schemas", GetName());
+	}
+	return DuckCatalog::CreateSchema(transaction, info);
 }
 
 optional_ptr<SchemaCatalogEntry> VirtualCatalogBase::LookupSchema(CatalogTransaction transaction,
@@ -47,13 +56,14 @@ void VirtualCatalogBase::ScanSchemas(ClientContext &context, std::function<void(
 }
 
 void VirtualCatalogBase::DropSchema(ClientContext &context, DropInfo &info) {
-	ThrowIfSchemaStillServed(info.name);
+	auto &schema_name = info.GetQualifiedName().Name();
+	ThrowIfSchemaStillServed(schema_name.GetIdentifierName());
 	// Mirrors DuckCatalog::DropSchema, which is private and so cannot be called from here. CREATE OR
 	// REPLACE SCHEMA reaches the non-virtual (CatalogTransaction) overload and bypasses this refusal
 	// entirely -- GetOrCreateWrapper's identity check is what keeps that path safe.
-	if (!GetSchemaCatalogSet().DropEntry(GetCatalogTransaction(context), info.name, info.cascade) &&
+	if (!GetSchemaCatalogSet().DropEntry(GetCatalogTransaction(context), schema_name, info.cascade) &&
 	    info.if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
-		throw CatalogException::MissingEntry(CatalogType::SCHEMA_ENTRY, info.name, string());
+		throw CatalogException::MissingEntry(CatalogType::SCHEMA_ENTRY, schema_name, string());
 	}
 }
 

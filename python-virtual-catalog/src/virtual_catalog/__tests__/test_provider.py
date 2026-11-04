@@ -105,7 +105,7 @@ async def test_read_from_provider() -> None:
     store.set_table("t", pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]}))
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
-    rows = await asyncio.to_thread(lambda: conn.sql("SELECT * FROM workspace.public.t").fetchall())
+    rows = await asyncio.to_thread(lambda: conn.execute("SELECT * FROM workspace.public.t").fetchall())
     assert rows == [(1, "a"), (2, "b"), (3, "c")]
 
 
@@ -118,7 +118,7 @@ async def test_show_tables_lists_provider_tables() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_catalog='workspace' AND table_schema='public' ORDER BY table_name"
         ).fetchall()
@@ -134,7 +134,7 @@ async def test_invalidate_reveals_new_table() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables WHERE table_catalog='workspace' AND table_schema='public'"
         ).fetchall()
     )
@@ -143,7 +143,7 @@ async def test_invalidate_reveals_new_table() -> None:
     store.set_table("b", pa.table({"y": [2]}))
     await invalidate_provider_tables(conn, catalog="workspace")
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_catalog='workspace' AND table_schema='public' ORDER BY table_name"
         ).fetchall()
@@ -162,7 +162,7 @@ async def test_invalidate_on_provider_instance() -> None:
     await store.invalidate()
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_catalog='workspace' AND table_schema='public' ORDER BY table_name"
         ).fetchall()
@@ -193,7 +193,7 @@ async def test_unregister_removes_provider_tables() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables WHERE table_catalog='workspace' AND table_schema='public'"
         ).fetchall()
     )
@@ -202,14 +202,14 @@ async def test_unregister_removes_provider_tables() -> None:
     await unregister_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables WHERE table_catalog='workspace' AND table_schema='public'"
         ).fetchall()
     )
     assert rows == []
 
     with pytest.raises(duckdb.Error):
-        await asyncio.to_thread(lambda: conn.sql("SELECT * FROM workspace.public.a").fetchall())
+        await asyncio.to_thread(lambda: conn.execute("SELECT * FROM workspace.public.a").fetchall())
 
 
 @pytest.mark.asyncio
@@ -227,7 +227,7 @@ async def test_unregister_on_provider_instance() -> None:
 
     # UDFs must be gone — direct invocation errors out.
     with pytest.raises(duckdb.Error):
-        await asyncio.to_thread(lambda: conn.sql(f"SELECT __n6k_provider_list_{probe_id}()").fetchall())
+        await asyncio.to_thread(lambda: conn.execute(f"SELECT __n6k_provider_list_{probe_id}()").fetchall())
 
 
 @pytest.mark.asyncio
@@ -243,7 +243,7 @@ async def test_unregister_then_reregister_same_schema() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=second)
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables WHERE table_catalog='workspace' AND table_schema='public'"
         ).fetchall()
     )
@@ -258,7 +258,7 @@ async def test_unregister_twice_raises() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
     await store.unregister()
     with pytest.raises(duckdb.Error):
-        await asyncio.to_thread(lambda: conn.sql("SELECT vcatprovider_unregister('workspace')").fetchall())
+        await asyncio.to_thread(lambda: conn.execute("SELECT vcatprovider_unregister('workspace')").fetchall())
 
 
 @pytest.mark.asyncio
@@ -288,7 +288,7 @@ async def test_unregister_keeps_native_tables_intact() -> None:
 
     await store.unregister()
 
-    rows = await asyncio.to_thread(lambda: conn.sql("SELECT x FROM workspace.public.native_t").fetchall())
+    rows = await asyncio.to_thread(lambda: conn.execute("SELECT x FROM workspace.public.native_t").fetchall())
     assert rows == [(99,)]
 
 
@@ -317,7 +317,7 @@ async def test_register_materialises_schema_on_demand() -> None:
     store = _FakeStore()
     store.set_table("t", pa.table({"id": [1]}))
     register_provider(conn, catalog="workspace", schema_name="nosuch", provider=store)
-    rows = await asyncio.to_thread(lambda: conn.sql("SELECT id FROM workspace.nosuch.t").fetchall())
+    rows = await asyncio.to_thread(lambda: conn.execute("SELECT id FROM workspace.nosuch.t").fetchall())
     assert rows == [(1,)]
 
 
@@ -332,15 +332,15 @@ async def test_two_schemas_share_one_catalog() -> None:
     register_provider(conn, catalog="workspace", schema_name="other", provider=b)
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql("SELECT * FROM workspace.public.t UNION ALL SELECT * FROM workspace.other.t").fetchall()
+        lambda: conn.execute("SELECT * FROM workspace.public.t UNION ALL SELECT * FROM workspace.other.t").fetchall()
     )
     assert sorted(rows) == [(1,), (2,)]
 
     await a.unregister()
-    rows = await asyncio.to_thread(lambda: conn.sql("SELECT id FROM workspace.other.t").fetchall())
+    rows = await asyncio.to_thread(lambda: conn.execute("SELECT id FROM workspace.other.t").fetchall())
     assert rows == [(2,)]
     with pytest.raises(duckdb.Error):
-        await asyncio.to_thread(lambda: conn.sql("SELECT * FROM workspace.public.t").fetchall())
+        await asyncio.to_thread(lambda: conn.execute("SELECT * FROM workspace.public.t").fetchall())
 
 
 @pytest.mark.asyncio
@@ -354,18 +354,18 @@ async def test_provider_and_native_coexist_in_same_schema() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_catalog='workspace' AND table_schema='public' ORDER BY table_name"
         ).fetchall()
     )
     assert [r[0] for r in rows] == ["native_t", "prov_t"]
 
-    native_rows = await asyncio.to_thread(lambda: conn.sql("SELECT x FROM workspace.public.native_t").fetchall())
+    native_rows = await asyncio.to_thread(lambda: conn.execute("SELECT x FROM workspace.public.native_t").fetchall())
     assert native_rows == [(99,)]
 
     prov_rows = await asyncio.to_thread(
-        lambda: conn.sql("SELECT id FROM workspace.public.prov_t ORDER BY id").fetchall()
+        lambda: conn.execute("SELECT id FROM workspace.public.prov_t ORDER BY id").fetchall()
     )
     assert prov_rows == [(1,), (2,)]
 
@@ -391,7 +391,7 @@ async def test_drop_native_table_still_works_in_provider_schema() -> None:
 
     await asyncio.to_thread(lambda: conn.execute("DROP TABLE workspace.public.native_t"))
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_catalog='workspace' AND table_schema='public' ORDER BY table_name"
         ).fetchall()
@@ -427,7 +427,7 @@ async def test_alter_native_table_still_works_in_provider_schema() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
     await asyncio.to_thread(lambda: conn.execute("ALTER TABLE workspace.public.n ADD COLUMN y VARCHAR"))
-    rows = await asyncio.to_thread(lambda: conn.sql("DESCRIBE workspace.public.n").fetchall())
+    rows = await asyncio.to_thread(lambda: conn.execute("DESCRIBE workspace.public.n").fetchall())
     assert [r[0] for r in rows] == ["x", "y"]
 
 
@@ -440,7 +440,7 @@ async def test_invalidate_hides_removed_table() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_catalog='workspace' AND table_schema='public' ORDER BY table_name"
         ).fetchall()
@@ -451,7 +451,7 @@ async def test_invalidate_hides_removed_table() -> None:
     await store.invalidate()
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_catalog='workspace' AND table_schema='public' ORDER BY table_name"
         ).fetchall()
@@ -459,7 +459,7 @@ async def test_invalidate_hides_removed_table() -> None:
     assert [r[0] for r in rows] == ["b"]
 
     with pytest.raises(duckdb.Error):
-        await asyncio.to_thread(lambda: conn.sql("SELECT * FROM workspace.public.a").fetchall())
+        await asyncio.to_thread(lambda: conn.execute("SELECT * FROM workspace.public.a").fetchall())
 
 
 @pytest.mark.asyncio
@@ -471,7 +471,9 @@ async def test_invalidate_reveals_schema_change() -> None:
     store.set_table("t", pa.table({"id": pa.array([1, 2], type=pa.int64())}))
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
-    cols_before = await asyncio.to_thread(lambda: [r[0] for r in conn.sql("DESCRIBE workspace.public.t").fetchall()])
+    cols_before = await asyncio.to_thread(
+        lambda: [r[0] for r in conn.execute("DESCRIBE workspace.public.t").fetchall()]
+    )
     assert cols_before == ["id"]
 
     store.set_table(
@@ -485,7 +487,7 @@ async def test_invalidate_reveals_schema_change() -> None:
     )
     await store.invalidate()
 
-    cols_after = await asyncio.to_thread(lambda: [r[0] for r in conn.sql("DESCRIBE workspace.public.t").fetchall()])
+    cols_after = await asyncio.to_thread(lambda: [r[0] for r in conn.execute("DESCRIBE workspace.public.t").fetchall()])
     assert cols_after == ["id", "name"]
 
 
@@ -513,7 +515,7 @@ async def test_scan_receives_projected_columns() -> None:
     )
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
-    await asyncio.to_thread(lambda: conn.sql("SELECT id, name FROM workspace.public.t").fetchall())
+    await asyncio.to_thread(lambda: conn.execute("SELECT id, name FROM workspace.public.t").fetchall())
     assert store.scan_calls_with_columns == [["id", "name"]]
 
 
@@ -541,7 +543,9 @@ async def test_scan_post_projection_fallback() -> None:
     )
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
-    rows = await asyncio.to_thread(lambda: conn.sql("SELECT id, name FROM workspace.public.t ORDER BY id").fetchall())
+    rows = await asyncio.to_thread(
+        lambda: conn.execute("SELECT id, name FROM workspace.public.t ORDER BY id").fetchall()
+    )
     assert rows == [(1, "a"), (2, "b")]
 
 
@@ -607,7 +611,7 @@ async def test_provider_filter_pushdown_roundtrip(where: str, expected: Filters)
     store = _CapturingStore(pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]}))
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
-    await asyncio.to_thread(lambda: conn.sql(f"SELECT id FROM workspace.public.t WHERE {where}").fetchall())
+    await asyncio.to_thread(lambda: conn.execute(f"SELECT id FROM workspace.public.t WHERE {where}").fetchall())
 
     assert store.captured, "provider.scan was never called"
     assert store.captured[-1] == expected
@@ -619,7 +623,9 @@ async def test_provider_filter_pushdown_multiple_clauses() -> None:
     store = _CapturingStore(pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]}))
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
-    await asyncio.to_thread(lambda: conn.sql("SELECT id FROM workspace.public.t WHERE id > 1 AND id < 10").fetchall())
+    await asyncio.to_thread(
+        lambda: conn.execute("SELECT id FROM workspace.public.t WHERE id > 1 AND id < 10").fetchall()
+    )
     assert store.captured[-1] is not None
     clauses = sorted(store.captured[-1])
     assert clauses == [("id", "<", 10), ("id", ">", 1)]
@@ -684,7 +690,7 @@ async def _permissions(
         "SELECT schema, name, kind, verbs, primary_key "
         f"FROM vcatprovider_table_permissions({', '.join(parts)}) ORDER BY name"
     )
-    return _writes_and_alter(await asyncio.to_thread(lambda: conn.sql(sql).fetchall()))
+    return _writes_and_alter(await asyncio.to_thread(lambda: conn.execute(sql).fetchall()))
 
 
 def _writes_and_alter(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
@@ -739,7 +745,7 @@ async def test_table_permissions_native_table_and_view() -> None:
     conn.execute("CREATE VIEW workspace.public.nv AS SELECT 1 AS y")
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT schema, name, kind, verbs, primary_key "
             "FROM vcatprovider_table_permissions('workspace', schema := 'public') ORDER BY name"
         ).fetchall()
@@ -759,7 +765,7 @@ async def test_table_permissions_plain_catalog() -> None:
     conn.execute("CREATE TABLE memory.main.nt(x INTEGER PRIMARY KEY)")
     conn.execute("CREATE VIEW memory.main.nv AS SELECT 1 AS y")
     rows = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT schema, name, kind, verbs, primary_key "
             "FROM vcatprovider_table_permissions('memory', schema := 'main') ORDER BY name"
         ).fetchall()
@@ -1125,7 +1131,7 @@ async def test_a_typed_filter_literal_arrives_as_a_scalar(column: "pa.Array[Any]
     store = _CapturingStore(pa.table({"d": column, "n": [1, 2]}))
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
-    await asyncio.to_thread(lambda: conn.sql(f"SELECT n FROM workspace.public.t WHERE {where}").fetchall())
+    await asyncio.to_thread(lambda: conn.execute(f"SELECT n FROM workspace.public.t WHERE {where}").fetchall())
 
     assert store.captured, "provider.scan was never called"
     clause = (store.captured[-1] or [])[0]
@@ -1143,11 +1149,11 @@ async def test_a_typed_filter_costs_no_extra_schema_call() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=store)
 
     # Warm the catalog entry first; that lookup is what legitimately calls schema().
-    await asyncio.to_thread(lambda: conn.sql("SELECT n FROM workspace.public.t").fetchall())
+    await asyncio.to_thread(lambda: conn.execute("SELECT n FROM workspace.public.t").fetchall())
     before = store.schema_calls
 
     await asyncio.to_thread(
-        lambda: conn.sql("SELECT n FROM workspace.public.t WHERE d >= DATE '2025-05-06'").fetchall()
+        lambda: conn.execute("SELECT n FROM workspace.public.t WHERE d >= DATE '2025-05-06'").fetchall()
     )
     assert store.schema_calls == before, "a filtered scan asked the provider for its schema again"
 
@@ -1161,7 +1167,7 @@ def _registered_store(conn: duckdb.DuckDBPyConnection) -> _FakeStore:
 
 def _error_of(conn: duckdb.DuckDBPyConnection, sql: str) -> str:
     try:
-        conn.sql(sql).fetchall()
+        conn.execute(sql).fetchall()
     except duckdb.Error as exc:
         return str(exc)
     raise AssertionError(f"expected {sql!r} to fail")
@@ -1170,7 +1176,7 @@ def _error_of(conn: duckdb.DuckDBPyConnection, sql: str) -> str:
 async def _register_query_release() -> tuple[weakref.ref[_FakeStore], weakref.ref[duckdb.DuckDBPyConnection]]:
     conn = _new_conn()
     store = _registered_store(conn)
-    await asyncio.to_thread(lambda: conn.sql("SELECT * FROM workspace.public.a").fetchall())
+    await asyncio.to_thread(lambda: conn.execute("SELECT * FROM workspace.public.a").fetchall())
     probe_id = _catalogs[conn]["workspace"].probe_id
 
     await asyncio.to_thread(release_providers, conn)
@@ -1228,7 +1234,7 @@ async def test_same_catalog_name_on_two_connections_stays_separate() -> None:
     def tables(conn: duckdb.DuckDBPyConnection) -> list[str]:
         return sorted(
             r[0]
-            for r in conn.sql(
+            for r in conn.execute(
                 "SELECT table_name FROM information_schema.tables "
                 "WHERE table_catalog='workspace' AND table_schema='public'"
             ).fetchall()
@@ -1242,7 +1248,7 @@ async def test_same_catalog_name_on_two_connections_stays_separate() -> None:
     assert await asyncio.to_thread(tables, a_conn) == ["a", "extra"]
 
     await b.unregister()
-    assert await asyncio.to_thread(lambda: a_conn.sql("SELECT * FROM workspace.public.a").fetchall()) == [(1,)]
+    assert await asyncio.to_thread(lambda: a_conn.execute("SELECT * FROM workspace.public.a").fetchall()) == [(1,)]
     await a.invalidate()
 
 

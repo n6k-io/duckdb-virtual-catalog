@@ -21,7 +21,7 @@ def _conn() -> duckdb.DuckDBPyConnection:
 
 
 def _describe(conn: duckdb.DuckDBPyConnection, catalog: str, schema: str, table: str) -> dict[str, Any]:
-    row = conn.sql(
+    row = conn.execute(
         "SELECT columns, primary_key, verbs, enums "
         f"FROM vcatbridge_table_describe('{catalog}', schema := '{schema}', \"table\" := '{table}')"
     ).fetchone()
@@ -70,7 +70,7 @@ def test_describe_bridge_readwrite_table() -> None:
     from virtual_catalog.bridge import Policy, bridge
 
     source = duckdb.connect(config=CONN_CONFIG)
-    source.sql("CREATE TABLE rw(id INTEGER PRIMARY KEY, label VARCHAR)")
+    source.execute("CREATE TABLE rw(id INTEGER PRIMARY KEY, label VARCHAR)")
 
     target = _conn()
     load_vcatbridge(target)

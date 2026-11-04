@@ -254,7 +254,7 @@ void RowChunkBuilder::Append(const Value &value) {
 	}
 	// Cast rather than trust: a key value read out of an Arrow buffer carries that buffer's type,
 	// which need not be the column's own.
-	current_->SetValue(column_, row_, value.DefaultCastAs(types_[column_]));
+	current_->data[column_].SetValue(row_, value.DefaultCastAs(types_[column_]));
 	column_++;
 }
 
@@ -264,7 +264,7 @@ void RowChunkBuilder::EndRow(const char *what) {
 		                  static_cast<uint64_t>(column_), static_cast<uint64_t>(types_.size()));
 	}
 	row_++;
-	current_->SetCardinality(row_);
+	current_->SetChildCardinality(row_);
 	if (row_ >= STANDARD_VECTOR_SIZE) {
 		Flush();
 	}
@@ -272,7 +272,7 @@ void RowChunkBuilder::EndRow(const char *what) {
 
 void RowChunkBuilder::Flush() {
 	if (current_ && row_ > 0) {
-		current_->SetCardinality(row_);
+		current_->SetChildCardinality(row_);
 		chunks_.push_back(std::move(current_));
 	}
 	current_ = nullptr;

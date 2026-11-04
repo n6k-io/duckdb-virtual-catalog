@@ -13,18 +13,22 @@
 // filter: dropping a mandatory clause returns rows the query excluded. Callers must check
 // FilterSerializeResult::all_exact and refuse a filter set that did not render.
 //
-// OPTIONAL_FILTER (and DYNAMIC/BLOOM) are the exception -- DuckDB marks a filter optional exactly
-// when it also keeps a FILTER operator above the scan. STRUCT_EXTRACT is the case to watch: pushed
-// mandatorily with no FILTER retained.
+// Optional wrappers and the dynamic, bloom and prefix-range hints are the exception -- DuckDB marks a
+// filter optional exactly when it also keeps a FILTER operator above the scan. A struct_extract
+// comparison is the case to watch: pushed mandatorily with no FILTER retained.
 
 #include "duckdb.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/function/table/arrow.hpp"
-#include "duckdb/planner/filter/conjunction_filter.hpp"
-#include "duckdb/planner/filter/constant_filter.hpp"
-#include "duckdb/planner/filter/in_filter.hpp"
-#include "duckdb/planner/filter/null_filter.hpp"
-#include "duckdb/planner/filter/optional_filter.hpp"
+#include "duckdb/function/scalar/tablefilter_functions.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
+#include "duckdb/planner/table_filter_set.hpp"
 #include "yyjson.hpp"
 
 #include <cmath>
@@ -186,55 +190,24 @@ inline yyjson_mut_val *MakeClause(yyjson_mut_doc *doc, const string &col, const 
 	return clause;
 }
 
-//! Render one filter into zero or more clause nodes. Nodes are appended to `out` only when the
+inline bool IsInternalHintFunction(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &name = expr.Cast<BoundFunctionExpression>().Function().GetName();
+	return name == TableFilterDynamicFun::Name || name == TableFilterBloomFilterFun::Name ||
+	       name == TableFilterPrefixRangeFun::Name;
+}
+
+//! Render one filter expression into zero or more clause nodes. Nodes are appended to `out` only when the
 //! result is not UNSUPPORTED, so a caller that bails leaves `out` untouched. Discarded nodes stay
 //! in the document arena and are freed with it.
-inline FilterFidelity TryBuildClauses(const TableFilter &filter, const string &col_name, yyjson_mut_doc *doc,
+inline FilterFidelity TryBuildClauses(const Expression &expr, const string &col_name, yyjson_mut_doc *doc,
                                       vector<yyjson_mut_val *> &out) {
-	switch (filter.filter_type) {
-	case TableFilterType::CONSTANT_COMPARISON: {
-		auto &cf = filter.Cast<ConstantFilter>();
-		auto op = ComparisonOp(cf.comparison_type);
-		if (op.empty() || IsNaN(cf.constant)) {
-			return FilterFidelity::UNSUPPORTED;
-		}
-		out.push_back(MakeClause(doc, col_name, op, ValueNode(doc, cf.constant), ValueTypeTag(cf.constant)));
-		return FilterFidelity::EXACT;
-	}
-	case TableFilterType::IN_FILTER: {
-		auto &inf = filter.Cast<InFilter>();
-		for (auto &value : inf.values) {
-			if (IsNaN(value)) {
-				return FilterFidelity::UNSUPPORTED;
-			}
-		}
-		auto *arr = yyjson_mut_arr(doc);
-		// One tag for the list: every element is compared to the same column, so they share a type.
-		// Taken from the first non-NULL, since a NULL carries none.
-		const char *tag = nullptr;
-		for (idx_t i = 0; i < inf.values.size(); i++) {
-			yyjson_mut_arr_append(arr, ValueNode(doc, inf.values[i]));
-			if (!tag) {
-				tag = ValueTypeTag(inf.values[i]);
-			}
-		}
-		out.push_back(MakeClause(doc, col_name, "in", arr, tag));
-		return FilterFidelity::EXACT;
-	}
-	case TableFilterType::IS_NULL:
-		out.push_back(MakeClause(doc, col_name, "is_null", yyjson_mut_null(doc)));
-		return FilterFidelity::EXACT;
-	case TableFilterType::IS_NOT_NULL:
-		out.push_back(MakeClause(doc, col_name, "is_not_null", yyjson_mut_null(doc)));
-		return FilterFidelity::EXACT;
-	case TableFilterType::OPTIONAL_FILTER: {
+	if (auto child = ExpressionFilter::GetOptionalFilterChild(expr)) {
 		// Correctness does not depend on this filter, so an unrenderable child is safe to drop.
-		auto &opt = filter.Cast<OptionalFilter>();
-		if (!opt.child_filter) {
-			return FilterFidelity::OPTIONAL_SKIPPED;
-		}
 		vector<yyjson_mut_val *> child_out;
-		auto fidelity = TryBuildClauses(*opt.child_filter, col_name, doc, child_out);
+		auto fidelity = TryBuildClauses(*child, col_name, doc, child_out);
 		if (fidelity == FilterFidelity::UNSUPPORTED) {
 			return FilterFidelity::OPTIONAL_SKIPPED;
 		}
@@ -243,16 +216,74 @@ inline FilterFidelity TryBuildClauses(const TableFilter &filter, const string &c
 		}
 		return fidelity;
 	}
-	case TableFilterType::DYNAMIC_FILTER:
-	case TableFilterType::BLOOM_FILTER:
-		// Join-derived; the join itself enforces the predicate, so skipping only costs rows.
+	// Join-derived; the join itself enforces the predicate, so skipping only costs rows.
+	if (ExpressionFilter::IsRootOptionalExpression(expr) || IsInternalHintFunction(expr)) {
 		return FilterFidelity::OPTIONAL_SKIPPED;
-	case TableFilterType::CONJUNCTION_AND: {
+	}
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_FUNCTION: {
+		if (!BoundComparisonExpression::IsComparison(expr)) {
+			return FilterFidelity::UNSUPPORTED;
+		}
+		ExpressionType comparison;
+		auto constant =
+		    ExpressionFilter::TryGetColumnConstantComparison(expr.Cast<BoundFunctionExpression>(), comparison);
+		if (!constant) {
+			return FilterFidelity::UNSUPPORTED;
+		}
+		auto op = ComparisonOp(comparison);
+		auto &value = constant->GetValue();
+		if (op.empty() || IsNaN(value)) {
+			return FilterFidelity::UNSUPPORTED;
+		}
+		out.push_back(MakeClause(doc, col_name, op, ValueNode(doc, value), ValueTypeTag(value)));
+		return FilterFidelity::EXACT;
+	}
+	case ExpressionClass::BOUND_OPERATOR: {
+		auto &children = expr.Cast<BoundOperatorExpression>().GetChildren();
+		if (children.empty() || !ExpressionFilter::IsSimpleFilterColumnRef(*children[0])) {
+			return FilterFidelity::UNSUPPORTED;
+		}
+		switch (expr.GetExpressionType()) {
+		case ExpressionType::OPERATOR_IS_NULL:
+			out.push_back(MakeClause(doc, col_name, "is_null", yyjson_mut_null(doc)));
+			return FilterFidelity::EXACT;
+		case ExpressionType::OPERATOR_IS_NOT_NULL:
+			out.push_back(MakeClause(doc, col_name, "is_not_null", yyjson_mut_null(doc)));
+			return FilterFidelity::EXACT;
+		case ExpressionType::COMPARE_IN: {
+			for (idx_t i = 1; i < children.size(); i++) {
+				if (children[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT ||
+				    IsNaN(children[i]->Cast<BoundConstantExpression>().GetValue())) {
+					return FilterFidelity::UNSUPPORTED;
+				}
+			}
+			auto *arr = yyjson_mut_arr(doc);
+			// One tag for the list: every element is compared to the same column, so they share a type.
+			// Taken from the first non-NULL, since a NULL carries none.
+			const char *tag = nullptr;
+			for (idx_t i = 1; i < children.size(); i++) {
+				auto &value = children[i]->Cast<BoundConstantExpression>().GetValue();
+				yyjson_mut_arr_append(arr, ValueNode(doc, value));
+				if (!tag) {
+					tag = ValueTypeTag(value);
+				}
+			}
+			out.push_back(MakeClause(doc, col_name, "in", arr, tag));
+			return FilterFidelity::EXACT;
+		}
+		default:
+			return FilterFidelity::UNSUPPORTED;
+		}
+	}
+	case ExpressionClass::BOUND_CONJUNCTION: {
+		if (expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+			return FilterFidelity::UNSUPPORTED;
+		}
 		// One unrenderable child poisons the conjunction: emitting only the renderable children
 		// yields a weaker predicate, and nothing re-applies the rest locally.
-		auto &conj = filter.Cast<ConjunctionAndFilter>();
 		vector<yyjson_mut_val *> collected;
-		for (auto &child : conj.child_filters) {
+		for (auto &child : expr.Cast<BoundConjunctionExpression>().GetChildren()) {
 			vector<yyjson_mut_val *> child_out;
 			if (TryBuildClauses(*child, col_name, doc, child_out) == FilterFidelity::UNSUPPORTED) {
 				return FilterFidelity::UNSUPPORTED;
@@ -271,6 +302,14 @@ inline FilterFidelity TryBuildClauses(const TableFilter &filter, const string &c
 	}
 }
 
+inline FilterFidelity TryBuildClauses(const TableFilter &filter, const string &col_name, yyjson_mut_doc *doc,
+                                      vector<yyjson_mut_val *> &out) {
+	if (filter.filter_type != TableFilterType::EXPRESSION_FILTER) {
+		return FilterFidelity::UNSUPPORTED;
+	}
+	return TryBuildClauses(*filter.Cast<ExpressionFilter>().expr, col_name, doc, out);
+}
+
 inline void SerializeFiltersInto(const TableFilterSet &filter_set, const unordered_map<idx_t, idx_t> &filter_to_col,
                                  const vector<string> &column_names, yyjson_mut_doc *doc, yyjson_mut_val *arr,
                                  FilterSerializeResult &result) {
@@ -281,8 +320,13 @@ inline void SerializeFiltersInto(const TableFilterSet &filter_set, const unorder
 		result.all_exact = false;
 	};
 
-	for (auto &entry : filter_set.filters) {
-		auto it = filter_to_col.find(entry.first);
+	for (auto &multi_column : filter_set.GetMultiColumnFilters()) {
+		if (!ExpressionFilter::IsOptionalFilter(*multi_column)) {
+			mark_unsupported("?");
+		}
+	}
+	for (auto &entry : filter_set) {
+		auto it = filter_to_col.find(entry.GetIndex().GetIndex());
 		if (it == filter_to_col.end() || it->second >= column_names.size()) {
 			// No column mapping (a row-id filter, say). It cannot be named on the wire, and
 			// dropping it silently would return extra rows.
@@ -291,7 +335,7 @@ inline void SerializeFiltersInto(const TableFilterSet &filter_set, const unorder
 		}
 		auto &col_name = column_names[it->second];
 		vector<yyjson_mut_val *> clauses;
-		if (TryBuildClauses(*entry.second, col_name, doc, clauses) == FilterFidelity::UNSUPPORTED) {
+		if (TryBuildClauses(entry.Filter(), col_name, doc, clauses) == FilterFidelity::UNSUPPORTED) {
 			mark_unsupported(col_name);
 			continue;
 		}

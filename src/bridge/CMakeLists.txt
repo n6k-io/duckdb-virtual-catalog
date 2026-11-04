@@ -7,7 +7,7 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 get_filename_component(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../.. ABSOLUTE)
@@ -56,7 +56,8 @@ if(VCAT_BUILD_CPP_TESTS AND BUILD_MAIN_DUCKDB_LIBRARY)
     vcat_bridge_unittest
     PRIVATE ${DUCKDB_MODULE_BASE_DIR}/third_party/catch
             ${REPO_ROOT}/test/cpp/bridge ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(vcat_bridge_unittest duckdb_static Threads::Threads)
+  target_link_libraries(vcat_bridge_unittest ${EXTENSION_NAME} duckdb_static
+                        Threads::Threads)
   link_extension_libraries(vcat_bridge_unittest "")
   set_target_properties(vcat_bridge_unittest PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                         ${CMAKE_BINARY_DIR})

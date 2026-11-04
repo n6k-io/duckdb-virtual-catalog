@@ -52,7 +52,7 @@ function.
 
 ## Limitations
 
-- Provider methods must not call `conn.sql()` on the same connection
+- Provider methods must not call `conn.execute()` on the same connection
   (deadlock). Use `conn.cursor()`.
 - `RETURNING` on INSERT/UPDATE/DELETE is not supported.
 - Only `add_column`, `drop_column`, `rename_column` reach `alter()`; other
@@ -361,15 +361,15 @@ class _CatalogProviders:
             con.remove_function(self.udf_name(op))
         self.registered_ops = wanted
         with con.cursor() as cur:
-            cur.sql(
+            cur.execute(
                 "SELECT vcatprovider_register($1,$2,$3,$4,$5,$6,$7,$8)",
-                params=[self.catalog] + [self.udf_name(op) if op in wanted else "" for op in _ALL_OPS],
-            ).fetchone()
+                parameters=[self.catalog] + [self.udf_name(op) if op in wanted else "" for op in _ALL_OPS],
+            ).fetchall()
 
     def close(self) -> None:
         con = self.con
         with con.cursor() as cur:
-            cur.sql("SELECT vcatprovider_unregister($1)", params=[self.catalog]).fetchone()
+            cur.execute("SELECT vcatprovider_unregister($1)", parameters=[self.catalog]).fetchall()
         for op in self.registered_ops:
             con.remove_function(self.udf_name(op))
         self.registered_ops = set()
@@ -435,7 +435,7 @@ async def invalidate_provider_tables(con: duckdb.DuckDBPyConnection, *, catalog:
 
     def _call() -> None:
         with con.cursor() as cur:
-            cur.sql("SELECT vcatprovider_invalidate_tables($1)", params=[catalog]).fetchone()
+            cur.execute("SELECT vcatprovider_invalidate_tables($1)", parameters=[catalog]).fetchall()
 
     await asyncio.to_thread(_call)
 
@@ -470,7 +470,7 @@ async def unregister_provider(
             if entry.providers:
                 entry.sync()
                 with con.cursor() as cur:
-                    cur.sql("SELECT vcatprovider_invalidate_tables($1)", params=[catalog]).fetchone()
+                    cur.execute("SELECT vcatprovider_invalidate_tables($1)", parameters=[catalog]).fetchall()
             else:
                 entry.close()
         except BaseException:

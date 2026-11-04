@@ -65,7 +65,7 @@ def test_update_integer_pk(external_db: dict[str, Any]) -> None:
     src.execute(f"INSERT INTO {q} VALUES (1, 100), (2, 200)")
 
     target, tq = _bridge_external(external_db, "bridge_int_pk")
-    target.sql(f"UPDATE {tq} SET val = 999 WHERE id = 1")
+    target.execute(f"UPDATE {tq} SET val = 999 WHERE id = 1")
 
     result = src.execute(f"SELECT val FROM {q} WHERE id = 1").fetchone()
     assert result == (999,)
@@ -78,7 +78,7 @@ def test_delete_integer_pk(external_db: dict[str, Any]) -> None:
     src.execute(f"INSERT INTO {q} VALUES (1, 10), (2, 20), (3, 30)")
 
     target, tq = _bridge_external(external_db, "bridge_int_del")
-    target.sql(f"DELETE FROM {tq} WHERE id = 2")
+    target.execute(f"DELETE FROM {tq} WHERE id = 2")
 
     result = src.execute(f"SELECT id FROM {q} ORDER BY id").fetchall()
     assert result == [(1,), (3,)]
@@ -93,7 +93,7 @@ def test_update_varchar_pk(external_db: dict[str, Any]) -> None:
     src.execute(f"INSERT INTO {q} VALUES ('abc', 10), ('def', 20)")
 
     target, tq = _bridge_external(external_db, "bridge_varchar_pk")
-    target.sql(f"UPDATE {tq} SET val = 77 WHERE code = 'abc'")
+    target.execute(f"UPDATE {tq} SET val = 77 WHERE code = 'abc'")
 
     result = src.execute(f"SELECT val FROM {q} WHERE code = 'abc'").fetchone()
     assert result == (77,)
@@ -108,7 +108,7 @@ def test_delete_varchar_pk(external_db: dict[str, Any]) -> None:
     src.execute(f"INSERT INTO {q} VALUES ('abc', 10), ('def', 20), ('ghi', 30)")
 
     target, tq = _bridge_external(external_db, "bridge_varchar_del")
-    target.sql(f"DELETE FROM {tq} WHERE code = 'def'")
+    target.execute(f"DELETE FROM {tq} WHERE code = 'def'")
 
     result = src.execute(f"SELECT code FROM {q} ORDER BY code").fetchall()
     assert result == [("abc",), ("ghi",)]
@@ -120,7 +120,7 @@ def test_insert_through_bridge(external_db: dict[str, Any]) -> None:
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_insert"'
 
     target, tq = _bridge_external(external_db, "bridge_insert")
-    target.sql(f"INSERT INTO {tq} VALUES (1, 'hello')")
+    target.execute(f"INSERT INTO {tq} VALUES (1, 'hello')")
 
     result = src.execute(f"SELECT id, name FROM {q}").fetchall()
     assert result == [(1, "hello")]
@@ -133,7 +133,7 @@ def test_update_expression(external_db: dict[str, Any]) -> None:
     src.execute(f"INSERT INTO {q} VALUES (1, 10), (2, 20)")
 
     target, tq = _bridge_external(external_db, "bridge_expr")
-    target.sql(f"UPDATE {tq} SET counter = counter + 5 WHERE id = 1")
+    target.execute(f"UPDATE {tq} SET counter = counter + 5 WHERE id = 1")
 
     result = src.execute(f"SELECT counter FROM {q} WHERE id = 1").fetchone()
     assert result == (15,)
@@ -146,7 +146,7 @@ def test_composite_pk_update(external_db: dict[str, Any]) -> None:
     src.execute(f"INSERT INTO {q} VALUES (1, 1, 'orig'), (1, 2, 'orig')")
 
     target, tq = _bridge_external(external_db, "bridge_cpk")
-    target.sql(f"UPDATE {tq} SET val = 'changed' WHERE a = 1 AND b = 1")
+    target.execute(f"UPDATE {tq} SET val = 'changed' WHERE a = 1 AND b = 1")
 
     result = src.execute(f"SELECT val FROM {q} WHERE a = 1 AND b = 1").fetchone()
     assert result == ("changed",)
@@ -159,7 +159,7 @@ def test_composite_pk_delete(external_db: dict[str, Any]) -> None:
     src.execute(f"INSERT INTO {q} VALUES (1, 1, 'x'), (1, 2, 'y'), (2, 1, 'z')")
 
     target, tq = _bridge_external(external_db, "bridge_cpk_del")
-    target.sql(f"DELETE FROM {tq} WHERE a = 1 AND b = 2")
+    target.execute(f"DELETE FROM {tq} WHERE a = 1 AND b = 2")
 
     result = src.execute(f"SELECT a, b FROM {q} ORDER BY a, b").fetchall()
     assert result == [(1, 1), (2, 1)]
@@ -173,7 +173,7 @@ def test_pk_auto_discovery(external_db: dict[str, Any]) -> None:
 
     # No primary_keys override — should auto-discover
     target, tq = _bridge_external(external_db, "bridge_auto_pk")
-    target.sql(f"UPDATE {tq} SET val = 99 WHERE id = 1")
+    target.execute(f"UPDATE {tq} SET val = 99 WHERE id = 1")
 
     result = src.execute(f"SELECT val FROM {q} WHERE id = 1").fetchone()
     assert result == (99,)
@@ -185,12 +185,12 @@ def test_no_pk_refuses_keyed_writes_on_external(external_db: dict[str, Any]) -> 
     q = f'"{external_db["catalog"]}"."{external_db["schema"]}"."bridge_no_pk"'
 
     target, tq = _bridge_external(external_db, "bridge_no_pk")
-    target.sql(f"INSERT INTO {tq} VALUES (1, 10)")
+    target.execute(f"INSERT INTO {tq} VALUES (1, 10)")
     assert src.execute(f"SELECT x, y FROM {q}").fetchall() == [(1, 10)]
     with pytest.raises(duckdb.BinderException, match="has no key"):
-        target.sql(f"UPDATE {tq} SET y = 99 WHERE x = 1")
+        target.execute(f"UPDATE {tq} SET y = 99 WHERE x = 1")
     with pytest.raises(duckdb.BinderException, match="has no key"):
-        target.sql(f"DELETE FROM {tq} WHERE x = 1")
+        target.execute(f"DELETE FROM {tq} WHERE x = 1")
 
 
 def test_join_optional_filter_pushdown(external_db: dict[str, Any]) -> None:
@@ -215,7 +215,7 @@ def test_join_optional_filter_pushdown(external_db: dict[str, Any]) -> None:
     src.execute(f"INSERT INTO {oq} SELECT g, (g % 12) + 1, g * 10 FROM range(1, 201) t(g)")
 
     # Ground truth: the same aggregate straight off the source.
-    expected = src.sql(
+    expected = src.execute(
         f"SELECT u.country, sum(o.amount) FROM {oq} o "
         f"JOIN {uq} u ON u.id = o.user_id GROUP BY u.country ORDER BY u.country"
     ).fetchall()
@@ -229,7 +229,7 @@ def test_join_optional_filter_pushdown(external_db: dict[str, Any]) -> None:
         policies=_select(f"{sch}.bridge_join_users") + _select(f"{sch}.bridge_join_orders"),
     )
 
-    rows = src.sql(
+    rows = src.execute(
         f'SELECT u.country, sum(o.amount) FROM jbr."{sch}".bridge_join_orders o '
         f'JOIN jbr."{sch}".bridge_join_users u ON u.id = o.user_id '
         "GROUP BY u.country ORDER BY u.country"
@@ -245,7 +245,7 @@ def test_read_through_bridge(external_db: dict[str, Any]) -> None:
 
     target, tq = _bridge_external(external_db, "bridge_read", grants=_select)
 
-    result = target.sql(f"SELECT id, name FROM {tq} ORDER BY id").fetchall()
+    result = target.execute(f"SELECT id, name FROM {tq} ORDER BY id").fetchall()
     assert result == [(1, "alice"), (2, "bob")]
 
 
@@ -256,7 +256,7 @@ def test_multi_column_update(external_db: dict[str, Any]) -> None:
     src.execute(f"INSERT INTO {q} VALUES (1, 10, 'old')")
 
     target, tq = _bridge_external(external_db, "bridge_multi")
-    target.sql(f"UPDATE {tq} SET a = 99, b = 'new' WHERE id = 1")
+    target.execute(f"UPDATE {tq} SET a = 99, b = 'new' WHERE id = 1")
 
     result = src.execute(f"SELECT a, b FROM {q} WHERE id = 1").fetchone()
     assert result == (99, "new")
@@ -279,10 +279,10 @@ def test_sequential_scans_no_segfault(external_db: dict[str, Any]) -> None:
 
     target, tq = _bridge_external(external_db, "bridge_segfault")
 
-    r1 = target.sql(f"SELECT * FROM {tq} ORDER BY id").fetchall()
+    r1 = target.execute(f"SELECT * FROM {tq} ORDER BY id").fetchall()
     assert len(r1) == 2
 
     # Second scan: projected columns — this segfaulted before the fix
-    r2 = target.sql(f"SELECT id, amount FROM {tq} ORDER BY id").fetchall()
+    r2 = target.execute(f"SELECT id, amount FROM {tq} ORDER BY id").fetchall()
     assert len(r2) == 2
     assert r2[0][0] == 1

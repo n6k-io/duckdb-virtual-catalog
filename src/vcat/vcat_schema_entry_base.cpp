@@ -11,7 +11,7 @@
 namespace duckdb {
 
 VirtualCatalogSchemaInfoHolder::VirtualCatalogSchemaInfoHolder(const SchemaCatalogEntry &src) {
-	info.schema = src.name;
+	info.SetQualifiedName(QualifiedName(src.ParentCatalog().GetName(), src.name, Identifier()));
 	info.internal = src.internal;
 	info.comment = src.comment;
 	info.tags = src.tags;
@@ -23,17 +23,19 @@ VirtualCatalogSchemaEntryBase::VirtualCatalogSchemaEntryBase(Catalog &catalog, S
 	// DependencyManager records the subject oid via Catalog::GetSchema (this wrapper) but verifies it at
 	// commit against the raw schema catalog set (the inner entry); the two must agree.
 	oid = target_schema_p.oid;
+	// CREATE OR REPLACE SCHEMA drops through the entry LookupSchema returns, using the set it lives in.
+	set = target_schema_p.set;
 }
 
 bool VirtualCatalogSchemaEntryBase::HasNativeEntry(CatalogTransaction transaction, CatalogType type,
                                                    const string &entry_name) {
-	EntryLookupInfo lookup(type, entry_name);
+	EntryLookupInfo lookup(type, QualifiedName(Identifier(entry_name)));
 	return target_schema.LookupEntry(transaction, lookup) != nullptr;
 }
 
 optional_ptr<CatalogEntry> VirtualCatalogSchemaEntryBase::CreateTable(CatalogTransaction transaction,
                                                                       BoundCreateTableInfo &info) {
-	if (!HasNativeEntry(transaction, CatalogType::TABLE_ENTRY, info.Base().table)) {
+	if (!HasNativeEntry(transaction, CatalogType::TABLE_ENTRY, info.Base().GetTableName().GetIdentifierName())) {
 		bool handled;
 		auto created = TryCreateExtensionTable(transaction, info, handled);
 		if (handled) {
@@ -108,7 +110,7 @@ static case_insensitive_set_t CollectNativeNames(SchemaCatalogEntry &target, opt
                                                  CatalogType type) {
 	case_insensitive_set_t out;
 	auto visit = [&](CatalogEntry &e) {
-		out.insert(e.name);
+		out.insert(e.name.GetIdentifierName());
 	};
 	if (context) {
 		target.Scan(*context, type, visit);
@@ -121,18 +123,20 @@ static case_insensitive_set_t CollectNativeNames(SchemaCatalogEntry &target, opt
 void VirtualCatalogSchemaEntryBase::DropEntry(ClientContext &context, DropInfo &info) {
 	if (info.type == CatalogType::TABLE_ENTRY || info.type == CatalogType::VIEW_ENTRY) {
 		auto transaction = CatalogTransaction(catalog, context);
-		if (!HasNativeEntry(transaction, info.type, info.name)) {
+		auto &entry_name = info.GetQualifiedName().Name().GetIdentifierName();
+		if (!HasNativeEntry(transaction, info.type, entry_name)) {
 			if (TryDropExtensionEntry(context, info)) {
 				return;
 			}
-			ThrowIfExtensionOwnedOnDrop(info.name);
+			ThrowIfExtensionOwnedOnDrop(entry_name);
 		}
 	}
 	target_schema.DropEntry(context, info);
 }
 
 void VirtualCatalogSchemaEntryBase::Alter(CatalogTransaction transaction, AlterInfo &info) {
-	if (info.type == AlterType::ALTER_TABLE && !HasNativeEntry(transaction, CatalogType::TABLE_ENTRY, info.name)) {
+	auto &entry_name = info.GetQualifiedName().Name().GetIdentifierName();
+	if (info.type == AlterType::ALTER_TABLE && !HasNativeEntry(transaction, CatalogType::TABLE_ENTRY, entry_name)) {
 		if (TryAlterExtensionEntry(transaction, info.Cast<AlterTableInfo>())) {
 			return;
 		}
@@ -144,9 +148,9 @@ void VirtualCatalogSchemaEntryBase::Alter(CatalogTransaction transaction, AlterI
 		auto &comment = info.Cast<SetCommentInfo>();
 		if (comment.entry_catalog_type == CatalogType::TABLE_ENTRY ||
 		    comment.entry_catalog_type == CatalogType::VIEW_ENTRY) {
-			EntryLookupInfo lookup(comment.entry_catalog_type, info.name);
+			EntryLookupInfo lookup(comment.entry_catalog_type, QualifiedName(Identifier(entry_name)));
 			if (!target_schema.LookupEntry(transaction, lookup)) {
-				if (auto *entry = LookupExtensionEntry(transaction, info.name)) {
+				if (auto *entry = LookupExtensionEntry(transaction, entry_name)) {
 					entry->comment = comment.comment_value;
 					return;
 				}
@@ -166,6 +170,17 @@ void VirtualCatalogSchemaEntryBase::Scan(ClientContext &context, CatalogType typ
 	ScanExtensionEntries(&context, type, seen, callback);
 }
 
+void VirtualCatalogSchemaEntryBase::Scan(CatalogTransaction transaction, CatalogType type,
+                                         const std::function<void(CatalogEntry &)> &callback) {
+	target_schema.Scan(transaction, type, callback);
+	if (type != CatalogType::TABLE_ENTRY && type != CatalogType::VIEW_ENTRY) {
+		return;
+	}
+	case_insensitive_set_t seen;
+	target_schema.Scan(transaction, type, [&](CatalogEntry &e) { seen.insert(e.name.GetIdentifierName()); });
+	ScanExtensionEntries(transaction.context, type, seen, callback);
+}
+
 void VirtualCatalogSchemaEntryBase::Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) {
 	target_schema.Scan(type, callback);
 	if (type != CatalogType::TABLE_ENTRY && type != CatalogType::VIEW_ENTRY) {
@@ -178,7 +193,7 @@ void VirtualCatalogSchemaEntryBase::Scan(CatalogType type, const std::function<v
 void VirtualCatalogSchemaEntryBase::CollectPermissions(ClientContext &context, optional_ptr<const string> table_filter,
                                                        vector<TablePermissionRow> &out) {
 	case_insensitive_set_t seen;
-	CollectNativeSchemaPermissions(context, target_schema, name, table_filter, seen, out);
+	CollectNativeSchemaPermissions(context, target_schema, name.GetIdentifierName(), table_filter, seen, out);
 	CollectExtensionPermissions(context, table_filter, seen, out);
 }
 

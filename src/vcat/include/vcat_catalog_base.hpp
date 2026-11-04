@@ -21,9 +21,15 @@ public:
 	explicit VirtualCatalogBase(AttachedDatabase &db);
 	~VirtualCatalogBase() override;
 
+	using DuckCatalog::CreateSchema;
+	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
 	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
 	                                              OnEntryNotFound if_not_found) override;
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
+	//! A wrapper stands in for one flat DuckSchemaEntry, keyed by name.
+	bool SupportsNestedSchemas() const override {
+		return false;
+	}
 
 protected:
 	//! The subclass's wrapper around `target_schema`. Called under wrappers_lock.

@@ -125,7 +125,7 @@ RawValue FromSql(const Value &value, const string &path) {
 		out.kind = RawValue::Kind::OBJECT;
 		auto &children = StructValue::GetChildren(value);
 		for (idx_t i = 0; i < children.size(); i++) {
-			auto &name = StructType::GetChildName(type, i);
+			auto &name = StructType::GetChildName(type, i).GetIdentifierName();
 			out.fields.emplace_back(name, FromSql(children[i], Child(path, name)));
 		}
 		return out;

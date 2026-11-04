@@ -97,7 +97,7 @@ struct HostStream {
 		closed = true;
 		try {
 			vector<unique_ptr<ParsedExpression>> args;
-			args.push_back(make_uniq<ConstantExpression>(Value(handle)));
+			args.push_back(ConstantExpression::FromValue(Value(handle)));
 			conn->Query(vcat::UdfCall(close_udf, std::move(args)));
 		} catch (...) { // NOLINT: a failing close must not displace the error already in flight
 		}
@@ -246,9 +246,8 @@ struct HostStreamData {
 struct StreamScanData : public ArrowScanFunctionData {
 	unique_ptr<HostStreamData> owned_stream_data;
 
-	StreamScanData(stream_factory_produce_t producer, unique_ptr<HostStreamData> stream_data)
-	    : ArrowScanFunctionData(producer, reinterpret_cast<uintptr_t>(stream_data.get())),
-	      owned_stream_data(std::move(stream_data)) {
+	StreamScanData(shared_ptr<ArrowScanFactory> factory, unique_ptr<HostStreamData> stream_data)
+	    : ArrowScanFunctionData(std::move(factory)), owned_stream_data(std::move(stream_data)) {
 		// The generator is single-pass, so a projected re-scan cannot be honoured.
 		projection_pushdown_enabled = false;
 	}
@@ -258,8 +257,7 @@ struct StreamScanData : public ArrowScanFunctionData {
 	}
 };
 
-unique_ptr<ArrowArrayStreamWrapper> TakeHostStreamOnce(uintptr_t factory_ptr, ArrowStreamParameters &) {
-	auto *stream_data = reinterpret_cast<HostStreamData *>(factory_ptr);
+unique_ptr<ArrowArrayStreamWrapper> TakeHostStreamOnce(HostStreamData *stream_data) {
 	if (stream_data->consumed) {
 		throw InvalidInputException("vcatprovider: a stream function result can only be scanned once");
 	}
@@ -267,28 +265,42 @@ unique_ptr<ArrowArrayStreamWrapper> TakeHostStreamOnce(uintptr_t factory_ptr, Ar
 	wrapper->arrow_array_stream = stream_data->stream;
 	stream_data->stream.release = nullptr;
 	stream_data->consumed = true;
-	wrapper->number_of_rows = -1;
 	return wrapper;
 }
+
+//! Owned alongside the stream data by StreamScanData; the schema is read from the stream at bind.
+struct HostStreamFactory : public ArrowScanFactory {
+	explicit HostStreamFactory(HostStreamData *stream_data_p) : stream_data(stream_data_p) {
+	}
+
+	void GetSchema(ArrowSchema &) override {
+		throw InternalException("vcatprovider: a stream function does not read its schema from the factory");
+	}
+	unique_ptr<ArrowArrayStreamWrapper> ProduceStream(ArrowStreamParameters &) override {
+		return TakeHostStreamOnce(stream_data);
+	}
+
+	HostStreamData *stream_data;
+};
 
 // Opened at bind time because the binder needs the schema, which the host declares in `open`, before
 // any row is read. This function's address is also the stream's identity, matched by
 // vcatprovider_stream_functions.
 unique_ptr<FunctionData> OpenStreamAndBindSchema(ClientContext &context, TableFunctionBindInput &input,
-                                                 vector<LogicalType> &return_types, vector<string> &names) {
+                                                 vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &info = input.info->Cast<StreamFunctionInfo>();
 
 	auto stream_data = make_uniq<HostStreamData>();
 	OpenHostStream(context, info, ArgsJsonFromValues(input.inputs), &stream_data->stream);
 
-	auto result = make_uniq<StreamScanData>(reinterpret_cast<stream_factory_produce_t>(TakeHostStreamOnce),
-	                                        std::move(stream_data));
+	shared_ptr<ArrowScanFactory> factory = make_shared_ptr<HostStreamFactory>(stream_data.get());
+	auto result = make_uniq<StreamScanData>(std::move(factory), std::move(stream_data));
 	auto *sp = result->owned_stream_data.get();
 	sp->stream.get_schema(&sp->stream, &result->schema_root.arrow_schema);
 	vcat_provider::ThrowOnMismatchedExtensionStorage(context, result->schema_root.arrow_schema,
 	                                                 "vcatprovider: stream open");
 	ArrowTableFunction::PopulateArrowTableSchema(context, result->arrow_table, result->schema_root.arrow_schema);
-	names = result->arrow_table.GetNames();
+	names = StringsToIdentifiers(result->arrow_table.GetNames());
 	return_types = result->arrow_table.GetTypes();
 	result->all_types = return_types;
 	return std::move(result);
@@ -302,9 +314,9 @@ void CreateStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector
 	auto &context = state.GetContext();
 	const auto count = args.size();
 	for (idx_t c = 0; c < args.ColumnCount(); c++) {
-		args.data[c].Flatten(count);
+		args.data[c].Flatten();
 	}
-	auto result_data = FlatVector::GetData<string_t>(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
 
 	for (idx_t i = 0; i < count; i++) {
 		const auto catalog_name = ArgString(args, 0, i);
@@ -323,22 +335,22 @@ void CreateStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector
 		}
 
 		auto stream_info = make_shared_ptr<StreamFunctionInfo>(name, open_udf, next_udf, close_udf);
-		TableFunction tf(name, {}, ArrowTableFunction::ArrowScanFunction, OpenStreamAndBindSchema,
-		                 ArrowTableFunction::ArrowScanInitGlobal, ArrowTableFunction::ArrowScanInitLocal);
-		tf.varargs = LogicalType::ANY;
+		TableFunction tf(Identifier(name), vector<LogicalType> {}, ArrowTableFunction::ArrowScanFunction,
+		                 OpenStreamAndBindSchema, ArrowTableFunction::ArrowScanInitGlobal,
+		                 ArrowTableFunction::ArrowScanInitLocal);
+		tf.GetSignature().AddArgs("args", LogicalType::ANY);
 		tf.function_info = std::move(stream_info);
 
 		CreateTableFunctionInfo create_info(std::move(tf));
-		create_info.catalog = catalog_name;
-		create_info.schema = schema_name;
-		create_info.name = name;
+		create_info.SetQualifiedName(
+		    QualifiedName(Identifier(catalog_name), Identifier(schema_name), Identifier(name)));
 		// The constructor hardcodes internal=true, which is rejected outside the system catalog.
 		// This is a user-visible entry in a user catalog.
 		create_info.internal = false;
 		// A host that reconnects re-registers; refusing would fail it on a name the first still owns.
 		create_info.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 
-		auto &catalog = Catalog::GetCatalog(context, catalog_name);
+		auto &catalog = Catalog::GetCatalog(context, Identifier(catalog_name));
 		// A SELECT is not DDL to the transaction, so the catalog set refuses the insert ("this
 		// database is not marked as modified") without the declaration a CREATE would have made.
 		MetaTransaction::Get(context).ModifyDatabase(catalog.GetAttached(),
@@ -352,20 +364,20 @@ void DropStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector &
 	auto &context = state.GetContext();
 	const auto count = args.size();
 	for (idx_t c = 0; c < args.ColumnCount(); c++) {
-		args.data[c].Flatten(count);
+		args.data[c].Flatten();
 	}
-	auto result_data = FlatVector::GetData<string_t>(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
 
 	for (idx_t i = 0; i < count; i++) {
 		DropInfo drop;
 		drop.type = CatalogType::TABLE_FUNCTION_ENTRY;
-		drop.catalog = ArgString(args, 0, i);
-		drop.schema = ArgString(args, 1, i);
-		drop.name = ArgString(args, 2, i);
+		const auto catalog_name = ArgString(args, 0, i);
+		drop.SetQualifiedName(Identifier(catalog_name), Identifier(ArgString(args, 1, i)),
+		                      Identifier(ArgString(args, 2, i)));
 		// Teardown runs on paths that may already have dropped it; absence is not an error.
 		drop.if_not_found = OnEntryNotFound::RETURN_NULL;
 
-		auto &catalog = Catalog::GetCatalog(context, drop.catalog);
+		auto &catalog = Catalog::GetCatalog(context, Identifier(catalog_name));
 		MetaTransaction::Get(context).ModifyDatabase(catalog.GetAttached(),
 		                                             DatabaseModificationType::DROP_CATALOG_ENTRY);
 		catalog.DropEntry(context, drop);
@@ -405,11 +417,12 @@ void CollectStreamFunctions(ClientContext &context, Catalog &catalog, vector<Str
 			}
 			auto &fn_entry = e.Cast<TableFunctionCatalogEntry>();
 			for (auto &fn : fn_entry.functions.functions) {
-				if (fn.bind != OpenStreamAndBindSchema || !fn.function_info) {
+				if (fn->bind != OpenStreamAndBindSchema || !fn->function_info) {
 					continue;
 				}
-				auto &info = fn.function_info->Cast<StreamFunctionInfo>();
-				out.push_back({catalog.GetName(), schema.name, e.name, info.function_name, info.open_udf, info.next_udf,
+				auto &info = fn->function_info->Cast<StreamFunctionInfo>();
+				out.push_back({catalog.GetName().GetIdentifierName(), schema.name.GetIdentifierName(),
+				               e.name.GetIdentifierName(), info.function_name, info.open_udf, info.next_udf,
 				               info.close_udf});
 			}
 		});
@@ -417,7 +430,7 @@ void CollectStreamFunctions(ClientContext &context, Catalog &catalog, vector<Str
 }
 
 unique_ptr<FunctionData> StreamFunctionsBind(ClientContext &context, TableFunctionBindInput &input,
-                                             vector<LogicalType> &return_types, vector<string> &names) {
+                                             vector<LogicalType> &return_types, vector<Identifier> &names) {
 	names = {"catalog", "schema", "entry_name", "function_name", "open_udf", "next_udf", "close_udf"};
 	return_types.assign(names.size(), LogicalType::VARCHAR);
 
@@ -438,17 +451,17 @@ void StreamFunctionsScan(ClientContext &context, TableFunctionInput &data_p, Dat
 	idx_t count = 0;
 	while (state.offset < bind_data.rows.size() && count < STANDARD_VECTOR_SIZE) {
 		auto &row = bind_data.rows[state.offset];
-		output.SetValue(0, count, Value(row.catalog));
-		output.SetValue(1, count, Value(row.schema));
-		output.SetValue(2, count, Value(row.entry_name));
-		output.SetValue(3, count, Value(row.function_name));
-		output.SetValue(4, count, Value(row.open_udf));
-		output.SetValue(5, count, Value(row.next_udf));
-		output.SetValue(6, count, Value(row.close_udf));
+		output.data[0].SetValue(count, Value(row.catalog));
+		output.data[1].SetValue(count, Value(row.schema));
+		output.data[2].SetValue(count, Value(row.entry_name));
+		output.data[3].SetValue(count, Value(row.function_name));
+		output.data[4].SetValue(count, Value(row.open_udf));
+		output.data[5].SetValue(count, Value(row.next_udf));
+		output.data[6].SetValue(count, Value(row.close_udf));
 		state.offset++;
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 } // namespace
@@ -459,12 +472,14 @@ void RegisterStreamFunctionCreators(ExtensionLoader &loader) {
 	                            LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                           LogicalType::VARCHAR, CreateStreamFunctionEntries);
 	create_func.SetVolatile();
+	create_func.SetFallible();
 	loader.RegisterFunction(create_func);
 
 	ScalarFunction drop_func("vcatprovider_drop_stream_function",
 	                         {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                         DropStreamFunctionEntries);
 	drop_func.SetVolatile();
+	drop_func.SetFallible();
 	loader.RegisterFunction(drop_func);
 
 	TableFunction list_func("vcatprovider_stream_functions", {}, StreamFunctionsScan, StreamFunctionsBind,

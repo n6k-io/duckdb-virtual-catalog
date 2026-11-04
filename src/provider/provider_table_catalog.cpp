@@ -90,7 +90,7 @@ PhysicalOperator &ProviderTableCatalog::PlanDelete(ClientContext &context, Physi
 	}
 
 	auto &bound_ref = op.expressions[0]->Cast<BoundReferenceExpression>();
-	auto row_id_index = bound_ref.index;
+	auto row_id_index = bound_ref.Index();
 
 	auto pk_buffer = AttachPKBufferToTargetScans(plan, table.table_info->primary_keys, table);
 	if (!pk_buffer) {

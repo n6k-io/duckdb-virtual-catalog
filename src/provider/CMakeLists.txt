@@ -9,7 +9,7 @@ project(${TARGET_NAME})
 
 # See src/bridge/CMakeLists.txt for why the standard is pinned here rather than
 # after the targets are created.
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Normalised: an unresolved `src/provider/../..` leaves `src/` in third_party

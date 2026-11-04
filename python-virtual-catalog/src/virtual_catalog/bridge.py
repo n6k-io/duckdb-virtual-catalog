@@ -61,7 +61,7 @@ def bridge(
 
     cfg = {"allow_unsigned_extensions": "true"}
     source = duckdb.connect(config=cfg)
-    source.sql("CREATE TABLE users(id INTEGER PRIMARY KEY, name VARCHAR, tenant_id INTEGER)")
+    source.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, name VARCHAR, tenant_id INTEGER)")
 
     target = duckdb.connect(config=cfg)
     bridge(source, target, "app", source_catalog="memory", policies=[
@@ -71,7 +71,7 @@ def bridge(
         Policy("main.users", "delete", True),
     ])
 
-    target.sql("SELECT * FROM app.main.users")
+    target.execute("SELECT * FROM app.main.users")
     ```
 
     Restricted to one tenant:
@@ -105,25 +105,25 @@ def bridge(
     if lock is not None:
         lock.acquire()
     try:
-        token_result = source.sql(
+        token_rows = source.execute(
             "SELECT vcatbridge_register_source($1, $2)",
-            params=[bridge_id, source_catalog],
-        ).fetchone()
-        if token_result is None:
+            parameters=[bridge_id, source_catalog],
+        ).fetchall()
+        if not token_rows:
             raise RuntimeError("vcatbridge_register_source returned no result")
-        token = token_result[0]
+        token = token_rows[0][0]
         for key, value in (context or {}).items():
-            source.sql(
+            source.execute(
                 "SELECT vcatbridge_set_context($1, $2, $3)",
-                params=[bridge_id, key, value],
-            ).fetchone()
+                parameters=[bridge_id, key, value],
+            ).fetchall()
         if context:
-            source.sql("SELECT vcatbridge_finalize_context($1)", params=[bridge_id]).fetchone()
+            source.execute("SELECT vcatbridge_finalize_context($1)", parameters=[bridge_id]).fetchall()
         for policy in policies:
-            source.sql(
+            source.execute(
                 "SELECT vcatbridge_set_policy($1, $2, $3, $4)",
-                params=[bridge_id, policy.table, policy.setting, policy.value],
-            ).fetchone()
+                parameters=[bridge_id, policy.table, policy.setting, policy.value],
+            ).fetchall()
     finally:
         if lock is not None:
             lock.release()

@@ -22,7 +22,7 @@ namespace vcat {
 //! PreparedStatement::Execute(vector<Value> &) derives the key from a value's position in the vector.
 inline unique_ptr<ParsedExpression> Param(idx_t index) {
 	auto param = make_uniq<ParameterExpression>();
-	param->identifier = to_string(index);
+	param->IdentifierMutable() = Identifier(to_string(index));
 	return std::move(param);
 }
 
@@ -31,14 +31,14 @@ inline unique_ptr<ParsedExpression> Param(idx_t index) {
 //! then asserts its size against the bound parameter count.
 inline void SetParamCount(SQLStatement &stmt, idx_t count) {
 	for (idx_t i = 1; i <= count; i++) {
-		stmt.named_param_map[to_string(i)] = i;
+		stmt.named_param_map[Identifier(to_string(i))] = i;
 	}
 }
 
 //! `SELECT udf(<args>)`.
 inline unique_ptr<SQLStatement> UdfCall(const string &udf_name, vector<unique_ptr<ParsedExpression>> args) {
 	auto node = make_uniq<SelectNode>();
-	node->select_list.push_back(make_uniq<FunctionExpression>(udf_name, std::move(args)));
+	node->select_list.push_back(make_uniq<FunctionExpression>(Identifier(udf_name), std::move(args)));
 	// Binder::BindNode dereferences from_table unconditionally; the parser puts this here too.
 	node->from_table = make_uniq<EmptyTableRef>();
 	auto stmt = make_uniq<SelectStatement>();
@@ -62,7 +62,7 @@ inline unique_ptr<SQLStatement> UdfCallWithParams(const string &udf_name, idx_t 
 inline unique_ptr<SQLStatement> UdfCallWithConstants(const string &udf_name, const vector<Value> &args) {
 	vector<unique_ptr<ParsedExpression>> children;
 	for (auto &value : args) {
-		children.push_back(make_uniq<ConstantExpression>(value));
+		children.push_back(ConstantExpression::FromValue(value));
 	}
 	return UdfCall(udf_name, std::move(children));
 }

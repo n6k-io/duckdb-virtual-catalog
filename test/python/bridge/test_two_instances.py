@@ -36,7 +36,7 @@ def test_pushdown_across_instances(source, target):
     ).fetchall() == [(7, 550), (9, 250)]
 
     plan = target.execute("EXPLAIN SELECT tenant, sum(amt) FROM app.main.orders GROUP BY tenant").fetchall()
-    assert "AGGREGATE" in plan[0][1]
+    assert "Aggregate" in plan[0][1]
 
 
 def test_policy_across_instances(source, target):
