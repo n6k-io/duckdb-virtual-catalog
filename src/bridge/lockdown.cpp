@@ -7,6 +7,7 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
@@ -118,6 +119,10 @@ void LockdownFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 		throw PermissionException("vcatbridge_lockdown: the configuration is already locked");
 	}
 	ThrowUnlessFiniteMemoryLimit(memory_limit.ToString());
+	// Throws if the secret manager is already initialized, so it precedes the steps that cannot be undone.
+	if (SecretManager::Get(db).PersistentSecretsEnabled()) {
+		SetGlobal(db, "allow_persistent_secrets", Value::BOOLEAN(false));
+	}
 	if (args.ColumnCount() > 2) {
 		DropSystemFunctions(db, args.data[2].GetValue(0));
 	}
@@ -129,7 +134,6 @@ void LockdownFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	SetGlobal(db, "autoload_known_extensions", Value::BOOLEAN(false));
 	SetGlobal(db, "autoinstall_known_extensions", Value::BOOLEAN(false));
 	SetGlobal(db, "allow_community_extensions", Value::BOOLEAN(false));
-	SetGlobal(db, "allow_persistent_secrets", Value::BOOLEAN(false));
 	SetGlobal(db, "disabled_filesystems", Value("LocalFileSystem"));
 	SetGlobal(db, "enable_external_access", Value::BOOLEAN(false));
 	SetGlobal(db, "lock_configuration", Value::BOOLEAN(true));

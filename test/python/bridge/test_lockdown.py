@@ -159,3 +159,19 @@ def test_transaction_is_refused(target):
     target.execute("ROLLBACK")
     assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
     assert target.execute("SELECT md5('x')").fetchone() == ("9dd4e461268c8034f5c8564e155c67a6",)
+
+
+def test_persistent_secrets_disabled_before_secret_manager_use(target):
+    target.execute("SET allow_persistent_secrets = false")
+    target.execute("SELECT * FROM duckdb_secrets()")
+    lockdown(target)
+    assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (True,)
+
+
+def test_persistent_secrets_enabled_after_secret_manager_use_is_refused(target):
+    target.execute("SELECT * FROM duckdb_secrets()")
+    with pytest.raises(duckdb.InvalidInputException, match="Secret Manager settings"):
+        target.execute("SELECT vcatbridge_lockdown('512MB', 2, ['md5'])")
+    assert target.execute("SELECT current_setting('lock_configuration')").fetchone() == (False,)
+    assert target.execute("SELECT md5('x')").fetchone() == ("9dd4e461268c8034f5c8564e155c67a6",)
+    assert target.execute("SELECT current_setting('temp_directory')").fetchone() != ("",)
