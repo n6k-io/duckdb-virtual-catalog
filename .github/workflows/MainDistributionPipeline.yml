@@ -23,7 +23,7 @@ jobs:
       extension_name: virtual_catalog
       # coi-only: build wasm_threads, never eh/mvp (they can't load a shared-memory
       # extension). On PRs also drop the non-amd64 native arches for speed.
-      exclude_archs: ${{ github.ref != 'refs/heads/main' && 'linux_arm64;osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh' || 'wasm_mvp;wasm_eh' }}
+      exclude_archs: ${{ github.ref != 'refs/heads/main' && 'linux_arm64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh' || 'wasm_mvp;wasm_eh' }}
       opt_in_archs: 'linux_amd64_musl'
       upload_all_extensions: true
 
@@ -35,13 +35,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
+      - run: |
           head="$(tr -d '[:space:]' < VERSION)"
-          base="$(git show "origin/$BASE_REF:VERSION" 2>/dev/null | tr -d '[:space:]')"
+          base="$(git tag --list 'duckdb/v[0-9]*' --sort=-v:refname | head -1)"
+          base="${base#duckdb/v}"
           base="${base:-0.0.0}"
-          echo "base=$base head=$head"
+          echo "latest release=$base head=$head"
           if [[ ! "$head" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::VERSION '$head' is not <major>.<minor>.<patch>"
             exit 1
@@ -133,7 +132,6 @@ jobs:
           - linux_amd64
           - linux_arm64
           - linux_amd64_musl
-          - osx_amd64
           - osx_arm64
           - windows_amd64
           - windows_amd64_mingw
