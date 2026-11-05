@@ -121,8 +121,8 @@ instances. The catalog then holds a reference to the **source**
 `DatabaseInstance`, so until the detach it is never released. When both are one
 instance the catalog holds none, and closing the instance is enough.
 Everything the catalog held goes with it, including any native entries created
-alongside the bridged ones. A source registered but never attached holds its
-instance until a later bridge call expires it.
+alongside the bridged ones. A source registered but never attached does not
+hold its instance: closing it frees the instance, and a later `ATTACH` with that token is refused.
 
 Every refusal during `ATTACH` — a missing option, a bad token, a grant set that
 does not hold together — is raised before the pending source is taken, so the

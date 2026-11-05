@@ -46,6 +46,6 @@ dev = [
 [tool.black]
 # format.py treats any stderr from black as a failure, and black otherwise warns that the running
 # CPython is older than its default target.
-target-version = ["py314"]
+target-version = ["py313"]
 skip-string-normalization = true
 line-length = 120

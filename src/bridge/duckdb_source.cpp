@@ -66,7 +66,8 @@ namespace duckdb {
 namespace {
 
 struct PendingSource {
-	shared_ptr<DatabaseInstance> source_db;
+	//! Weak: a registration nothing attached to must not keep a closed source's instance and its threads alive.
+	weak_ptr<DatabaseInstance> source_db;
 	string token;
 	SourcePin source;
 	std::chrono::steady_clock::time_point last_touched;
@@ -76,13 +77,6 @@ struct PendingSource {
 	shared_ptr<BridgeContext> context = make_shared_ptr<BridgeContext>();
 	bool policy_finalized = false;
 	idx_t token_failures = 0;
-
-	//! MSVC's unordered_map move is not noexcept, so without these vector<PendingSource> falls back to copying.
-	PendingSource() = default;
-	PendingSource(const PendingSource &) = delete;
-	PendingSource &operator=(const PendingSource &) = delete;
-	PendingSource(PendingSource &&) = default;
-	PendingSource &operator=(PendingSource &&) = default;
 };
 
 struct LiveBridge {
@@ -128,14 +122,21 @@ unordered_map<string, LiveBridge> &LiveBridges() {
 	return *live;
 }
 
-//! An erased PendingSource may hold the last reference to a DatabaseInstance whose ~DuckDBSource takes
-//! PendingMutex, so erased entries park in `dropped`, declared before `guard` so it is destroyed after the unlock.
+//! A reference locked from a pending entry may be the last one to a DatabaseInstance whose ~DuckDBSource takes
+//! PendingMutex, so it parks in `held`, declared before `guard` so it is destroyed after the unlock.
 struct PendingLock {
-	vector<PendingSource> dropped;
+	vector<shared_ptr<DatabaseInstance>> held;
 	lock_guard<mutex> guard {PendingMutex()};
 
+	shared_ptr<DatabaseInstance> Pin(const PendingSource &pending) {
+		auto db = pending.source_db.lock();
+		if (db) {
+			held.push_back(db);
+		}
+		return db;
+	}
+
 	void Drop(unordered_map<string, PendingSource>::iterator it) {
-		dropped.push_back(std::move(it->second));
 		PendingSources().erase(it);
 	}
 };
@@ -163,21 +164,21 @@ void PurgeExpiredPendingSources(PendingLock &lock) {
 	for (auto it = pending.begin(); it != pending.end();) {
 		auto idle = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.last_touched).count();
 		auto next = std::next(it);
-		if (idle > PENDING_SOURCE_TTL_SECONDS) {
+		if (idle > PENDING_SOURCE_TTL_SECONDS || it->second.source_db.expired()) {
 			lock.Drop(it);
 		}
 		it = next;
 	}
 }
 
-PendingSource &LookupPendingForGrant(const string &bridge_id, ClientContext &context) {
+PendingSource &LookupPendingForGrant(PendingLock &lock, const string &bridge_id, ClientContext &context) {
 	auto it = PendingSources().find(bridge_id);
 	if (it == PendingSources().end()) {
 		throw PermissionException("vcatbridge: no registered source for bridge '%s'. "
 		                          "Call vcatbridge_register_source on the source connection first.",
 		                          bridge_id);
 	}
-	if (it->second.source_db.get() != context.db.get()) {
+	if (lock.Pin(it->second).get() != context.db.get()) {
 		throw PermissionException("vcatbridge: bridge '%s' was registered by a different source connection", bridge_id);
 	}
 	it->second.last_touched = std::chrono::steady_clock::now();
@@ -218,8 +219,8 @@ GrantTarget LookupGrantTarget(PendingLock &lock, const string &bridge_id, Client
 	GrantTarget target;
 	PurgeExpiredPendingSources(lock);
 	if (PendingSources().count(bridge_id)) {
-		auto &pending = LookupPendingForGrant(bridge_id, context);
-		target.source_db = pending.source_db;
+		auto &pending = LookupPendingForGrant(lock, bridge_id, context);
+		target.source_db = lock.Pin(pending);
 		target.source = pending.source;
 		target.context = pending.context;
 		target.pending = &pending;
@@ -569,7 +570,8 @@ unique_ptr<ParsedExpression> And(unique_ptr<ParsedExpression> left, unique_ptr<P
 //! `SELECT <columns> FROM catalog.schema.table WHERE <using>`, one without binds to the table.
 CrossingFloorResolver PolicyResolver(const shared_ptr<GrantBook> &grants, const string &source_catalog) {
 	auto values = ContextSnapshot(*grants->context);
-	return [grants, source_catalog, values](const CrossingFloor &floor) -> unique_ptr<TableRef> {
+	return [grants, source_catalog = string(source_catalog),
+	        values](const CrossingFloor &floor) -> unique_ptr<TableRef> {
 		if (!Grants(*grants, floor.schema, floor.table, CrossingVerb::SELECT)) {
 			throw PermissionException("vcatbridge: '%s.%s' does not have 'select' permission", floor.schema,
 			                          floor.table);
@@ -604,7 +606,7 @@ CrossingWriteShaper PolicyShaper(const shared_ptr<GrantBook> &grants, const Cros
 	if (reads_rows && !Grants(*grants, target.schema, target.table, CrossingVerb::SELECT)) {
 		throw PermissionException("vcatbridge: '%s.%s' does not have 'select' permission", target.schema, target.table);
 	}
-	return [grants, target, values, reads_rows](CrossingWriteStatement &built) {
+	return [grants, target = CrossingWriteTarget(target), values, reads_rows](CrossingWriteStatement &built) {
 		auto using_predicate = UsingFor(*grants, target.schema, target.table, target.verb);
 		auto check = CheckFor(*grants, target.schema, target.table, target.verb);
 		if (reads_rows) {
@@ -841,8 +843,7 @@ vector<string> RunKeyQuery(ClientContext &context, const string &query, const st
 	while (true) {
 		auto chunk = key_result.Fetch();
 		if (key_result.HasError()) {
-			ErrorData error = key_result.GetErrorObject();
-			error.Throw("vcatbridge: columns_from_query for '" + qualified + "' failed: ");
+			key_result.GetErrorObject().Throw("vcatbridge: columns_from_query for '" + qualified + "' failed: ");
 		}
 		if (!chunk || chunk->size() == 0) {
 			break;
@@ -873,8 +874,7 @@ void RunVerifyUnique(ClientContext &context, const string &query, const string &
 	QueryResultStream<ChunkFormat> check_result(std::move(submitted));
 	auto chunk = check_result.Fetch();
 	if (check_result.HasError()) {
-		ErrorData error = check_result.GetErrorObject();
-		error.Throw("vcatbridge: verify_unique for '" + qualified + "' failed: ");
+		check_result.GetErrorObject().Throw("vcatbridge: verify_unique for '" + qualified + "' failed: ");
 	}
 	if (chunk && chunk->size() > 0) {
 		throw ConstraintException("vcatbridge: verify_unique for '%s' returned rows; the key is not "
@@ -1413,7 +1413,7 @@ ContextTarget LookupContext(PendingLock &lock, const string &bridge_id, ClientCo
 	ContextTarget target;
 	PurgeExpiredPendingSources(lock);
 	if (PendingSources().count(bridge_id)) {
-		auto &pending = LookupPendingForGrant(bridge_id, context);
+		auto &pending = LookupPendingForGrant(lock, bridge_id, context);
 		target.context = pending.context;
 		target.source = pending.source;
 		if (!name.empty()) {
@@ -1620,8 +1620,12 @@ unique_ptr<DuckDBSource> RedeemBridge(const string &bridge_id, const string &tok
 			throw PermissionException("vcatbridge: bridge '%s' is already attached", bridge_id);
 		}
 		ValidateGrantSet(it->second.schemas, it->second.create_schemas, bridge_id, true);
-		ThrowUnlessSettingsMatch(*it->second.source_db, target_db, bridge_id);
-		source_db = it->second.source_db;
+		source_db = lock.Pin(it->second);
+		if (!source_db) {
+			lock.Drop(it);
+			throw PermissionException("vcatbridge: no registered source for bridge '%s'", bridge_id);
+		}
+		ThrowUnlessSettingsMatch(*source_db, target_db, bridge_id);
 		source = it->second.source;
 		grants->tables = std::move(it->second.schemas);
 		grants->create_schemas = std::move(it->second.create_schemas);
@@ -2339,8 +2343,7 @@ CrossingScan StreamScanOf(const shared_ptr<Connection> &conn, unique_ptr<QueryRe
 		return [conn, stream](ClientContext &, DataChunk &chunk, const CrossingWaker &) {
 			auto raw = stream->Fetch();
 			if (stream->HasError()) {
-				ErrorData error = stream->GetErrorObject();
-				error.Throw("vcatbridge: source query failed: ");
+				stream->GetErrorObject().Throw("vcatbridge: source query failed: ");
 			}
 			if (!raw || raw->size() == 0) {
 				return CrossingReadResult::Done();

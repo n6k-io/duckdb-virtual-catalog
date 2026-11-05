@@ -27,7 +27,10 @@ BridgeCatalog::BridgeCatalog(AttachedDatabase &db, unique_ptr<DuckDBSource> sour
 }
 
 BridgeCatalog::~BridgeCatalog() {
-	attach.Source<DuckDBSource>().SetTarget(nullptr);
+	try {
+		attach.Source<DuckDBSource>().SetTarget(nullptr);
+	} catch (...) { // NOLINT: nothing can be reported from a destructor
+	}
 }
 
 string BridgeCatalog::GetCatalogType() {
