@@ -393,12 +393,13 @@ def test_rowid_beside_a_column_is_refused(con, provider):
         con.execute("SELECT rowid, name FROM app.main.users").fetchall()
 
 
-def test_a_provider_scan_inside_a_recursive_cte_is_refused(con, provider):
-    with pytest.raises(duckdb.InvalidInputException, match="cannot be restarted"):
-        con.execute(
-            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL "
-            "SELECT n + 1 FROM r, app.main.users u WHERE u.id = 1 AND n < 3) SELECT * FROM r"
-        ).fetchall()
+def test_a_provider_scan_inside_a_recursive_cte_is_read_once(con, provider):
+    rows = con.execute(
+        "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL "
+        "SELECT x + 1 FROM r, app.main.users u WHERE u.id = 1 AND x < 3) SELECT * FROM r ORDER BY x"
+    ).fetchall()
+    assert rows == [(1,), (2,), (3,)]
+    assert sum(call[0] == "scan" for call in provider.calls) == 1
 
 
 def _registered_in_own_database(users):

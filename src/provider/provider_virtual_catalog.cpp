@@ -221,11 +221,11 @@ void VirtualCatalogProvider::EnsureProviderSchemas(CatalogTransaction caller) {
 	auto transaction = CatalogTransaction::GetSystemTransaction(GetAttached().GetDatabase());
 	auto &schema_set = GetSchemaCatalogSet();
 	for (auto &schema : schemas) {
-		if (schema_set.GetEntry(caller, schema)) {
+		if (schema_set.GetEntry(caller, Identifier(schema))) {
 			continue;
 		}
 		CreateSchemaInfo info;
-		info.schema = schema;
+		info.SetQualifiedName(QualifiedName(GetName(), Identifier(schema), Identifier()));
 		info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
 		try {
 			CreateSchema(transaction, info);
@@ -278,7 +278,7 @@ void VirtualCatalogProviderSchemaEntry::RetireProviderCache() {
 }
 
 VirtualCatalogProvider::ProviderTables VirtualCatalogProviderSchemaEntry::RefreshedTables() {
-	auto tables = provider_catalog.TablesForSchema(name);
+	auto tables = provider_catalog.TablesForSchema(name.GetIdentifierName());
 	if (tables.epoch != cached_epoch) {
 		RetireProviderCache();
 		cached_epoch = tables.epoch;
@@ -321,9 +321,9 @@ VirtualCatalogProviderSchemaEntry::GetOrQueryProviderEntry(const VirtualCatalogP
 	table_info->primary_keys = std::move(decoded.primary_keys);
 	table_info->provider = tables.provider;
 
-	auto create_info = make_uniq<CreateTableInfo>(*this, entry_name);
+	auto create_info = make_uniq<CreateTableInfo>(*this, Identifier(entry_name));
 	for (idx_t c = 0; c < column_names.size(); c++) {
-		create_info->columns.AddColumn(ColumnDefinition(column_names[c], column_types[c]));
+		create_info->columns.AddColumn(ColumnDefinition(Identifier(column_names[c]), column_types[c]));
 	}
 	auto entry = make_uniq<ProviderTableCatalogEntry>(*info.phantom_catalog, *this, *create_info, table_info);
 	auto *raw = entry.get();
@@ -396,13 +396,14 @@ void VirtualCatalogProviderSchemaEntry::ThrowIfExtensionOwnedOnDrop(const string
 bool VirtualCatalogProviderSchemaEntry::TryAlterExtensionEntry(CatalogTransaction /*transaction*/,
                                                                AlterTableInfo &alter) {
 	shared_ptr<ProviderInfo> owning;
-	if (!TryGetProviderForTable(alter.name, owning)) {
+	auto &table_name = alter.GetQualifiedName().Name().GetIdentifierName();
+	if (!TryGetProviderForTable(table_name, owning)) {
 		return false;
 	}
 
 	// Empty alter_udf means the provider did not implement alter(); not editable.
 	if (owning->alter_udf.empty()) {
-		throw PermissionException("Provider table '%s' does not support ALTER", alter.name);
+		throw PermissionException("Provider table '%s' does not support ALTER", table_name);
 	}
 
 	string kind;
@@ -442,14 +443,14 @@ bool VirtualCatalogProviderSchemaEntry::TryAlterExtensionEntry(CatalogTransactio
 
 	Connection udf_conn(*owning->Database());
 	auto udf_result = udf_conn.Query(vcat::UdfCallWithConstants(
-	    owning->alter_udf, {Value(QualifiedName(alter.name)), Value(kind), Value(details_json)}));
+	    owning->alter_udf, {Value(QualifiedName(table_name)), Value(kind), Value(details_json)}));
 	if (udf_result->HasError()) {
 		udf_result->GetErrorObject().Throw("vcatprovider: alter UDF failed: ");
 	}
 
 	// Evict only this table's cached entry; retire (don't free) it since a concurrent scan may hold its pointer.
 	lock_guard<mutex> lock(provider_lock);
-	auto it = provider_cache.find(alter.name);
+	auto it = provider_cache.find(table_name);
 	if (it != provider_cache.end()) {
 		if (it->second) {
 			retired_provider_entries.push_back(std::move(it->second));
@@ -493,7 +494,7 @@ void VirtualCatalogProviderSchemaEntry::CollectExtensionPermissions(ClientContex
 		if (entry) {
 			pk = entry->Cast<ProviderTableCatalogEntry>().table_info->primary_keys;
 		}
-		out.push_back({name, n, "provider", std::move(pk), provider_verbs});
+		out.push_back({name.GetIdentifierName(), n, "provider", std::move(pk), provider_verbs});
 	}
 }
 

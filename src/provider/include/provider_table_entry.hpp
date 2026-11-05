@@ -15,9 +15,15 @@ public:
 	shared_ptr<ProviderTableInfo> table_info;
 
 public:
+	const ColumnList &GetColumns() const override {
+		return columns;
+	}
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
 	TableStorageInfo GetStorageInfo(ClientContext &context) override;
+
+private:
+	ColumnList columns;
 };
 
 } // namespace duckdb

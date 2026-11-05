@@ -21,9 +21,13 @@ static vector<string> NativeTablePrimaryKey(TableCatalogEntry &table) {
 			continue;
 		}
 		if (unique.HasIndex()) {
-			return {table.GetColumn(unique.GetIndex()).GetName()};
+			return {table.GetColumn(unique.GetIndex()).GetName().GetIdentifierName()};
 		}
-		return unique.GetColumnNames();
+		vector<string> names;
+		for (auto &column : unique.GetColumnNames()) {
+			names.push_back(column.GetIdentifierName());
+		}
+		return names;
 	}
 	return {};
 }
@@ -37,16 +41,17 @@ void CollectNativeSchemaPermissions(ClientContext &context, SchemaCatalogEntry &
 	// Tables and views share one catalog set, so classify on actual type and dedup via `seen`.
 	auto scan_type = [&](CatalogType type) {
 		schema.Scan(context, type, [&](CatalogEntry &e) {
-			if (!matches(e.name) || seen.count(e.name)) {
+			auto &entry_name = e.name.GetIdentifierName();
+			if (!matches(entry_name) || seen.count(entry_name)) {
 				return;
 			}
 			if (e.type == CatalogType::VIEW_ENTRY) {
-				seen.insert(e.name);
-				out.push_back({schema_name, e.name, "native_view", {}, {"select"}});
+				seen.insert(entry_name);
+				out.push_back({schema_name, entry_name, "native_view", {}, {"select"}});
 			} else if (e.type == CatalogType::TABLE_ENTRY) {
-				seen.insert(e.name);
+				seen.insert(entry_name);
 				out.push_back({schema_name,
-				               e.name,
+				               entry_name,
 				               "native_table",
 				               NativeTablePrimaryKey(e.Cast<TableCatalogEntry>()),
 				               {"select", "insert", "update", "delete", "alter"}});
@@ -64,7 +69,7 @@ static void CollectCatalogPermissionsHonoringReadOnlyAttach(ClientContext &conte
 	// Two-pass: gather schema refs under the catalog's schema lock, then scan each after it releases.
 	vector<reference<SchemaCatalogEntry>> schemas;
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &s) {
-		if (schema_filter && !StringUtil::CIEquals(s.name, *schema_filter)) {
+		if (schema_filter && !StringUtil::CIEquals(s.name.GetIdentifierName(), *schema_filter)) {
 			return;
 		}
 		schemas.push_back(s);
@@ -73,7 +78,7 @@ static void CollectCatalogPermissionsHonoringReadOnlyAttach(ClientContext &conte
 	for (auto &sref : schemas) {
 		auto &s = sref.get();
 		case_insensitive_set_t seen;
-		CollectNativeSchemaPermissions(context, s, s.name, table_filter, seen, out);
+		CollectNativeSchemaPermissions(context, s, s.name.GetIdentifierName(), table_filter, seen, out);
 	}
 	// A READ_ONLY attach makes every table unwritable whatever its own type says. Narrowed here so a
 	// client sees it in the reported verbs rather than only when its write is rejected.
@@ -100,7 +105,7 @@ PermissionsArgs ParsePermissionsArgs(TableFunctionBindInput &input) {
 	return args;
 }
 
-static void SetTablePermissionsReturnSchema(vector<LogicalType> &return_types, vector<string> &names) {
+static void SetTablePermissionsReturnSchema(vector<LogicalType> &return_types, vector<Identifier> &names) {
 	names = {"schema", "name", "kind", "primary_key", "verbs"};
 	return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
 	                LogicalType::LIST(LogicalType::VARCHAR), LogicalType::LIST(LogicalType::VARCHAR)};
@@ -127,23 +132,23 @@ static void TablePermissionsScan(ClientContext &context, TableFunctionInput &dat
 	idx_t count = 0;
 	while (state.offset < bind_data.rows.size() && count < STANDARD_VECTOR_SIZE) {
 		auto &row = bind_data.rows[state.offset];
-		output.SetValue(0, count, Value(row.schema));
-		output.SetValue(1, count, Value(row.name));
-		output.SetValue(2, count, Value(row.kind));
+		output.data[0].SetValue(count, Value(row.schema));
+		output.data[1].SetValue(count, Value(row.name));
+		output.data[2].SetValue(count, Value(row.kind));
 		vector<Value> pk_vals;
 		for (auto &col : row.primary_key) {
 			pk_vals.push_back(Value(col));
 		}
-		output.SetValue(3, count, Value::LIST(LogicalType::VARCHAR, std::move(pk_vals)));
+		output.data[3].SetValue(count, Value::LIST(LogicalType::VARCHAR, std::move(pk_vals)));
 		vector<Value> verb_vals;
 		for (auto &verb : row.verbs) {
 			verb_vals.push_back(Value(verb));
 		}
-		output.SetValue(4, count, Value::LIST(LogicalType::VARCHAR, std::move(verb_vals)));
+		output.data[4].SetValue(count, Value::LIST(LogicalType::VARCHAR, std::move(verb_vals)));
 		state.offset++;
 		count++;
 	}
-	output.SetCardinality(count);
+	output.SetChildCardinality(count);
 }
 
 // True when every schema this catalog hands out is one of *this binary's* wrappers. Asked per
@@ -156,7 +161,7 @@ static bool TryCollectPermissionsThroughSchemaWrappers(ClientContext &context, C
 	vector<reference<VirtualCatalogSchemaEntryBase>> wrappers;
 	bool all_wrapped = true;
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &s) {
-		if (schema_filter && !StringUtil::CIEquals(s.name, *schema_filter)) {
+		if (schema_filter && !StringUtil::CIEquals(s.name.GetIdentifierName(), *schema_filter)) {
 			return;
 		}
 		auto *wrapper = dynamic_cast<VirtualCatalogSchemaEntryBase *>(&s);
@@ -186,11 +191,11 @@ void CollectCatalogPermissions(ClientContext &context, Catalog &catalog, optiona
 }
 
 static unique_ptr<FunctionData> TablePermissionsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                     vector<LogicalType> &return_types, vector<string> &names) {
+                                                     vector<LogicalType> &return_types, vector<Identifier> &names) {
 	SetTablePermissionsReturnSchema(return_types, names);
 
 	auto args = ParsePermissionsArgs(input);
-	auto &catalog = Catalog::GetCatalog(context, args.catalog);
+	auto &catalog = Catalog::GetCatalog(context, Identifier(args.catalog));
 	auto result = make_uniq<TablePermissionsBindData>();
 	optional_ptr<const string> table_arg = args.has_table ? optional_ptr<const string>(&args.table) : nullptr;
 	optional_ptr<const string> schema_arg = args.has_schema ? optional_ptr<const string>(&args.schema) : nullptr;
@@ -199,10 +204,10 @@ static unique_ptr<FunctionData> TablePermissionsBind(ClientContext &context, Tab
 }
 
 void RegisterTablePermissionsFunction(ExtensionLoader &loader, const string &function_name) {
-	TableFunction func(function_name, {LogicalType::VARCHAR}, TablePermissionsScan, TablePermissionsBind,
+	TableFunction func(Identifier(function_name), {LogicalType::VARCHAR}, TablePermissionsScan, TablePermissionsBind,
 	                   TablePermissionsInitGlobal);
-	func.named_parameters["schema"] = LogicalType::VARCHAR;
-	func.named_parameters["table"] = LogicalType::VARCHAR;
+	func.GetSignature().AddKeywordOnly("schema", LogicalType::VARCHAR, Value(LogicalType::VARCHAR));
+	func.GetSignature().AddKeywordOnly("table", LogicalType::VARCHAR, Value(LogicalType::VARCHAR));
 	loader.RegisterFunction(std::move(func));
 }
 

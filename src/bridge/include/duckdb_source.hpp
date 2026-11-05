@@ -189,7 +189,7 @@ private:
 	shared_ptr<DatabaseInstance> Database() const;
 
 	//! Looks the function up where the source's plan deserializer will.
-	bool SourceHasFunction(const Function &function, CatalogType type);
+	bool SourceHasFunction(const BoundSimpleFunction &function, CatalogType type);
 
 	string bridge_id;
 	weak_ptr<DatabaseInstance> source_db;

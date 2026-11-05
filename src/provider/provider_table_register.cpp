@@ -10,7 +10,7 @@
 namespace duckdb {
 
 static VirtualCatalogProvider &LookupProviderCatalogOrThrow(ClientContext &context, const string &catalog_name) {
-	auto catalog_entry = Catalog::GetCatalogEntry(context, catalog_name);
+	auto catalog_entry = Catalog::GetCatalogEntry(context, Identifier(catalog_name));
 	if (!catalog_entry) {
 		throw CatalogException("vcatprovider: target catalog '%s' does not exist", catalog_name);
 	}
@@ -27,7 +27,7 @@ static void AttachProviderToCatalogAndRegister(DataChunk &args, ExpressionState 
 	auto &context = state.GetContext();
 	auto count = args.size();
 	for (idx_t c = 0; c < args.ColumnCount(); c++) {
-		args.data[c].Flatten(count);
+		args.data[c].Flatten();
 	}
 
 	auto catalogs = FlatVector::GetData<string_t>(args.data[0]);
@@ -39,7 +39,7 @@ static void AttachProviderToCatalogAndRegister(DataChunk &args, ExpressionState 
 	auto delete_udfs = FlatVector::GetData<string_t>(args.data[6]);
 	auto alter_udfs = FlatVector::GetData<string_t>(args.data[7]);
 
-	auto result_data = FlatVector::GetData<string_t>(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
 
 	for (idx_t i = 0; i < count; i++) {
 		auto target_catalog_name = catalogs[i].GetString();
@@ -70,10 +70,10 @@ static void AttachProviderToCatalogAndRegister(DataChunk &args, ExpressionState 
 static void DetachProviderFromCatalogAndUnregister(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &context = state.GetContext();
 	auto count = args.size();
-	args.data[0].Flatten(count);
+	args.data[0].Flatten();
 
 	auto catalogs = FlatVector::GetData<string_t>(args.data[0]);
-	auto result_data = FlatVector::GetData<string_t>(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
 
 	for (idx_t i = 0; i < count; i++) {
 		auto target_catalog_name = catalogs[i].GetString();
@@ -89,10 +89,10 @@ static void DetachProviderFromCatalogAndUnregister(DataChunk &args, ExpressionSt
 static void BumpProviderVersionOrThrow(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &context = state.GetContext();
 	auto count = args.size();
-	args.data[0].Flatten(count);
+	args.data[0].Flatten();
 
 	auto catalogs = FlatVector::GetData<string_t>(args.data[0]);
-	auto result_data = FlatVector::GetData<string_t>(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
 
 	for (idx_t i = 0; i < count; i++) {
 		auto catalog = catalogs[i].GetString();
@@ -112,16 +112,19 @@ void RegisterProviderFunctions(ExtensionLoader &loader) {
 	                              LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                             LogicalType::VARCHAR, AttachProviderToCatalogAndRegister);
 	register_func.SetVolatile();
+	register_func.SetFallible();
 	loader.RegisterFunction(register_func);
 
 	ScalarFunction invalidate_func("vcatprovider_invalidate_tables", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                               BumpProviderVersionOrThrow);
 	invalidate_func.SetVolatile();
+	invalidate_func.SetFallible();
 	loader.RegisterFunction(invalidate_func);
 
 	ScalarFunction unregister_func("vcatprovider_unregister", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                               DetachProviderFromCatalogAndUnregister);
 	unregister_func.SetVolatile();
+	unregister_func.SetFallible();
 	loader.RegisterFunction(unregister_func);
 }
 

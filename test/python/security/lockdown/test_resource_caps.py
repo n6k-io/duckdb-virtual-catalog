@@ -14,7 +14,7 @@ import pytest
 
 from conftest import REPO_ROOT
 
-pytestmark = pytest.mark.xfail(
+KNOWN_L3 = pytest.mark.xfail(
     strict=True, reason="Known issue L3: memory_limit covers only buffer-managed memory, and there is no query timeout"
 )
 
@@ -83,6 +83,8 @@ UNMANAGED = {
     "list_states": f"{SMALL_RANGE_TABLE}; SELECT sum(len(l)) FROM (SELECT list(repeat('x', 100)) AS l FROM t GROUP BY g)",
     "client_result": "SELECT repeat('x', 1000) FROM range(3000000)",
 }
+#: Held under the ceiling since DuckDB 2.0.
+BOUNDED = {"string_agg_states", "list_states"}
 
 #: Each is a Python expression the child evaluates to the statement.
 UNMANAGED_BUILT = {
@@ -95,16 +97,20 @@ def assert_under_ceiling(peak, killed, out):
     assert "LOCKED" in out, out
 
 
-@pytest.mark.parametrize("sql", UNMANAGED.values(), ids=UNMANAGED.keys())
+@pytest.mark.parametrize(
+    "sql", [pytest.param(sql, id=name, marks=() if name in BOUNDED else KNOWN_L3) for name, sql in UNMANAGED.items()]
+)
 def test_unmanaged_allocation_stays_under_memory_limit(sql):
     assert_under_ceiling(*watch(sql))
 
 
+@KNOWN_L3
 @pytest.mark.parametrize("sql", UNMANAGED_BUILT.values(), ids=UNMANAGED_BUILT.keys())
 def test_unmanaged_parse_stays_under_memory_limit(sql):
     assert_under_ceiling(*watch(sql, built=True))
 
 
+@KNOWN_L3
 def test_unbounded_query_is_interrupted():
     peak, killed, out = watch("SELECT count(*) FROM range(1000000) a, range(1000000) b")
     assert killed != "deadline", f"still running after {DEADLINE_S}s\n{out}"

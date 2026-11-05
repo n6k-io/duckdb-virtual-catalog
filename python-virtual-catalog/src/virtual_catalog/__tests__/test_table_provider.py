@@ -36,7 +36,7 @@ async def test_table_provider_lists_filters_and_projects() -> None:
     register_provider(conn, catalog="workspace", schema_name="public", provider=provider)
 
     names = await asyncio.to_thread(
-        lambda: conn.sql(
+        lambda: conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_catalog='workspace' AND table_schema='public' ORDER BY table_name"
         ).fetchall()
@@ -44,7 +44,7 @@ async def test_table_provider_lists_filters_and_projects() -> None:
     assert [r[0] for r in names] == ["t", "u"]
 
     rows = await asyncio.to_thread(
-        lambda: conn.sql("SELECT name FROM workspace.public.t WHERE id >= 2 ORDER BY name").fetchall()
+        lambda: conn.execute("SELECT name FROM workspace.public.t WHERE id >= 2 ORDER BY name").fetchall()
     )
     assert rows == [("b",), ("c",)]
 

@@ -4,6 +4,9 @@ PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 EXT_NAME=virtual_catalog
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 
+# Without this DuckDB stamps a local build as a dev version, which a released duckdb refuses to load.
+export DUCKDB_VERSION ?= $(shell git -C duckdb describe --tags --exact-match 2>/dev/null)
+
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 

@@ -27,7 +27,10 @@ BridgeCatalog::BridgeCatalog(AttachedDatabase &db, unique_ptr<DuckDBSource> sour
 }
 
 BridgeCatalog::~BridgeCatalog() {
-	attach.Source<DuckDBSource>().SetTarget(nullptr);
+	try {
+		attach.Source<DuckDBSource>().SetTarget(nullptr);
+	} catch (...) { // NOLINT: nothing can be reported from a destructor
+	}
 }
 
 string BridgeCatalog::GetCatalogType() {
@@ -79,8 +82,7 @@ void BridgeCatalog::CreateServedSchemas() {
 	auto transaction = CatalogTransaction::GetSystemTransaction(GetDatabase());
 	for (auto &schema : attach.Schemas()) {
 		CreateSchemaInfo info;
-		info.catalog = GetName();
-		info.schema = schema;
+		info.SetQualifiedName(QualifiedName(GetName(), Identifier(schema), Identifier()));
 		info.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
 		CreateSchema(transaction, info);
 	}
@@ -125,7 +127,7 @@ void BridgeCatalog::OnDetach(ClientContext &context) {
 
 PhysicalOperator &BridgeCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
                                                    LogicalCreateTable &op, PhysicalOperator &plan) {
-	if (attach.DescribedSchema(op.schema.name).Allows(CrossingVerb::CREATE)) {
+	if (attach.DescribedSchema(op.schema.name.GetIdentifierName()).Allows(CrossingVerb::CREATE)) {
 		return attach.PlanCreateTableAs(context, planner, op, plan);
 	}
 	return DuckCatalog::PlanCreateTableAs(context, planner, op, plan);
@@ -148,7 +150,7 @@ optional_ptr<Transaction> BridgeSchemaEntry::TransactionOf(optional_ptr<ClientCo
 }
 
 CatalogEntry *BridgeSchemaEntry::LookupExtensionEntry(CatalogTransaction transaction, const string &entry_name) {
-	return attach.LookupTable(name, *this, entry_name, transaction.transaction).get();
+	return attach.LookupTable(name.GetIdentifierName(), *this, entry_name, transaction.transaction).get();
 }
 
 void BridgeSchemaEntry::ScanExtensionEntries(optional_ptr<ClientContext> context, CatalogType type,
@@ -157,50 +159,55 @@ void BridgeSchemaEntry::ScanExtensionEntries(optional_ptr<ClientContext> context
 	if (type != CatalogType::TABLE_ENTRY) {
 		return;
 	}
-	attach.ScanTables(name, *this, seen, callback, TransactionOf(context));
+	attach.ScanTables(name.GetIdentifierName(), *this, seen, callback, TransactionOf(context));
 }
 
 optional_ptr<CatalogEntry> BridgeSchemaEntry::TryCreateExtensionTable(CatalogTransaction transaction,
                                                                       BoundCreateTableInfo &info, bool &handled) {
-	handled = attach.DescribedSchema(name).Allows(CrossingVerb::CREATE);
+	auto &schema_name = name.GetIdentifierName();
+	handled = attach.DescribedSchema(schema_name).Allows(CrossingVerb::CREATE);
 	if (!handled) {
 		return nullptr;
 	}
 	CrossingDdl ddl;
 	ddl.verb = CrossingVerb::CREATE;
-	ddl.schema = name;
-	ddl.table = info.Base().table;
+	ddl.schema = schema_name;
+	ddl.table = info.Base().GetTableName().GetIdentifierName();
 	ddl.create = info.base.get();
 	attach.Ddl(transaction.GetContext(), *transaction.transaction, *this, ddl);
-	return attach.LookupTable(name, *this, ddl.table, transaction.transaction);
+	return attach.LookupTable(schema_name, *this, ddl.table, transaction.transaction);
 }
 
 bool BridgeSchemaEntry::TryDropExtensionEntry(ClientContext &context, DropInfo &info) {
 	auto &transaction = Transaction::Get(context, catalog);
-	if (info.type != CatalogType::TABLE_ENTRY || !attach.ServesTable(name, info.name, &transaction)) {
+	auto &schema_name = name.GetIdentifierName();
+	auto &entry_name = info.GetQualifiedName().Name().GetIdentifierName();
+	if (info.type != CatalogType::TABLE_ENTRY || !attach.ServesTable(schema_name, entry_name, &transaction)) {
 		return false;
 	}
 	CrossingDdl ddl;
 	ddl.verb = CrossingVerb::DROP;
-	ddl.schema = name;
-	ddl.table = info.name;
+	ddl.schema = schema_name;
+	ddl.table = entry_name;
 	ddl.drop = &info;
 	attach.Ddl(context, transaction, *this, ddl);
 	return true;
 }
 
 void BridgeSchemaEntry::ThrowIfExtensionOwnedOnDrop(const string &entry_name) {
-	attach.ThrowIfServed(name, entry_name, "DROP");
+	attach.ThrowIfServed(name.GetIdentifierName(), entry_name, "DROP");
 }
 
 bool BridgeSchemaEntry::TryAlterExtensionEntry(CatalogTransaction transaction, AlterTableInfo &alter) {
-	if (!attach.ServesTable(name, alter.name, transaction.transaction)) {
+	auto &schema_name = name.GetIdentifierName();
+	auto &entry_name = alter.GetQualifiedName().Name().GetIdentifierName();
+	if (!attach.ServesTable(schema_name, entry_name, transaction.transaction)) {
 		return false;
 	}
 	CrossingDdl ddl;
 	ddl.verb = CrossingVerb::ALTER;
-	ddl.schema = name;
-	ddl.table = alter.name;
+	ddl.schema = schema_name;
+	ddl.table = entry_name;
 	ddl.alter = &alter;
 	attach.Ddl(transaction.GetContext(), *transaction.transaction, *this, ddl);
 	return true;
@@ -209,19 +216,20 @@ bool BridgeSchemaEntry::TryAlterExtensionEntry(CatalogTransaction transaction, A
 void BridgeSchemaEntry::CollectExtensionPermissions(ClientContext &context, optional_ptr<const string> table_filter,
                                                     case_insensitive_set_t &seen, vector<TablePermissionRow> &out) {
 	auto transaction = TransactionOf(&context);
-	for (auto &n : attach.Tables(name, transaction)) {
+	auto &schema_name = name.GetIdentifierName();
+	for (auto &n : attach.Tables(schema_name, transaction)) {
 		if (seen.count(n)) {
 			continue;
 		}
 		if (table_filter && !StringUtil::CIEquals(*table_filter, n)) {
 			continue;
 		}
-		auto described = attach.Described(name, *this, n, transaction);
+		auto described = attach.Described(schema_name, *this, n, transaction);
 		if (!described) {
 			continue;
 		}
 		TablePermissionRow row;
-		row.schema = name;
+		row.schema = schema_name;
 		row.name = n;
 		row.kind = "crossing";
 		row.primary_key = described->key;
@@ -325,8 +333,9 @@ void RegisterBridgeCatalog(ExtensionLoader &loader) {
 
 	ScalarFunction init("vcatbridge_init", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                    BridgeInitFunc);
-	init.stability = FunctionStability::VOLATILE;
-	init.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	init.SetStability(FunctionStability::VOLATILE);
+	init.SetFallible();
+	init.SetNullHandling(FunctionNullHandling::SPECIAL_HANDLING);
 	loader.RegisterFunction(init);
 }
 

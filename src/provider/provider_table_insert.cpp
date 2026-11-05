@@ -47,7 +47,7 @@ SinkFinalizeType ProviderTableInsert::Finalize(Pipeline &pipeline, Event &event,
 	vector<string> names;
 	for (auto &col : table.GetColumns().Logical()) {
 		types.push_back(col.GetType());
-		names.push_back(col.GetName());
+		names.push_back(col.GetName().GetIdentifierName());
 	}
 
 	auto arrow_ipc = vcat_provider::EncodeChunksAsIpc(*conn->context, types, names, gstate.chunks);
@@ -71,8 +71,8 @@ SourceResultType ProviderTableInsert::GetDataInternal(ExecutionContext &context,
 	source_state.done = true;
 
 	auto &gstate = sink_state->Cast<ProviderInsertGlobalState>();
-	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(gstate.affected_rows)));
+	chunk.SetChildCardinality(1);
+	chunk.data[0].SetValue(0, Value::BIGINT(NumericCast<int64_t>(gstate.affected_rows)));
 	return SourceResultType::HAVE_MORE_OUTPUT;
 }
 

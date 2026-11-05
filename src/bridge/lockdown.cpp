@@ -17,7 +17,7 @@ namespace {
 
 void SetGlobal(DatabaseInstance &db, const char *name, const Value &value) {
 	auto &config = DBConfig::GetConfig(db);
-	auto option = DBConfig::GetOptionByName(name);
+	auto option = DBConfig::GetOptionByName(Identifier(name));
 	if (!option) {
 		throw InternalException("vcatbridge_lockdown: unknown setting \"%s\"", name);
 	}
@@ -29,14 +29,14 @@ void ThrowUnlessFiniteMemoryLimit(const string &text) {
 	if (text.empty()) {
 		throw InvalidInputException("vcatbridge_lockdown: memory_limit must not be empty");
 	}
-	idx_t bytes;
+	optional_idx bytes;
 	try {
 		bytes = DBConfig::ParseMemoryLimit(text);
 	} catch (const std::exception &ex) {
 		throw InvalidInputException("vcatbridge_lockdown: memory_limit '%s' is not a size: %s", text,
 		                            ErrorData(ex).RawMessage());
 	}
-	if (bytes == NumericLimits<idx_t>::Maximum()) {
+	if (!bytes.IsValid()) {
 		throw InvalidInputException("vcatbridge_lockdown: memory_limit '%s' must be a finite size, e.g. '512MB'", text);
 	}
 }
@@ -63,7 +63,8 @@ vector<reference<CatalogEntry>> ResolveSystemFunctions(ClientContext &context, c
 		}
 		bool found = false;
 		for (auto type : FUNCTION_SETS) {
-			auto entry = catalog.GetEntry(context, type, DEFAULT_SCHEMA, text, OnEntryNotFound::RETURN_NULL);
+			auto entry =
+			    catalog.GetEntry(context, type, DEFAULT_SCHEMA, Identifier(text), OnEntryNotFound::RETURN_NULL);
 			if (entry) {
 				entries.push_back(*entry);
 				found = true;
@@ -89,8 +90,7 @@ void DropSystemFunctions(DatabaseInstance &db, const Value &names) {
 		for (auto &entry : entries) {
 			DropInfo drop;
 			drop.type = entry.get().type;
-			drop.schema = DEFAULT_SCHEMA;
-			drop.name = entry.get().name;
+			drop.SetQualifiedName(Identifier(), DEFAULT_SCHEMA, entry.get().name);
 			drop.allow_drop_internal = true;
 			catalog.DropEntry(context, drop);
 		}
@@ -146,8 +146,9 @@ void RegisterLockdownFunction(ExtensionLoader &loader) {
 	     {vector<LogicalType> {LogicalType::VARCHAR, LogicalType::BIGINT},
 	      vector<LogicalType> {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::LIST(LogicalType::VARCHAR)}}) {
 		ScalarFunction lockdown(arguments, LogicalType::VARCHAR, LockdownFunc);
-		lockdown.stability = FunctionStability::VOLATILE;
-		lockdown.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+		lockdown.SetStability(FunctionStability::VOLATILE);
+		lockdown.SetFallible();
+		lockdown.SetNullHandling(FunctionNullHandling::SPECIAL_HANDLING);
 		set.AddFunction(lockdown);
 	}
 	loader.RegisterFunction(set);

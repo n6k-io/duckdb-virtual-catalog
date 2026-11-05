@@ -46,7 +46,7 @@ SinkResultType ProviderTableUpdate::Sink(ExecutionContext &context, DataChunk &c
 
 	auto narrow = make_uniq<DataChunk>();
 	narrow->Initialize(Allocator::DefaultAllocator(), gstate.chunk_types);
-	narrow->SetCardinality(chunk.size());
+	narrow->SetChildCardinality(chunk.size());
 	// Copy, not Reference: these chunks are held until Finalize and the child re-fills its output
 	// chunk in place, so a reference would leave every stored chunk showing the last morsel.
 	VectorOperations::Copy(chunk.data[row_id_col], narrow->data[0], chunk.size(), 0, 0);
@@ -61,7 +61,7 @@ SinkResultType ProviderTableUpdate::Sink(ExecutionContext &context, DataChunk &c
 			continue;
 		}
 		auto &binding = update_expressions[i]->Cast<BoundReferenceExpression>();
-		VectorOperations::Copy(chunk.data[binding.index], narrow->data[i + 1], chunk.size(), 0, 0);
+		VectorOperations::Copy(chunk.data[binding.Index()], narrow->data[i + 1], chunk.size(), 0, 0);
 	}
 
 	gstate.chunks.push_back(std::move(narrow));
@@ -99,8 +99,8 @@ SinkFinalizeType ProviderTableUpdate::Finalize(Pipeline &pipeline, Event &event,
 	for (auto &col_idx : update_columns) {
 		auto &col = all_columns.GetColumn(col_idx);
 		row_types.push_back(col.GetType());
-		row_col_names.push_back(col.Name());
-		changed_col_names.emplace_back(col.Name());
+		row_col_names.push_back(col.Name().GetIdentifierName());
+		changed_col_names.emplace_back(col.Name().GetIdentifierName());
 	}
 
 	// Each sunk chunk holds a PK-buffer row id in column 0 and the new values after it; the keys
@@ -147,8 +147,8 @@ SourceResultType ProviderTableUpdate::GetDataInternal(ExecutionContext &context,
 	source_state.done = true;
 
 	auto &gstate = sink_state->Cast<ProviderUpdateGlobalState>();
-	chunk.SetCardinality(1);
-	chunk.SetValue(0, 0, Value::BIGINT(NumericCast<int64_t>(gstate.affected_rows)));
+	chunk.SetChildCardinality(1);
+	chunk.data[0].SetValue(0, Value::BIGINT(NumericCast<int64_t>(gstate.affected_rows)));
 	return SourceResultType::HAVE_MORE_OUTPUT;
 }
 

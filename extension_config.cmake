@@ -11,6 +11,7 @@ duckdb_extension_load(vcatbridge
     EXTENSION_VERSION "v${VCAT_VERSION}"
     LOAD_TESTS
 )
+duckdb_extension_statically_link(vcatbridge)
 
 duckdb_extension_load(vcatprovider
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/src/provider
@@ -19,3 +20,4 @@ duckdb_extension_load(vcatprovider
     EXTENSION_VERSION "v${VCAT_VERSION}"
     LOAD_TESTS
 )
+duckdb_extension_statically_link(vcatprovider)

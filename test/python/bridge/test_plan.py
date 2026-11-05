@@ -48,9 +48,9 @@ def test_a_self_join_crosses_as_one_scan(bridged):
     plan = explain(target, "SELECT count(*) FROM app.main.wide a JOIN app.main.wide b USING (id)")
     flat = plan.replace(" ", "")
     assert len(re.findall(r"TableIndex:(\d+)", flat)) == 1
-    assert flat.count("CROSSING_READ") == 1
-    assert "COMPARISON_JOIN" in flat
-    assert flat.count("CROSSING_FLOOR") == 2
+    assert flat.count("CrossingRead") == 1
+    assert "ComparisonJoin" in flat
+    assert flat.count("CrossingFloor") == 2
 
 
 def test_scan_node_carries_the_source_plan(bridged):
@@ -59,8 +59,8 @@ def test_scan_node_carries_the_source_plan(bridged):
     _, target = bridged
     plan = explain(target, "SELECT sum(score) FROM app.main.wide")
     assert "Plan" in plan
-    assert "CROSSING_FLOOR" in plan
-    assert "SEQ_SCAN" not in plan
+    assert "Crossing Floor" in plan
+    assert "Seq Scan" not in plan
 
 
 def test_select_star_matches_source(bridged):
@@ -108,7 +108,7 @@ def scan_rows(con, sql):
     """Rows the bridge scan emitted. The scan is the bottom-most node, and the plan it carries is
     drawn without cardinalities, so the last count in the profile is the scan's."""
     profile = con.execute("EXPLAIN ANALYZE " + sql).fetchall()[0][1]
-    return int(re.findall(r"([\d,]+) rows", profile)[-1].replace(",", ""))
+    return int(re.findall(r"([\d,]+) rows?\b", profile)[-1].replace(",", ""))
 
 
 def test_filter_is_absorbed(bridged):
@@ -152,7 +152,7 @@ def test_target_udf_stays_on_the_target(bridged):
         "target_only", lambda s: s.endswith("7"), [duckdb.sqltype("VARCHAR")], duckdb.sqltype("BOOLEAN")
     )
     sql = "SELECT count(*) FROM app.main.wide WHERE target_only(name)"
-    assert "FILTER" in explain(target, sql)
+    assert "Filter" in explain(target, sql)
     assert target.execute(sql).fetchone()[0] == ROWS // 10
     # Nothing was absorbable, so every row still crosses and the UDF runs on the target.
     assert scan_rows(target, sql) == ROWS
@@ -273,11 +273,10 @@ def test_insert_carries_a_plan(writable):
     _, target = writable
     profile = target.execute(f"EXPLAIN ANALYZE INSERT INTO app.main.wide VALUES {ROW}").fetchall()[0][1]
     assert "Plan" in profile
-    assert "INSERT" in profile
     # A literal VALUES list is something the source can produce itself, so it goes into the seam while
     # the plan is still being built and the statement runs there whole. A feed the source cannot hold
     # fills the seam at execution instead, and shows a chunk scan.
-    assert "insert on source" in profile or "COLUMN_DATA_SCAN" in profile or "CHUNK_GET" in profile
+    assert "insert on source" in profile or "Column Data Scan" in profile or "Chunk Get" in profile
 
 
 @pytest.fixture

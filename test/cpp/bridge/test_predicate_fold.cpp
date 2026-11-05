@@ -8,7 +8,7 @@ using namespace duckdb;
 namespace {
 
 bool FoldsToTrue(Connection &con, const string &text) {
-	auto parsed = Parser::ParseExpressionList(text);
+	auto parsed = Parser::GetBuiltinParser().ParseExpressionList(text);
 	REQUIRE(parsed.size() == 1);
 	bool result = false;
 	con.context->RunFunctionInTransaction(

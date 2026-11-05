@@ -1,0 +1,101 @@
+# name: test/sql/bridge/engine_contract.test
+# description: Bridge behaviour that depends on how the engine represents limits, reads and ALTERs.
+# group: [bridge]
+
+require vcatbridge
+
+statement ok
+CREATE TABLE memory.main.big(id BIGINT PRIMARY KEY, amt BIGINT DEFAULT 0, label VARCHAR);
+
+statement ok
+INSERT INTO memory.main.big SELECT i, i, 'x' FROM range(5000) t(i);
+
+statement ok
+SELECT vcatbridge_register_source('ec', 'memory', 'tok_ec');
+
+statement ok
+SELECT vcatbridge_set_policy('ec', 'main.big', v, 'true') FROM (VALUES ('select'), ('update'), ('alter')) _(v);
+
+statement ok
+ATTACH '' AS ec (TYPE vcatbridge, ID 'ec', TOKEN 'tok_ec');
+
+# A memory limit the engine reads as "no limit" is not a limit.
+statement error
+SELECT vcatbridge_lockdown('none', 1);
+----
+must be a finite size
+
+statement error
+SELECT vcatbridge_lockdown('null', 1);
+----
+must be a finite size
+
+statement error
+SELECT vcatbridge_lockdown('-1', 1);
+----
+must be a finite size
+
+# Reads in a transaction share one source connection, so each must leave it free for the next query.
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM ec.main.big;
+----
+5000
+
+query I
+SELECT id FROM ec.main.big WHERE id = 4999;
+----
+4999
+
+query I
+SELECT count(*) FROM (SELECT id FROM ec.main.big) a JOIN (SELECT id FROM memory.main.big) b USING (id);
+----
+5000
+
+statement ok
+UPDATE ec.main.big SET amt = -1 WHERE id = 1;
+
+query I
+SELECT amt FROM ec.main.big WHERE id = 1;
+----
+-1
+
+statement ok
+COMMIT;
+
+query I
+SELECT amt FROM memory.main.big WHERE id = 1;
+----
+-1
+
+# More rows than one chunk reach the target through an autocommit read.
+query II
+SELECT count(*), max(r) FROM (SELECT row_number() OVER () AS r FROM ec.main.big);
+----
+5000	5000
+
+# A type change with no USING runs; one with USING does not.
+statement ok
+ALTER TABLE ec.main.big ALTER COLUMN label TYPE VARCHAR;
+
+statement error
+ALTER TABLE ec.main.big ALTER COLUMN label TYPE VARCHAR USING upper(label);
+----
+cannot take a USING
+
+# Dropping a default carries no expression; a default that is not a constant stays refused.
+statement ok
+ALTER TABLE ec.main.big ALTER COLUMN amt DROP DEFAULT;
+
+statement error
+ALTER TABLE ec.main.big ALTER COLUMN amt SET DEFAULT random();
+----
+must be a constant
+
+# Schemas here are flat: a wrapper stands in for one source schema.
+statement error
+CREATE SCHEMA ec.main.child;
+----
+nested schemas

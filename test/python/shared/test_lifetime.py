@@ -3,10 +3,12 @@
 Which instance the attached catalog keeps alive is set by DuckDBSource::source_db_hold.
 """
 
+import gc
 import subprocess
 import sys
 import textwrap
 
+import duckdb
 import pytest
 
 from conftest import (
@@ -205,6 +207,30 @@ def test_closing_a_connection_with_a_same_instance_bridge_frees_its_database(tmp
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "0"
+
+
+def test_closing_a_source_with_an_unattached_registration_frees_its_database():
+    """The registration holds no reference: the attach finds the instance gone."""
+    source = new_connection()
+    target = new_connection()
+    token = source.execute("SELECT vcatbridge_register_source('closed_first', 'memory')").fetchall()[0][0]
+    source.close()
+    del source
+    gc.collect()
+    with pytest.raises(duckdb.PermissionException, match="no registered source"):
+        target.execute(f"ATTACH '' AS app (TYPE vcatbridge, ID 'closed_first', TOKEN '{token}')")
+    target.close()
+
+
+def test_a_bridge_id_is_free_once_its_unattached_source_is_closed():
+    first = new_connection()
+    first.execute("SELECT vcatbridge_register_source('reused_id', 'memory')").fetchall()
+    first.close()
+    del first
+    gc.collect()
+    second = new_connection()
+    assert second.execute("SELECT vcatbridge_register_source('reused_id', 'memory')").fetchall()
+    second.close()
 
 
 def test_many_bridges_set_up_and_torn_down():

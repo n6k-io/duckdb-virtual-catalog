@@ -16,7 +16,7 @@ bool IsConstantTrue(const Expression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 		return false;
 	}
-	auto &value = expr.Cast<BoundConstantExpression>().value;
+	auto &value = expr.Cast<BoundConstantExpression>().GetValue();
 	return !value.IsNull() && value.type().id() == LogicalTypeId::BOOLEAN && BooleanValue::Get(value);
 }
 
@@ -48,9 +48,7 @@ bool OnlyTrueFilters(const LogicalOperator &op) {
 bool PredicateFoldsToTrue(ClientContext &context, const string &catalog, const string &schema, const string &table,
                           const ParsedExpression &predicate) {
 	auto from = make_uniq<BaseTableRef>();
-	from->catalog_name = catalog;
-	from->schema_name = schema;
-	from->table_name = table;
+	from->SetQualifiedName(Identifier(catalog), Identifier(schema), Identifier(table));
 	auto node = make_uniq<SelectNode>();
 	node->select_list.push_back(make_uniq<StarExpression>());
 	node->from_table = std::move(from);

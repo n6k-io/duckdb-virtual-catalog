@@ -3,7 +3,7 @@
 ## 1. Install
 
 ```sh
-pip install duckdb==1.5.6 pyarrow numpy
+pip install duckdb==2.0.0 pyarrow numpy
 ```
 
 ```python

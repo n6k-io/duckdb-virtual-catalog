@@ -32,7 +32,7 @@ ATTACH '' AS b (TYPE vcatbridge, ID 'v2_pushdown', TOKEN 'tok_pushdown');
 query II
 EXPLAIN SELECT name FROM b.main.orders WHERE amt > 100;
 ----
-physical_plan	<REGEX>:.*FILTER.*
+physical_plan	<REGEX>:.*Filter.*
 
 query I
 SELECT name FROM b.main.orders WHERE amt > 100 ORDER BY id;
@@ -45,7 +45,7 @@ edsger
 query II
 EXPLAIN SELECT tenant, sum(amt) FROM b.main.orders GROUP BY tenant;
 ----
-physical_plan	<REGEX>:.*AGGREGATE.*
+physical_plan	<REGEX>:.*Aggregate.*
 
 query II
 SELECT tenant, sum(amt) FROM b.main.orders GROUP BY tenant ORDER BY tenant;
@@ -77,7 +77,7 @@ ada
 query II
 EXPLAIN SELECT name FROM b.main.orders ORDER BY amt DESC LIMIT 2;
 ----
-physical_plan	<!REGEX>:.*TOP_N.*
+physical_plan	<!REGEX>:.*Top N.*
 
 query I
 SELECT name FROM b.main.orders ORDER BY amt DESC LIMIT 2;

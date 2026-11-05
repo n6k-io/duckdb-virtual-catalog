@@ -55,6 +55,8 @@ public:
 	void Alter(CatalogTransaction transaction, AlterInfo &info) override;
 
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
+	void Scan(CatalogTransaction transaction, CatalogType type,
+	          const std::function<void(CatalogEntry &)> &callback) override;
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 
 	//! One capability row per table/view, native entries first. Name-collision precedence matches

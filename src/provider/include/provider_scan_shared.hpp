@@ -47,9 +47,8 @@ struct ProviderScanFunctionData : public ArrowScanFunctionData {
 	unique_ptr<ProviderStreamData> owned_stream_data;
 	TableCatalogEntry *table = nullptr;
 
-	ProviderScanFunctionData(stream_factory_produce_t producer, unique_ptr<ProviderStreamData> stream_data)
-	    : ArrowScanFunctionData(producer, reinterpret_cast<uintptr_t>(stream_data.get())),
-	      owned_stream_data(std::move(stream_data)) {
+	ProviderScanFunctionData(shared_ptr<ArrowScanFactory> factory, unique_ptr<ProviderStreamData> stream_data)
+	    : ArrowScanFunctionData(std::move(factory)), owned_stream_data(std::move(stream_data)) {
 	}
 
 	bool SupportStatementCache() const override {
@@ -224,7 +223,7 @@ inline Value ReadArrowValue(ArrowArray &array, idx_t pos, const LogicalType &typ
 template <class ScanGlobalState>
 void AppendPKValuesAndEmitBufferRowIds(Vector &rowid_vec, ArrowArray &parent_array, ScanGlobalState &global_state,
                                        idx_t chunk_offset, idx_t count, const char *context) {
-	auto row_ids = FlatVector::GetData<row_t>(rowid_vec);
+	auto row_ids = FlatVector::GetDataMutable<row_t>(rowid_vec);
 	auto &buffer = *global_state.pk_buffer;
 
 	// The scan's arity check should have made this unreachable; it stays because the alternative to
@@ -264,7 +263,7 @@ BuildProjectionParamsAndProduceStream(const ProviderScanFunctionData &function, 
 		}
 	}
 	parameters.filters = filters;
-	return function.scanner_producer(function.stream_factory_ptr, parameters);
+	return function.factory->ProduceStream(parameters);
 }
 
 } // namespace duckdb

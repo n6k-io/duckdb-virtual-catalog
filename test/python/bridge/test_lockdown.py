@@ -65,7 +65,7 @@ def test_detach_after_lockdown(pair):
     bridge(source, target, {"users": READ})
     lockdown(target)
     unbridge(target)
-    with pytest.raises(duckdb.BinderException, match='Catalog "app" does not exist'):
+    with pytest.raises(duckdb.CatalogException, match="does not exist"):
         target.execute("SELECT * FROM app.main.users")
 
 

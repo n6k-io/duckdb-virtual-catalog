@@ -14,7 +14,7 @@ namespace duckdb {
 
 ProviderTableCatalogEntry::ProviderTableCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema,
                                                      CreateTableInfo &info, shared_ptr<ProviderTableInfo> info_p)
-    : TableCatalogEntry(catalog, schema, info), table_info(std::move(info_p)) {
+    : TableCatalogEntry(catalog, schema, info), table_info(std::move(info_p)), columns(info.columns.Copy()) {
 }
 
 unique_ptr<BaseStatistics> ProviderTableCatalogEntry::GetStatistics(ClientContext &context, column_t column_id) {
@@ -38,10 +38,8 @@ static string SerializeFlatFiltersOrThrow(ArrowStreamParameters &parameters, con
 	return json;
 }
 
-static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(uintptr_t factory_ptr,
+static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(ProviderStreamData *stream_data,
                                                                           ArrowStreamParameters &parameters) {
-	auto *stream_data = reinterpret_cast<ProviderStreamData *>(factory_ptr);
-
 	if (stream_data->consumed) {
 		throw InvalidInputException("vcatprovider: a provider table scan cannot be restarted");
 	}
@@ -106,9 +104,23 @@ static unique_ptr<ArrowArrayStreamWrapper> RunScanUdfAndDecodeArrowResult(uintpt
 	stream_data->pk_formats = std::move(trailing.formats);
 
 	stream_data->consumed = true;
-	wrapper->number_of_rows = -1;
 	return wrapper;
 }
+
+//! Owned alongside the stream data by ProviderScanFunctionData. The scan builds its own schema, so nothing asks here.
+struct ProviderScanFactory : public ArrowScanFactory {
+	explicit ProviderScanFactory(ProviderStreamData *stream_data_p) : stream_data(stream_data_p) {
+	}
+
+	void GetSchema(ArrowSchema &) override {
+		throw InternalException("vcatprovider: a provider scan does not read its schema from the factory");
+	}
+	unique_ptr<ArrowArrayStreamWrapper> ProduceStream(ArrowStreamParameters &parameters) override {
+		return RunScanUdfAndDecodeArrowResult(stream_data, parameters);
+	}
+
+	ProviderStreamData *stream_data;
+};
 
 struct ProviderScanGlobalState : public ArrowScanGlobalState {
 	idx_t pk_start_index = COLUMN_IDENTIFIER_ROW_ID;
@@ -244,7 +256,7 @@ static void EmitProviderScanChunk(ClientContext &context, TableFunctionInput &da
 
 	if (global_state.CanRemoveFilterColumns()) {
 		state.all_columns.Reset();
-		state.all_columns.SetCardinality(output_size);
+		state.all_columns.SetChildCardinality(output_size);
 		ArrowTableFunction::ArrowToDuckDB(state, data.arrow_table.GetColumns(), state.all_columns);
 		if (has_pk_columns) {
 			for (idx_t idx = 0; idx < state.all_columns.ColumnCount(); idx++) {
@@ -257,7 +269,7 @@ static void EmitProviderScanChunk(ClientContext &context, TableFunctionInput &da
 		}
 		output.ReferenceColumns(state.all_columns, global_state.projection_ids);
 	} else {
-		output.SetCardinality(output_size);
+		output.SetChildCardinality(output_size);
 		ArrowTableFunction::ArrowToDuckDB(state, data.arrow_table.GetColumns(), output);
 		if (has_pk_columns) {
 			for (idx_t idx = 0; idx < output.ColumnCount(); idx++) {
@@ -274,9 +286,8 @@ static void EmitProviderScanChunk(ClientContext &context, TableFunctionInput &da
 	state.chunk_offset += output.size();
 }
 
-static BindInfo ProviderScanGetBindInfo(const optional_ptr<FunctionData> bind_data) {
-	auto &data = bind_data->Cast<ProviderScanFunctionData>();
-	return BindInfo(*data.table);
+static optional_ptr<TableCatalogEntry> ProviderScanGetTableEntry(optional_ptr<const FunctionData> bind_data) {
+	return bind_data->Cast<ProviderScanFunctionData>().table;
 }
 
 TableFunction ProviderTableCatalogEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
@@ -286,14 +297,14 @@ TableFunction ProviderTableCatalogEntry::GetScanFunction(ClientContext &context,
 	stream_data->consumed = false;
 
 	for (auto &col : columns.Logical()) {
-		stream_data->column_names.push_back(col.GetName());
+		stream_data->column_names.push_back(col.GetName().GetIdentifierName());
 	}
 
 	stream_data->table_name = table_info->provider->scan_udf;
 	stream_data->provider_table_name = table_info->table_name;
-	auto producer = reinterpret_cast<stream_factory_produce_t>(RunScanUdfAndDecodeArrowResult);
+	shared_ptr<ArrowScanFactory> factory = make_shared_ptr<ProviderScanFactory>(stream_data.get());
 
-	auto result = make_uniq<ProviderScanFunctionData>(producer, std::move(stream_data));
+	auto result = make_uniq<ProviderScanFunctionData>(std::move(factory), std::move(stream_data));
 	result->projection_pushdown_enabled = true;
 
 	for (auto &col : columns.Logical()) {
@@ -303,11 +314,11 @@ TableFunction ProviderTableCatalogEntry::GetScanFunction(ClientContext &context,
 	result->table = this;
 	bind_data = std::move(result);
 
-	TableFunction scan_func("provider_scan", {}, EmitProviderScanChunk, nullptr, ProviderScanInitGlobal,
-	                        ArrowTableFunction::ArrowScanInitLocal);
+	TableFunction scan_func("provider_scan", vector<LogicalType> {}, EmitProviderScanChunk, nullptr,
+	                        ProviderScanInitGlobal, ArrowTableFunction::ArrowScanInitLocal);
 	scan_func.projection_pushdown = true;
 	scan_func.filter_pushdown = true;
-	scan_func.get_bind_info = ProviderScanGetBindInfo;
+	scan_func.get_table_entry = ProviderScanGetTableEntry;
 	return scan_func;
 }
 
