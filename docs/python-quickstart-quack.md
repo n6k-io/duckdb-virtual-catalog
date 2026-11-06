@@ -90,6 +90,7 @@ target.execute("SELECT vcatbridge_init('b1', $1)", [token])
 
 ```python
 target.execute("""
+    SET allow_persistent_secrets = false;
     INSTALL quack;  LOAD quack;
     INSTALL httpfs; LOAD httpfs;
 """)
@@ -98,6 +99,9 @@ target.execute("""
     CALL quack_serve('quack:localhost:9494', token = 'super_secret')
 """)
 ```
+
+Turn off persistent secrets first: DuckDB won't allow this once `quack_serve` has run, and lockdown
+refuses to run if they are still on.
 
 Load `httpfs` now: Quack needs it, and after lockdown it can't be loaded.
 
