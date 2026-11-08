@@ -136,7 +136,6 @@ vector<shared_ptr<GrantLedger>> GrantLedgersOf(const CrossingOpenTransaction &tr
 
 class DuckDBSource : public CrossingSource {
 public:
-
 	DuckDBSource(string bridge_id, const shared_ptr<DatabaseInstance> &source_db, DatabaseInstance &target_db,
 	             SourcePin source, shared_ptr<GrantBook> grants);
 	//! Unbound: every call throws until Bind. The target's main database starts this way, since it opens before

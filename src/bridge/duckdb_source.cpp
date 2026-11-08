@@ -635,9 +635,8 @@ vector<string> InsertedColumns(ClientContext &context, const string &catalog, co
 	return columns;
 }
 
-case_insensitive_map_t<const ParsedExpression *> WrittenValues(const vector<string> &columns,
-                                                               const vector<unique_ptr<ParsedExpression>> &values,
-                                                               const string &table) {
+case_insensitive_map_t<const ParsedExpression *>
+WrittenValues(const vector<string> &columns, const vector<unique_ptr<ParsedExpression>> &values, const string &table) {
 	if (columns.size() != values.size()) {
 		throw PermissionException("vcatbridge: a write to '%s' names %llu columns but writes %llu values", table,
 		                          static_cast<uint64_t>(columns.size()), static_cast<uint64_t>(values.size()));
@@ -703,7 +702,8 @@ void ShapeWrite(ClientContext &context, const string &catalog, GrantBook &grants
 			                          "predicate",
 			                          table);
 		}
-		auto columns = insert.columns.empty() ? InsertedColumns(context, catalog, schema, table) : NamesOf(insert.columns);
+		auto columns =
+		    insert.columns.empty() ? InsertedColumns(context, catalog, schema, table) : NamesOf(insert.columns);
 		auto &select = insert.select_statement->node->Cast<SelectNode>();
 		GuardWrittenValues(std::move(check), columns, select.select_list, nullptr, table);
 		return;
@@ -2280,8 +2280,8 @@ void RecordDdl(const shared_ptr<GrantBook> &book, GrantLedger &ledger, const Ddl
 	});
 }
 
-void ShapeDdl(ClientContext &context, const string &catalog, const shared_ptr<GrantBook> &grants,
-              GrantLedger &ledger, SQLStatement &statement) {
+void ShapeDdl(ClientContext &context, const string &catalog, const shared_ptr<GrantBook> &grants, GrantLedger &ledger,
+              SQLStatement &statement) {
 	auto ddl = DdlTargetOf(statement);
 	switch (ddl.verb) {
 	case CrossingVerb::CREATE:
@@ -2305,9 +2305,9 @@ void ShapeDdl(ClientContext &context, const string &catalog, const shared_ptr<Gr
 class BridgeLink : public CrossingLink {
 public:
 	BridgeLink(shared_ptr<DatabaseInstance> db_p, SourcePin source_p, string catalog_p, shared_ptr<GrantBook> grants_p)
-	    : db(std::move(db_p)), source(std::move(source_p)), catalog(std::move(catalog_p)),
-	      grants(std::move(grants_p)), values(ContextSnapshot(*grants->context)),
-	      ledger(make_shared_ptr<GrantLedger>(grants)), connection(*db), far(connection, catalog, Options()) {
+	    : db(std::move(db_p)), source(std::move(source_p)), catalog(std::move(catalog_p)), grants(std::move(grants_p)),
+	      values(ContextSnapshot(*grants->context)), ledger(make_shared_ptr<GrantLedger>(grants)), connection(*db),
+	      far(connection, catalog, Options()) {
 		serving = std::thread([this]() {
 			try {
 				far.Serve(pair.Far());
