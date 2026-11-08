@@ -242,17 +242,30 @@ def test_create_view_over_bridge_table_works() -> None:
     assert target.execute('SELECT id FROM "workspace"."main"."active_t"').fetchall() == [(1,)]
 
 
-def test_readwrite_no_pk_refuses_keyed_writes() -> None:
+def test_readwrite_no_pk_writes_by_rowid() -> None:
     source = _source("CREATE TABLE nopk(x INTEGER, y INTEGER)", "INSERT INTO nopk VALUES (1, 10)")
     target = _target()
     _bridge(source, target, _all_verbs("main.nopk"))
 
     target.execute('INSERT INTO "workspace"."main".nopk VALUES (2, 20)')
     assert source.execute("SELECT count(*) FROM nopk").fetchone() == (2,)
-    with pytest.raises(duckdb.BinderException, match="has no key"):
-        target.execute('UPDATE "workspace"."main".nopk SET y = 99 WHERE x = 1')
-    with pytest.raises(duckdb.BinderException, match="has no key"):
-        target.execute('DELETE FROM "workspace"."main".nopk WHERE x = 1')
+    target.execute('UPDATE "workspace"."main".nopk SET y = 99 WHERE x = 1')
+    assert source.execute("SELECT x, y FROM nopk ORDER BY x").fetchall() == [(1, 99), (2, 20)]
+    target.execute('DELETE FROM "workspace"."main".nopk WHERE x = 1')
+    assert source.execute("SELECT x, y FROM nopk").fetchall() == [(2, 20)]
+
+
+def test_readwrite_no_pk_writes_from_a_near_table() -> None:
+    source = _source("CREATE TABLE nopk(x INTEGER, y INTEGER)", "INSERT INTO nopk VALUES (1, 10), (2, 20), (3, 30)")
+    target = _target()
+    _bridge(source, target, _all_verbs("main.nopk"))
+    target.execute("CREATE TABLE near(x INTEGER, y INTEGER)")
+    target.execute("INSERT INTO near VALUES (1, 99)")
+
+    target.execute('UPDATE "workspace"."main".nopk SET y = near.y FROM near WHERE nopk.x = near.x')
+    assert source.execute("SELECT x, y FROM nopk ORDER BY x").fetchall() == [(1, 99), (2, 20), (3, 30)]
+    target.execute('DELETE FROM "workspace"."main".nopk WHERE x IN (SELECT x FROM near)')
+    assert source.execute("SELECT x, y FROM nopk ORDER BY x").fetchall() == [(2, 20), (3, 30)]
 
 
 def test_readwrite_update_manual_pk_override() -> None:
