@@ -63,4 +63,7 @@ test-provider: provider
 test-parity:
 	@$(PYTEST) -m parity
 
-.PHONY: test-cpp bridge test-bridge provider test-provider test-parity
+tags:
+	@scripts/tag_release.sh
+
+.PHONY: tags test-cpp bridge test-bridge provider test-provider test-parity
