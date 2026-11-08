@@ -1958,7 +1958,10 @@ GrantLedger::GrantLedger(shared_ptr<GrantBook> grants_p) : grants(std::move(gran
 }
 
 GrantLedger::~GrantLedger() {
-	Resolve(false);
+	try {
+		Resolve(false);
+	} catch (...) { // NOLINT: nothing can be reported from a destructor
+	}
 }
 
 void GrantLedger::Push(std::function<void()> entry) {

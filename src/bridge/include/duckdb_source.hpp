@@ -141,7 +141,7 @@ public:
 	//! Unbound: every call throws until Bind. The target's main database starts this way, since it opens before
 	//! any token can be redeemed.
 	DuckDBSource();
-	~DuckDBSource();
+	~DuckDBSource() override;
 
 	//! Once, before any call can pass ThrowUnlessBound. Takes over `redeemed`, leaving it unbound.
 	void Bind(DuckDBSource &redeemed);
