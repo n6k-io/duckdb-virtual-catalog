@@ -1,4 +1,4 @@
-"""A declared primary key that is not unique turns a per-row write into a per-group write."""
+"""A declared primary key that is not unique: writes address the source's rows by rowid, not by the key."""
 
 import duckdb
 import pytest
@@ -22,7 +22,7 @@ def source_rows(source):
     return source.execute("SELECT * FROM t1 ORDER BY id").fetchall()
 
 
-def test_update_through_a_non_unique_key_is_refused_and_rolls_back(source, target):
+def test_update_through_a_non_unique_key_reaches_only_its_row(source, target):
     fanout_source(source)
     bridge(
         source,
@@ -33,13 +33,12 @@ def test_update_through_a_non_unique_key_is_refused_and_rolls_back(source, targe
 
     assert target.execute("SELECT * FROM app.main.t1 ORDER BY id").fetchall() == FANOUT_ROWS[:2]
 
-    with pytest.raises(Exception, match="not unique on the source"):
-        target.execute("UPDATE app.main.t1 SET secret = 'PWNED' WHERE id = 1")
+    assert target.execute("UPDATE app.main.t1 SET secret = 'PWNED' WHERE id = 1").fetchall() == [(1,)]
 
-    assert source_rows(source) == FANOUT_ROWS
+    assert source_rows(source) == [(1, 5, 1, "PWNED")] + FANOUT_ROWS[1:]
 
 
-def test_delete_through_a_non_unique_key_is_refused_and_rolls_back(source, target):
+def test_delete_through_a_non_unique_key_reaches_only_its_row(source, target):
     fanout_source(source)
     bridge(
         source,
@@ -48,10 +47,9 @@ def test_delete_through_a_non_unique_key_is_refused_and_rolls_back(source, targe
         pk_overrides={"t1": ["grp"]},
     )
 
-    with pytest.raises(Exception, match="not unique on the source"):
-        target.execute("DELETE FROM app.main.t1 WHERE id = 1")
+    assert target.execute("DELETE FROM app.main.t1 WHERE id = 1").fetchall() == [(1,)]
 
-    assert source_rows(source) == FANOUT_ROWS
+    assert source_rows(source) == FANOUT_ROWS[1:]
 
 
 def test_a_non_unique_key_does_not_reach_or_count_a_hidden_row(source, target):
@@ -72,8 +70,7 @@ def test_a_non_unique_key_does_not_reach_or_count_a_hidden_row(source, target):
     assert source_rows(source) == [(2, 5, 2, "HIDDEN")]
 
 
-def test_composite_key_subset_is_refused(source, target):
-    """Two declared key columns take the per-row composite DELETE path, not the batched one."""
+def test_composite_key_subset_reaches_only_matching_visible_rows(source, target):
     source.execute(
         "CREATE TABLE t2(a INTEGER, b INTEGER, c INTEGER, tenant INTEGER, secret VARCHAR, " "PRIMARY KEY (a, b, c))"
     )
@@ -86,10 +83,9 @@ def test_composite_key_subset_is_refused(source, target):
         pk_overrides={"t2": ["a", "b"]},
     )
 
-    with pytest.raises(Exception, match="not unique on the source"):
-        target.execute("DELETE FROM app.main.t2 WHERE c = 1")
+    assert target.execute("DELETE FROM app.main.t2 WHERE c = 1").fetchall() == [(2,)]
 
-    assert source.execute("SELECT * FROM t2 ORDER BY a, b, c").fetchall() == rows
+    assert source.execute("SELECT * FROM t2 ORDER BY a, b, c").fetchall() == [rows[1], rows[2]]
 
 
 def test_a_real_key_still_writes_across_batch_boundaries(source, target):

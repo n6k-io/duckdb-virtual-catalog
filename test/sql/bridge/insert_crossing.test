@@ -30,13 +30,13 @@ ATTACH '' AS w (TYPE vcatbridge, ID 'ic', TOKEN 'tok_ic');
 
 # ---------------------------------------------------------------------------
 # Both tables are the source's, so the whole statement goes there: one region, the select inside the
-# insert, and nothing sent. The streaming path renders "insert rows" instead.
+# insert, and nothing sent.
 # ---------------------------------------------------------------------------
 
 query II
 EXPLAIN INSERT INTO w.main.dst SELECT id, amt FROM w.main.src;
 ----
-physical_plan	<REGEX>:.*Crossing:.*insert on source.*
+physical_plan	<REGEX>:.*Runs on source:.*INSERT main.dst.*Crossing Floor.*
 
 query I
 INSERT INTO w.main.dst SELECT id, amt FROM w.main.src;

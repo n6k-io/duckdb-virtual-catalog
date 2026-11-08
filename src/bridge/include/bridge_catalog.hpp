@@ -37,6 +37,9 @@ public:
 	CrossingAttach &Attach() override {
 		return attach;
 	}
+	DuckDBSource &Source() {
+		return source;
+	}
 
 protected:
 	unique_ptr<VirtualCatalogSchemaEntryBase> CreateSchemaWrapper(SchemaCatalogEntry &target_schema) override;
@@ -46,6 +49,7 @@ private:
 	void CreateServedSchemas();
 	void ThrowUnlessBound();
 
+	DuckDBSource &source;
 	CrossingAttach attach;
 	mutex bind_lock;
 	bool initialized = false;
@@ -71,6 +75,7 @@ private:
 	optional_ptr<Transaction> TransactionOf(optional_ptr<ClientContext> context);
 
 	CrossingAttach &attach;
+	DuckDBSource &source;
 };
 
 class BridgeTransactionManager : public DuckTransactionManager {

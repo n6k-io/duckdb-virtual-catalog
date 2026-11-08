@@ -40,7 +40,7 @@ EXPLAIN MERGE INTO m.main.target t USING (SELECT id, amt FROM m.main.feed WHERE 
   ON t.id = s.id
   WHEN MATCHED THEN UPDATE SET amt = s.amt;
 ----
-physical_plan	<REGEX>:.*Plan Columns: 2.*
+physical_plan	<REGEX>:.*Runs on source:.*MERGE INTO main.target.*Filter.*live.*
 
 query I
 MERGE INTO m.main.target t USING (SELECT id, amt FROM m.main.feed WHERE live) s

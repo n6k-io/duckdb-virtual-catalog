@@ -21,14 +21,14 @@
 
 namespace duckdb {
 
-BridgeCatalog::BridgeCatalog(AttachedDatabase &db, unique_ptr<DuckDBSource> source)
-    : VirtualCatalogBase(db), attach(db, Crossing<DuckDBSource>::Adapt(std::move(source))) {
-	attach.Source<DuckDBSource>().SetTarget(&attach);
+BridgeCatalog::BridgeCatalog(AttachedDatabase &db, unique_ptr<DuckDBSource> source_p)
+    : VirtualCatalogBase(db), source(*source_p), attach(db, std::move(source_p)) {
+	source.SetTarget(&attach);
 }
 
 BridgeCatalog::~BridgeCatalog() {
 	try {
-		attach.Source<DuckDBSource>().SetTarget(nullptr);
+		source.SetTarget(nullptr);
 	} catch (...) { // NOLINT: nothing can be reported from a destructor
 	}
 }
@@ -48,7 +48,7 @@ void BridgeCatalog::Initialize(optional_ptr<ClientContext>, bool load_builtin) {
 }
 
 bool BridgeCatalog::IsBound() {
-	return attach.Source<DuckDBSource>().IsBound();
+	return source.IsBound();
 }
 
 void BridgeCatalog::ThrowUnlessBound() {
@@ -63,7 +63,6 @@ void BridgeCatalog::Bind(const string &bridge_id, const string &token) {
 		throw PermissionException("vcatbridge: the main database is already initialized");
 	}
 	auto redeemed = RedeemBridge(bridge_id, token, GetDatabase());
-	auto &source = attach.Source<DuckDBSource>();
 	source.Bind(*redeemed);
 	source.SetTarget(&attach);
 	attach.Refresh();
@@ -142,7 +141,7 @@ void BridgeCatalog::ThrowIfSchemaStillServed(const string &schema_name) {
 }
 
 BridgeSchemaEntry::BridgeSchemaEntry(BridgeCatalog &catalog, SchemaCatalogEntry &target_schema)
-    : VirtualCatalogSchemaEntryBase(catalog, target_schema), attach(catalog.Attach()) {
+    : VirtualCatalogSchemaEntryBase(catalog, target_schema), attach(catalog.Attach()), source(catalog.Source()) {
 }
 
 optional_ptr<Transaction> BridgeSchemaEntry::TransactionOf(optional_ptr<ClientContext> context) {
@@ -232,7 +231,7 @@ void BridgeSchemaEntry::CollectExtensionPermissions(ClientContext &context, opti
 		row.schema = schema_name;
 		row.name = n;
 		row.kind = "crossing";
-		row.primary_key = described->key;
+		row.primary_key = source.GrantedKey(schema_name, n);
 		for (auto verb : CrossingVerbs()) {
 			if (described->Allows(verb)) {
 				row.verbs.emplace_back(CrossingVerbName(verb));
@@ -247,18 +246,39 @@ BridgeTransactionManager::BridgeTransactionManager(AttachedDatabase &db, Crossin
     : DuckTransactionManager(db), attach(attach_p) {
 }
 
+namespace {
+
+vector<shared_ptr<GrantLedger>> LedgersOf(const unique_ptr<CrossingOpenTransaction> &released) {
+	return released ? GrantLedgersOf(*released) : vector<shared_ptr<GrantLedger>>();
+}
+
+void ResolveLedgers(const vector<shared_ptr<GrantLedger>> &ledgers, bool committed) {
+	for (auto &ledger : ledgers) {
+		ledger->Resolve(committed);
+	}
+}
+
+} // namespace
+
 ErrorData BridgeTransactionManager::CommitTransaction(ClientContext &context, Transaction &transaction) {
 	auto released = attach.Release(transaction);
+	auto ledgers = LedgersOf(released);
 	auto error = DuckTransactionManager::CommitTransaction(context, transaction);
 	if (error.HasError()) {
 		attach.Rollback(std::move(released));
+		ResolveLedgers(ledgers, false);
 		return error;
 	}
-	return attach.Commit(std::move(released));
+	error = attach.Commit(std::move(released));
+	ResolveLedgers(ledgers, !error.HasError());
+	return error;
 }
 
 void BridgeTransactionManager::RollbackTransaction(Transaction &transaction) {
-	attach.Rollback(attach.Release(transaction));
+	auto released = attach.Release(transaction);
+	auto ledgers = LedgersOf(released);
+	attach.Rollback(std::move(released));
+	ResolveLedgers(ledgers, false);
 	DuckTransactionManager::RollbackTransaction(transaction);
 }
 
@@ -329,7 +349,7 @@ void RegisterBridgeCatalog(ExtensionLoader &loader) {
 	ext->create_transaction_manager = CreateBridgeTransactionManager;
 	auto &db = loader.GetDatabaseInstance();
 	StorageExtension::Register(DBConfig::GetConfig(db), VCATBRIDGE_TYPE, std::move(ext));
-	Crossing<DuckDBSource>::RegisterPass(db);
+	RegisterCrossingPass(db);
 
 	ScalarFunction init("vcatbridge_init", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                    BridgeInitFunc);

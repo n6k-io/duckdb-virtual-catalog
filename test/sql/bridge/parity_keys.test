@@ -68,7 +68,7 @@ SELECT vcatbridge_set_policy('v2_parity_keys', 'main.nopk', 'primary_key', {'col
 statement ok
 ATTACH '' AS k (TYPE vcatbridge, ID 'v2_parity_keys', TOKEN 'tok_parity_keys');
 
-# The asserted key is what the catalog reports and what a delete addresses rows by.
+# The asserted key is what the catalog reports.
 query II
 SELECT name, primary_key FROM vcatbridge_table_permissions('k') ORDER BY name;
 ----
@@ -83,11 +83,14 @@ SELECT count(*) FROM memory.main.nopk;
 ----
 1
 
-# The key on `dupes` is a lie, and the write path is what catches it: two source rows for one key.
-statement error
+# A write addresses the source's rows by rowid, not by the asserted key: both rows that match go.
+statement ok
 DELETE FROM k.main.dupes WHERE x = 1;
+
+query I
+SELECT count(*) FROM memory.main.dupes;
 ----
-is not unique on the source
+0
 
 statement ok
 DETACH k;

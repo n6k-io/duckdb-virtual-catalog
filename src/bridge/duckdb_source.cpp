@@ -2,6 +2,8 @@
 
 #include "builtin_functions.hpp"
 #include "crossing_attach.hpp"
+#include "crossing_far.hpp"
+#include "crossing_in_process.hpp"
 #include "policy_config.hpp"
 #include "predicate_fold.hpp"
 
@@ -31,12 +33,15 @@
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/parameter_expression.hpp"
+#include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/query_node/delete_query_node.hpp"
 #include "duckdb/parser/query_node/insert_query_node.hpp"
+#include "duckdb/parser/query_node/merge_query_node.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/query_node/update_query_node.hpp"
 #include "duckdb/parser/statement/delete_statement.hpp"
 #include "duckdb/parser/statement/insert_statement.hpp"
+#include "duckdb/parser/statement/merge_into_statement.hpp"
 #include "duckdb/parser/statement/update_statement.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/parser/tableref/subqueryref.hpp"
@@ -60,6 +65,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>
 
 namespace duckdb {
 
@@ -88,17 +94,6 @@ struct LiveBridge {
 constexpr int64_t PENDING_SOURCE_TTL_SECONDS = 30;
 //! A pending entry is dropped on this many wrong tokens.
 constexpr idx_t MAX_TOKEN_FAILURES = 5;
-
-//! Marks a connection a bridge opened for one autocommit read. A bridge whose source is another bridge
-//! begins its session on that connection, which is inside a transaction only because the read needs
-//! one; the marker lets it read in autocommit too, streaming instead of materializing its result.
-class StreamingReadMarker : public ClientContextState {};
-
-const string &StreamingReadMarkerKey() {
-	static const int anchor = 0;
-	static const string key = "vcatbridge/streaming_read/" + std::to_string(reinterpret_cast<uintptr_t>(&anchor));
-	return key;
-}
 
 const string &LoadNonce() {
 	static const string nonce = UUID::ToString(UUID::GenerateRandomUUID());
@@ -500,32 +495,43 @@ void ThrowIfForeignKeyOracle(GrantTables &tables, const string &schema, const st
 	}
 }
 
-//! Rewrites every unqualified column reference in `expr`, the root included: a set column becomes
-//! its seam column (the value being written), anything else is pinned to the target table.
-void PointCheckAtUpdatedRow(unique_ptr<ParsedExpression> &expr, const string &table, const vector<string> &set_columns,
-                            const CrossingWriteStatement &built, idx_t key_count) {
-	if (expr->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-		auto &column_ref = expr->Cast<ColumnRefExpression>();
-		if (!column_ref.IsQualified()) {
-			auto name = column_ref.GetColumnName();
-			for (idx_t c = 0; c < set_columns.size(); c++) {
-				if (set_columns[c] == name) {
-					expr = make_uniq<ColumnRefExpression>(Identifier(built.seam_columns[key_count + c]),
-					                                      Identifier(built.seam_alias));
-					return;
-				}
-			}
-			expr = make_uniq<ColumnRefExpression>(name, Identifier(table));
-		}
-		return;
-	}
-	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
-		PointCheckAtUpdatedRow(child, table, set_columns, built, key_count);
-	});
+optional_ptr<CatalogEntry> SourceTableEntry(ClientContext &context, const string &catalog, const string &schema,
+                                            const string &name) {
+	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY,
+	                       QualifiedName(Identifier(catalog), Identifier(schema), Identifier(name)));
+	return Catalog::GetEntry(context, lookup, OnEntryNotFound::RETURN_NULL);
 }
 
-void QualifyColumns(unique_ptr<ParsedExpression> &expr, const string &table, const CrossingWriteStatement &built) {
-	PointCheckAtUpdatedRow(expr, table, {}, built, 0);
+//! Rewrites every unqualified column reference in `expr`, the root included: a written column becomes the value
+//! written to it, anything else is pinned to `alias`. Without an alias there is no row to read it from.
+void PointAtWrittenRow(unique_ptr<ParsedExpression> &expr,
+                       const case_insensitive_map_t<const ParsedExpression *> &written,
+                       optional_ptr<const Identifier> alias, const string &table) {
+	if (expr->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+		auto &column_ref = expr->Cast<ColumnRefExpression>();
+		if (column_ref.IsQualified()) {
+			return;
+		}
+		auto name = column_ref.GetColumnName();
+		auto it = written.find(name.GetIdentifierName());
+		if (it != written.end()) {
+			expr = it->second->Copy();
+			return;
+		}
+		if (!alias) {
+			throw PermissionException("vcatbridge: the check predicate on '%s' reads '%s', which the insert does not "
+			                          "write",
+			                          table, name.GetIdentifierName());
+		}
+		expr = make_uniq<ColumnRefExpression>(name, *alias);
+		return;
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    *expr, [&](unique_ptr<ParsedExpression> &child) { PointAtWrittenRow(child, written, alias, table); });
+}
+
+void QualifyColumns(unique_ptr<ParsedExpression> &expr, const Identifier &alias, const string &table) {
+	PointAtWrittenRow(expr, {}, &alias, table);
 }
 
 unique_ptr<ParsedExpression> GuardWithCheck(unique_ptr<ParsedExpression> check, unique_ptr<ParsedExpression> value) {
@@ -566,96 +572,214 @@ unique_ptr<ParsedExpression> And(unique_ptr<ParsedExpression> left, unique_ptr<P
 	                                                               std::move(right));
 }
 
+unique_ptr<ParsedExpression> Filled(unique_ptr<ParsedExpression> predicate,
+                                    const case_insensitive_map_t<Value> &values) {
+	if (predicate) {
+		FillContext(predicate, values);
+	}
+	return predicate;
+}
+
 //! Stands the table behind its select policy: a floor with a policy binds to
-//! `SELECT <columns> FROM catalog.schema.table WHERE <using>`, one without binds to the table.
-CrossingFloorResolver PolicyResolver(const shared_ptr<GrantBook> &grants, const string &source_catalog) {
-	auto values = ContextSnapshot(*grants->context);
-	return [grants, source_catalog = string(source_catalog),
-	        values](const CrossingFloor &floor) -> unique_ptr<TableRef> {
-		if (!Grants(*grants, floor.schema, floor.table, CrossingVerb::SELECT)) {
+//! `SELECT *, rowid FROM catalog.schema.table WHERE <using>` (a view has no rowid), one without binds to the table.
+unique_ptr<TableRef> PolicyFloor(ClientContext &context, GrantBook &grants, const case_insensitive_map_t<Value> &values,
+                                 const string &catalog, const CrossingFloor &floor) {
+	if (floor.verb != CrossingVerb::SELECT && !floor.reads_rows) {
+		return nullptr;
+	}
+	unique_ptr<ParsedExpression> using_predicate;
+	{
+		lock_guard<mutex> guard(grants.lock);
+		auto grant = FindGrant(grants.tables, floor.schema, floor.table);
+		if (!grant || !grant->Has(CrossingVerb::SELECT)) {
 			throw PermissionException("vcatbridge: '%s.%s' does not have 'select' permission", floor.schema,
 			                          floor.table);
 		}
-		auto using_predicate = UsingFor(*grants, floor.schema, floor.table, CrossingVerb::SELECT);
-		if (!using_predicate) {
+		if (grant->select_unrestricted) {
 			return nullptr;
 		}
-		FillContext(using_predicate, values);
-		auto table_ref = make_uniq<BaseTableRef>();
-		table_ref->SetQualifiedName(Identifier(source_catalog), Identifier(floor.schema), Identifier(floor.table));
-		auto node = make_uniq<SelectNode>();
-		for (auto &column : floor.column_names) {
-			node->select_list.push_back(make_uniq<ColumnRefExpression>(Identifier(column), Identifier(floor.table)));
-		}
-		node->from_table = std::move(table_ref);
-		node->where_clause = std::move(using_predicate);
-		auto select = make_uniq<SelectStatement>();
-		select->node = std::move(node);
-		return make_uniq<SubqueryRef>(std::move(select), Identifier(floor.table));
-	};
+		using_predicate = grant->CopyUsing(CrossingVerb::SELECT);
+	}
+	if (!using_predicate) {
+		return nullptr;
+	}
+	FillContext(using_predicate, values);
+	auto entry = SourceTableEntry(context, catalog, floor.schema, floor.table);
+	auto table_ref = make_uniq<BaseTableRef>();
+	table_ref->SetQualifiedName(Identifier(catalog), Identifier(floor.schema), Identifier(floor.table));
+	auto node = make_uniq<SelectNode>();
+	node->select_list.push_back(make_uniq<StarExpression>());
+	if (entry && entry->type == CatalogType::TABLE_ENTRY) {
+		node->select_list.push_back(make_uniq<ColumnRefExpression>(Identifier("rowid")));
+	}
+	node->from_table = std::move(table_ref);
+	node->where_clause = std::move(using_predicate);
+	auto select = make_uniq<SelectStatement>();
+	select->node = std::move(node);
+	return make_uniq<SubqueryRef>(std::move(select), Identifier(floor.table));
 }
 
-//! Grafts the write policies onto the statement crossing built: the using predicate narrows which
-//! rows an update or delete touches, the check guards the first written value with error() so a
-//! violating row fails the statement. An update or delete that reads the rows it writes is narrowed
-//! by the select policy too, on the source's own rows: its key can match more of them than the
-//! select policy showed, as under a collation.
-CrossingWriteShaper PolicyShaper(const shared_ptr<GrantBook> &grants, const CrossingWriteTarget &target) {
-	auto values = ContextSnapshot(*grants->context);
-	auto reads_rows = target.reads_rows && target.verb != CrossingVerb::INSERT;
-	if (reads_rows && !Grants(*grants, target.schema, target.table, CrossingVerb::SELECT)) {
-		throw PermissionException("vcatbridge: '%s.%s' does not have 'select' permission", target.schema, target.table);
+//! The columns an insert without a column list writes, in the order it writes them.
+vector<string> InsertedColumns(ClientContext &context, const string &catalog, const string &schema,
+                               const string &table) {
+	auto entry = SourceTableEntry(context, catalog, schema, table);
+	if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
+		throw CatalogException("vcatbridge: '%s.%s' is no longer on the source", schema, table);
 	}
-	return [grants, target = CrossingWriteTarget(target), values, reads_rows](CrossingWriteStatement &built) {
-		auto using_predicate = UsingFor(*grants, target.schema, target.table, target.verb);
-		auto check = CheckFor(*grants, target.schema, target.table, target.verb);
-		if (reads_rows) {
-			auto visible = UsingFor(*grants, target.schema, target.table, CrossingVerb::SELECT);
-			if (visible) {
-				using_predicate =
-				    using_predicate ? And(std::move(visible), std::move(using_predicate)) : std::move(visible);
-			}
+	vector<string> columns;
+	for (auto &column : entry->Cast<TableCatalogEntry>().GetColumns().Logical()) {
+		if (!column.Generated()) {
+			columns.push_back(column.GetName().GetIdentifierName());
 		}
+	}
+	return columns;
+}
+
+case_insensitive_map_t<const ParsedExpression *> WrittenValues(const vector<string> &columns,
+                                                               const vector<unique_ptr<ParsedExpression>> &values,
+                                                               const string &table) {
+	if (columns.size() != values.size()) {
+		throw PermissionException("vcatbridge: a write to '%s' names %llu columns but writes %llu values", table,
+		                          static_cast<uint64_t>(columns.size()), static_cast<uint64_t>(values.size()));
+	}
+	case_insensitive_map_t<const ParsedExpression *> written;
+	for (idx_t c = 0; c < columns.size(); c++) {
+		written[columns[c]] = values[c].get();
+	}
+	return written;
+}
+
+vector<string> NamesOf(const vector<Identifier> &identifiers) {
+	vector<string> names;
+	for (auto &identifier : identifiers) {
+		names.push_back(identifier.GetIdentifierName());
+	}
+	return names;
+}
+
+//! The check guards the first written value with error(), so a violating row fails the statement.
+void GuardWrittenValues(unique_ptr<ParsedExpression> check, const vector<string> &columns,
+                        vector<unique_ptr<ParsedExpression>> &values, optional_ptr<const Identifier> alias,
+                        const string &table) {
+	if (!check) {
+		return;
+	}
+	if (values.empty()) {
+		throw PermissionException("vcatbridge: a write of default values to '%s' cannot be held to its check "
+		                          "predicate",
+		                          table);
+	}
+	PointAtWrittenRow(check, WrittenValues(columns, values, table), alias, table);
+	values[0] = GuardWithCheck(std::move(check), std::move(values[0]));
+}
+
+struct WriteTarget {
+	string schema;
+	string table;
+	Identifier alias;
+};
+
+WriteTarget WriteTargetOf(const TableRef &ref) {
+	auto &name = ref.Cast<BaseTableRef>().GetQualifiedName();
+	return {name.Schema().GetIdentifierName(), name.Name().GetIdentifierName(), ref.alias};
+}
+
+//! Grafts the write policies onto a write far is about to bind: the using predicate narrows which rows an update
+//! or delete touches, the check guards the values written. The select policy narrows an update or delete already,
+//! through PolicyFloor.
+void ShapeWrite(ClientContext &context, const string &catalog, GrantBook &grants,
+                const case_insensitive_map_t<Value> &values, SQLStatement &statement) {
+	switch (statement.type) {
+	case StatementType::INSERT_STATEMENT: {
+		auto &insert = *statement.Cast<InsertStatement>().node;
+		auto schema = insert.qualified_name.Schema().GetIdentifierName();
+		auto table = insert.qualified_name.Name().GetIdentifierName();
+		auto check = Filled(CheckFor(grants, schema, table, CrossingVerb::INSERT), values);
+		if (!check) {
+			return;
+		}
+		if (!insert.select_statement) {
+			throw PermissionException("vcatbridge: a write of default values to '%s' cannot be held to its check "
+			                          "predicate",
+			                          table);
+		}
+		auto columns = insert.columns.empty() ? InsertedColumns(context, catalog, schema, table) : NamesOf(insert.columns);
+		auto &select = insert.select_statement->node->Cast<SelectNode>();
+		GuardWrittenValues(std::move(check), columns, select.select_list, nullptr, table);
+		return;
+	}
+	case StatementType::UPDATE_STATEMENT: {
+		auto &update = *statement.Cast<UpdateStatement>().node;
+		auto target = WriteTargetOf(*update.table);
+		auto &set_info = *update.set_info;
+		auto using_predicate = Filled(UsingFor(grants, target.schema, target.table, CrossingVerb::UPDATE), values);
 		if (using_predicate) {
-			FillContext(using_predicate, values);
+			QualifyColumns(using_predicate, target.alias, target.table);
+			set_info.condition = And(std::move(set_info.condition), std::move(using_predicate));
 		}
-		if (check) {
-			FillContext(check, values);
+		GuardWrittenValues(Filled(CheckFor(grants, target.schema, target.table, CrossingVerb::UPDATE), values),
+		                   NamesOf(set_info.columns), set_info.expressions, &target.alias, target.table);
+		return;
+	}
+	case StatementType::DELETE_STATEMENT: {
+		auto &del = *statement.Cast<DeleteStatement>().node;
+		auto target = WriteTargetOf(*del.table);
+		auto using_predicate = Filled(UsingFor(grants, target.schema, target.table, CrossingVerb::DELETE_), values);
+		if (using_predicate) {
+			QualifyColumns(using_predicate, target.alias, target.table);
+			del.condition = And(std::move(del.condition), std::move(using_predicate));
 		}
-		switch (target.verb) {
-		case CrossingVerb::INSERT: {
-			if (!check) {
-				return;
+		return;
+	}
+	case StatementType::MERGE_INTO_STATEMENT: {
+		auto &merge = *statement.Cast<MergeIntoStatement>().node;
+		auto target = WriteTargetOf(*merge.target);
+		for (auto &when : merge.actions) {
+			for (auto &action : when.second) {
+				switch (action->action_type) {
+				case MergeActionType::MERGE_UPDATE: {
+					auto using_predicate =
+					    Filled(UsingFor(grants, target.schema, target.table, CrossingVerb::UPDATE), values);
+					if (using_predicate) {
+						QualifyColumns(using_predicate, target.alias, target.table);
+						action->condition = And(std::move(action->condition), std::move(using_predicate));
+					}
+					auto &set_info = *action->update_info;
+					GuardWrittenValues(
+					    Filled(CheckFor(grants, target.schema, target.table, CrossingVerb::UPDATE), values),
+					    NamesOf(set_info.columns), set_info.expressions, &target.alias, target.table);
+					break;
+				}
+				case MergeActionType::MERGE_DELETE: {
+					auto using_predicate =
+					    Filled(UsingFor(grants, target.schema, target.table, CrossingVerb::DELETE_), values);
+					if (using_predicate) {
+						QualifyColumns(using_predicate, target.alias, target.table);
+						action->condition = And(std::move(action->condition), std::move(using_predicate));
+					}
+					break;
+				}
+				case MergeActionType::MERGE_INSERT: {
+					auto check = Filled(CheckFor(grants, target.schema, target.table, CrossingVerb::INSERT), values);
+					if (!check) {
+						break;
+					}
+					auto columns = action->insert_columns.empty()
+					                   ? InsertedColumns(context, catalog, target.schema, target.table)
+					                   : NamesOf(action->insert_columns);
+					GuardWrittenValues(std::move(check), columns, action->expressions, nullptr, target.table);
+					break;
+				}
+				default:
+					break;
+				}
 			}
-			auto &select = built.statement->Cast<InsertStatement>().node->select_statement->node->Cast<SelectNode>();
-			PointCheckAtUpdatedRow(check, target.table, target.set_columns, built, 0);
-			select.select_list[0] = GuardWithCheck(std::move(check), std::move(select.select_list[0]));
-			return;
 		}
-		case CrossingVerb::UPDATE: {
-			auto &set_info = *built.statement->Cast<UpdateStatement>().node->set_info;
-			if (using_predicate) {
-				QualifyColumns(using_predicate, target.table, built);
-				set_info.condition = And(std::move(set_info.condition), std::move(using_predicate));
-			}
-			if (check) {
-				PointCheckAtUpdatedRow(check, target.table, target.set_columns, built, target.key_columns.size());
-				set_info.expressions[0] = GuardWithCheck(std::move(check), std::move(set_info.expressions[0]));
-			}
-			return;
-		}
-		case CrossingVerb::DELETE_: {
-			auto &del = *built.statement->Cast<DeleteStatement>().node;
-			if (using_predicate) {
-				QualifyColumns(using_predicate, target.table, built);
-				del.condition = And(std::move(del.condition), std::move(using_predicate));
-			}
-			return;
-		}
-		default:
-			return;
-		}
-	};
+		return;
+	}
+	default:
+		throw InternalException("vcatbridge: far was handed a %s as a write", StatementTypeToString(statement.type));
+	}
 }
 
 string RequiredAttachOption(AttachInfo &info, const char *key) {
@@ -744,13 +868,6 @@ void ThrowIfOtherCatalog(const PolicyName &name, const string &catalog) {
 		throw IOException("vcatbridge: '%s' names catalog '%s', but this bridge's source catalog is '%s'",
 		                  name.ToString(), name.catalog, catalog);
 	}
-}
-
-optional_ptr<CatalogEntry> SourceTableEntry(ClientContext &context, const string &catalog, const string &schema,
-                                            const string &name) {
-	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY,
-	                       QualifiedName(Identifier(catalog), Identifier(schema), Identifier(name)));
-	return Catalog::GetEntry(context, lookup, OnEntryNotFound::RETURN_NULL);
 }
 
 CatalogEntry &GrantableEntry(Connection &source_conn, const string &catalog, const PolicyName &name) {
@@ -1763,24 +1880,40 @@ CrossingSchema DuckDBSource::DescribeSchema(const string &schema) {
 	return described;
 }
 
+vector<CrossingVerb> DuckDBSource::GrantedVerbs(const string &schema, const string &name) {
+	lock_guard<mutex> guard(grants->lock);
+	vector<CrossingVerb> verbs;
+	auto grant = FindGrant(grants->tables, schema, name);
+	if (!grant) {
+		return verbs;
+	}
+	for (auto verb : CrossingVerbs()) {
+		if (grant->Has(verb)) {
+			verbs.push_back(verb);
+		}
+	}
+	return verbs;
+}
+
+vector<string> DuckDBSource::GrantedKey(const string &schema, const string &name) {
+	ThrowUnlessBound();
+	lock_guard<mutex> guard(grants->lock);
+	auto grant = FindGrant(grants->tables, schema, name);
+	return grant ? grant->key : vector<string>();
+}
+
 CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 	ThrowUnlessBound();
-	uint8_t verbs;
-	vector<string> key;
-	bool key_verified;
 	{
 		lock_guard<mutex> guard(grants->lock);
-		auto grant = FindGrant(grants->tables, schema, name);
-		if (!grant) {
+		if (!FindGrant(grants->tables, schema, name)) {
 			throw CatalogException("vcatbridge: '%s.%s' is not granted", schema, name);
 		}
-		verbs = grant->verbs;
-		key = grant->key;
-		key_verified = grant->key_verified;
 	}
 
 	CrossingTable table;
 	table.name = name;
+	table.returning = true;
 	const auto describe = [&](ClientContext &context, const string &catalog) {
 		auto entry = SourceTableEntry(context, catalog, schema, name);
 		if (!IsGrantable(entry)) {
@@ -1794,6 +1927,7 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 			for (idx_t i = 0; i < names.size(); i++) {
 				table.Column(names[i].GetIdentifierName(), columns->types[i]);
 			}
+			table.row_ids = false;
 			return;
 		}
 		auto &source_table = entry->Cast<TableCatalogEntry>();
@@ -1808,138 +1942,467 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 		}
 	};
 
-	shared_ptr<Connection> shaping;
-	{
-		lock_guard<mutex> guard(grants->lock);
-		auto it = grants->shaping.find(schema + "." + name);
-		if (it != grants->shaping.end()) {
-			shaping = it->second;
-		}
-	}
-	if (shaping) {
-		describe(*shaping->context, source.Use(*shaping->context));
-	} else {
-		WithSourceTransaction(*Database(), source,
-		                      [&](Connection &conn, const string &catalog) { describe(*conn.context, catalog); });
-	}
-
-	for (auto verb : CrossingVerbs()) {
-		if ((verbs & static_cast<uint8_t>(1u << static_cast<uint8_t>(verb))) != 0) {
-			table.verbs.push_back(verb);
-		}
-	}
-	table.key = std::move(key);
-	table.key_unique = !table.key.empty() && key_verified;
+	WithSourceTransaction(*Database(), source,
+	                      [&](Connection &conn, const string &catalog) { describe(*conn.context, catalog); });
+	table.verbs = GrantedVerbs(schema, name);
 	return table;
 }
 
-DuckDBSession::DuckDBSession(shared_ptr<DatabaseInstance> source_db_p, SourcePin source_p,
-                             shared_ptr<GrantBook> grants_p, bool autocommit_p)
-    : source_db(std::move(source_db_p)), source(std::move(source_p)), grants(std::move(grants_p)),
-      autocommit(autocommit_p) {
+void DuckDBSource::DescribeChanged(const string &schema, CrossingTable &table) {
+	ThrowUnlessBound();
+	CrossingSource::DescribeChanged(schema, table);
+	table.verbs = GrantedVerbs(schema, table.name);
 }
 
-DuckDBSession::~DuckDBSession() {
-	if (grant_undo.empty()) {
-		return;
-	}
-	lock_guard<mutex> guard(grants->lock);
-	ForgetGrantUndo();
+GrantLedger::GrantLedger(shared_ptr<GrantBook> grants_p) : grants(std::move(grants_p)) {
 }
 
-shared_ptr<Connection> DuckDBSession::Shared() {
-	lock_guard<mutex> guard(lock);
-	if (!conn) {
-		conn = make_shared_ptr<Connection>(*source_db);
-		conn->BeginTransaction();
-	}
-	return conn;
+GrantLedger::~GrantLedger() {
+	Resolve(false);
 }
 
-void DuckDBSession::ForgetShaping() {
-	if (!conn) {
-		return;
-	}
-	for (auto it = grants->shaping.begin(); it != grants->shaping.end();) {
-		it = it->second == conn ? grants->shaping.erase(it) : std::next(it);
-	}
-}
-
-void DuckDBSession::PushGrantUndo(std::function<void()> undo) {
-	grant_undo.push_back(std::move(undo));
+void GrantLedger::Push(std::function<void()> entry) {
+	undo.push_back(std::move(entry));
 	grants->uncommitted_ddl++;
 }
 
-void DuckDBSession::ForgetGrantUndo() {
-	grants->uncommitted_ddl -= grant_undo.size();
-	grant_undo.clear();
+void GrantLedger::Forget() {
+	grants->uncommitted_ddl -= undo.size();
+	undo.clear();
 }
 
-void DuckDBSession::UndoGrants() {
-	for (auto it = grant_undo.rbegin(); it != grant_undo.rend(); ++it) {
-		(*it)();
+void GrantLedger::Resolve(bool committed) {
+	lock_guard<mutex> guard(grants->lock);
+	if (!committed) {
+		for (auto it = undo.rbegin(); it != undo.rend(); ++it) {
+			(*it)();
+		}
 	}
-	ForgetGrantUndo();
+	Forget();
 }
 
-void DuckDBSession::Commit() {
-	lock_guard<mutex> guard(lock);
-	if (!conn) {
-		return;
+namespace {
+
+struct DdlTarget {
+	CrossingVerb verb;
+	string schema;
+	string table;
+	optional_ptr<const CreateInfo> create;
+	optional_ptr<const AlterInfo> alter;
+	optional_ptr<const DropInfo> drop;
+};
+
+DdlTarget DdlTargetOf(const SQLStatement &statement) {
+	DdlTarget ddl;
+	QualifiedName name;
+	switch (statement.type) {
+	case StatementType::CREATE_STATEMENT:
+		ddl.verb = CrossingVerb::CREATE;
+		ddl.create = statement.Cast<CreateStatement>().info.get();
+		name = ddl.create->GetQualifiedName();
+		break;
+	case StatementType::ALTER_STATEMENT:
+		ddl.verb = CrossingVerb::ALTER;
+		ddl.alter = statement.Cast<AlterStatement>().info.get();
+		name = ddl.alter->GetQualifiedName();
+		break;
+	case StatementType::DROP_STATEMENT:
+		ddl.verb = CrossingVerb::DROP;
+		ddl.drop = statement.Cast<DropStatement>().info.get();
+		name = ddl.drop->GetQualifiedName();
+		break;
+	default:
+		throw InternalException("vcatbridge: far was handed a %s as DDL", StatementTypeToString(statement.type));
 	}
-	try {
-		conn->Commit();
-	} catch (...) {
-		lock_guard<mutex> grants_guard(grants->lock);
-		UndoGrants();
-		ForgetShaping();
-		conn.reset();
-		throw;
-	}
-	lock_guard<mutex> grants_guard(grants->lock);
-	ForgetGrantUndo();
-	ForgetShaping();
-	conn.reset();
+	ddl.schema = name.Schema().GetIdentifierName();
+	ddl.table = name.Name().GetIdentifierName();
+	return ddl;
 }
 
-void DuckDBSession::Rollback() {
-	lock_guard<mutex> guard(lock);
+bool CreateWouldCreate(GrantBook &grants, ClientContext &context, const string &catalog, const DdlTarget &ddl) {
+	auto existing = SourceTableEntry(context, catalog, ddl.schema, ddl.table);
+	if (!existing) {
+		return true;
+	}
+	switch (ddl.create->on_conflict) {
+	case OnCreateConflict::IGNORE_ON_CONFLICT:
+		return false;
+	case OnCreateConflict::REPLACE_ON_CONFLICT: {
+		lock_guard<mutex> guard(grants.lock);
+		if (!FindGrant(grants.tables, ddl.schema, ddl.table)) {
+			throw PermissionException("vcatbridge: '%s' does not have '%s' permission", ddl.table,
+			                          CrossingVerbName(CrossingVerb::DROP));
+		}
+		return true;
+	}
+	default:
+		return true;
+	}
+}
+
+//! Throws unless both the alter grant and the select policy fold to true under the current context: an ALTER
+//! runs over every row on the source, including rows the select policy would hide from this target.
+void ThrowUnlessAlterGrantedOverFullTable(GrantBook &grants, ClientContext &source_context, const string &catalog,
+                                          const DdlTarget &ddl) {
+	bool alter_granted = false;
+	bool select_granted = false;
+	unique_ptr<ParsedExpression> alter_using;
+	unique_ptr<ParsedExpression> select_using;
 	{
-		lock_guard<mutex> grants_guard(grants->lock);
-		UndoGrants();
-		ForgetShaping();
+		lock_guard<mutex> guard(grants.lock);
+		auto grant = FindGrant(grants.tables, ddl.schema, ddl.table);
+		if (grant) {
+			alter_granted = grant->Has(CrossingVerb::ALTER);
+			select_granted = grant->Has(CrossingVerb::SELECT);
+			alter_using = grant->CopyUsing(CrossingVerb::ALTER);
+			select_using = grant->CopyUsing(CrossingVerb::SELECT);
+		}
 	}
-	if (!conn) {
-		return;
+	auto values = ContextSnapshot(*grants.context);
+	const auto holds = [&](bool granted, unique_ptr<ParsedExpression> &predicate) {
+		if (!granted || !predicate) {
+			return granted;
+		}
+		FillContext(predicate, values);
+		return PredicateFoldsToTrue(source_context, catalog, ddl.schema, ddl.table, *predicate);
+	};
+	if (!holds(alter_granted, alter_using)) {
+		throw PermissionException("vcatbridge: '%s' does not have '%s' permission", ddl.table,
+		                          CrossingVerbName(CrossingVerb::ALTER));
 	}
-	try {
-		conn->Rollback();
-	} catch (...) { // NOLINT: the target's transaction is already resolving
+	if (!holds(select_granted, select_using)) {
+		throw PermissionException("vcatbridge: the select policy on '%s.%s' hides rows, so the target "
+		                          "cannot see the full table and cannot alter it",
+		                          ddl.schema, ddl.table);
 	}
-	conn.reset();
 }
 
-unique_ptr<DuckDBSession> DuckDBSource::Begin(ClientContext &context) {
+//! The source checks a foreign key over every referenced row, hidden ones included.
+void ThrowIfCreateDeclaresForeignKey(const DdlTarget &ddl) {
+	if (ddl.create->type != CatalogType::TABLE_ENTRY) {
+		return;
+	}
+	for (auto &constraint : ddl.create->Cast<CreateTableInfo>().constraints) {
+		if (constraint->type == ConstraintType::FOREIGN_KEY) {
+			throw PermissionException("vcatbridge: a table created from the target cannot declare a foreign key");
+		}
+	}
+}
+
+//! Non-constant defaults, CHECKs and generated columns are stored on the source and run on the owner's later
+//! inserts; an ALTER COLUMN TYPE ... USING cast runs on the source at once. Each would run over rows the
+//! target cannot see.
+void ThrowIfDdlCarriesExpression(const DdlTarget &ddl) {
+	if (ddl.create && ddl.create->type == CatalogType::TABLE_ENTRY) {
+		auto &create = ddl.create->Cast<CreateTableInfo>();
+		for (auto &column : create.columns.Logical()) {
+			ThrowIfColumnRunsOnSource(column);
+		}
+		for (auto &constraint : create.constraints) {
+			if (constraint->type == ConstraintType::CHECK) {
+				throw PermissionException(
+				    "vcatbridge: a table created from the target cannot declare a CHECK constraint");
+			}
+		}
+		return;
+	}
+	if (!ddl.alter || ddl.alter->type != AlterType::ALTER_TABLE) {
+		return;
+	}
+	auto &alter = ddl.alter->Cast<AlterTableInfo>();
+	switch (alter.alter_table_type) {
+	case AlterTableType::ADD_COLUMN:
+		ThrowIfColumnRunsOnSource(alter.Cast<AddColumnInfo>().new_column);
+		break;
+	case AlterTableType::ADD_FIELD:
+		ThrowIfColumnRunsOnSource(alter.Cast<AddFieldInfo>().new_field);
+		break;
+	case AlterTableType::SET_DEFAULT:
+		if (alter.Cast<SetDefaultInfo>().expression) {
+			ThrowUnlessConstantDefault(*alter.Cast<SetDefaultInfo>().expression);
+		}
+		break;
+	case AlterTableType::ALTER_COLUMN_TYPE:
+		ThrowIfTypeChangeHasUsing(alter.Cast<ChangeColumnTypeInfo>());
+		break;
+	default:
+		break;
+	}
+}
+
+void ThrowIfAlterOrphansPolicy(GrantBook &grants, const DdlTarget &ddl) {
+	if (ddl.alter->type != AlterType::ALTER_TABLE) {
+		return;
+	}
+	auto &alter = ddl.alter->Cast<AlterTableInfo>();
+	string column;
+	switch (alter.alter_table_type) {
+	case AlterTableType::RENAME_COLUMN:
+		column = alter.Cast<RenameColumnInfo>().old_name.GetIdentifierName();
+		break;
+	case AlterTableType::REMOVE_COLUMN:
+		column = alter.Cast<RemoveColumnInfo>().removed_column.GetIdentifierName();
+		break;
+	case AlterTableType::ALTER_COLUMN_TYPE:
+		column = alter.Cast<ChangeColumnTypeInfo>().column_path[0].GetIdentifierName();
+		break;
+	default:
+		return;
+	}
+	lock_guard<mutex> guard(grants.lock);
+	auto found = FindGrant(grants.tables, ddl.schema, ddl.table);
+	if (!found) {
+		return;
+	}
+	auto &grant = *found;
+	bool orphaned = false;
+	for (auto &key_column : grant.key) {
+		orphaned = orphaned || StringUtil::CIEquals(key_column, column);
+	}
+	const auto mentions = [&](const ParsedExpression &expr) {
+		bool found = false;
+		std::function<void(const ParsedExpression &)> visit = [&](const ParsedExpression &node) {
+			if (node.GetExpressionClass() == ExpressionClass::COLUMN_REF &&
+			    node.Cast<ColumnRefExpression>().GetColumnName() == column) {
+				found = true;
+			}
+			ParsedExpressionIterator::EnumerateChildren(node, visit);
+		};
+		visit(expr);
+		return found;
+	};
+	for (idx_t v = 0; v < CrossingVerbs().size() && !orphaned; v++) {
+		orphaned = (grant.using_predicates[v] && mentions(*grant.using_predicates[v])) ||
+		           (grant.check_predicates[v] && mentions(*grant.check_predicates[v]));
+	}
+	if (orphaned) {
+		throw IOException("vcatbridge: '%s' is the key or a policy column of '%s.%s'", column, ddl.schema, ddl.table);
+	}
+}
+
+vector<string> DeclaredKeyColumns(const CreateInfo &create) {
+	vector<string> key;
+	if (create.type != CatalogType::TABLE_ENTRY) {
+		return key;
+	}
+	auto &table = create.Cast<CreateTableInfo>();
+	for (auto &constraint : table.constraints) {
+		if (constraint->type != ConstraintType::UNIQUE) {
+			continue;
+		}
+		auto &unique = constraint->Cast<UniqueConstraint>();
+		if (!unique.IsPrimaryKey()) {
+			continue;
+		}
+		if (unique.HasIndex()) {
+			key.push_back(table.columns.GetColumn(unique.GetIndex()).GetName().GetIdentifierName());
+		} else {
+			for (auto &column : unique.GetColumnNames()) {
+				key.push_back(column.GetIdentifierName());
+			}
+		}
+		break;
+	}
+	return key;
+}
+
+void RecordDdl(const shared_ptr<GrantBook> &book, GrantLedger &ledger, const DdlTarget &ddl) {
+	lock_guard<mutex> guard(book->lock);
+	auto schema_name = ddl.schema;
+	auto table_name = ddl.table;
+	auto &schema = book->tables[schema_name];
+	switch (ddl.verb) {
+	case CrossingVerb::CREATE: {
+		SourceGrant grant;
+		grant.discovered_key = DeclaredKeyColumns(*ddl.create);
+		grant.key = grant.discovered_key;
+		auto view = ddl.create->type == CatalogType::VIEW_ENTRY;
+		for (auto verb : CrossingVerbs()) {
+			if (view && verb != CrossingVerb::SELECT && verb != CrossingVerb::CREATE && verb != CrossingVerb::DROP) {
+				continue;
+			}
+			grant.Allow(verb);
+		}
+		shared_ptr<SourceGrant> replaced;
+		auto it = schema.find(table_name);
+		if (it != schema.end()) {
+			replaced = make_shared_ptr<SourceGrant>(std::move(it->second));
+		}
+		schema[table_name] = std::move(grant);
+		ledger.Push([book, schema_name, table_name, replaced]() {
+			if (replaced) {
+				book->tables[schema_name][table_name] = std::move(*replaced);
+			} else {
+				book->tables[schema_name].erase(table_name);
+			}
+		});
+		return;
+	}
+	case CrossingVerb::DROP: {
+		auto it = schema.find(table_name);
+		if (it == schema.end()) {
+			return;
+		}
+		auto dropped = make_shared_ptr<SourceGrant>(std::move(it->second));
+		schema.erase(it);
+		ledger.Push([book, schema_name, table_name, dropped]() {
+			book->tables[schema_name][table_name] = std::move(*dropped);
+		});
+		return;
+	}
+	default:
+		break;
+	}
+	if (ddl.alter->type != AlterType::ALTER_TABLE) {
+		return;
+	}
+	auto &alter = ddl.alter->Cast<AlterTableInfo>();
+	if (alter.alter_table_type != AlterTableType::RENAME_TABLE) {
+		return;
+	}
+	auto it = schema.find(table_name);
+	if (it == schema.end()) {
+		return;
+	}
+	auto new_name = alter.Cast<RenameTableInfo>().new_table_name.GetIdentifierName();
+	auto moved = std::move(it->second);
+	schema.erase(it);
+	schema[new_name] = std::move(moved);
+	ledger.Push([book, schema_name, table_name, new_name]() {
+		auto &tables = book->tables[schema_name];
+		auto renamed = tables.find(new_name);
+		if (renamed == tables.end()) {
+			return;
+		}
+		auto back = std::move(renamed->second);
+		tables.erase(renamed);
+		tables[table_name] = std::move(back);
+	});
+}
+
+void ShapeDdl(ClientContext &context, const string &catalog, const shared_ptr<GrantBook> &grants,
+              GrantLedger &ledger, SQLStatement &statement) {
+	auto ddl = DdlTargetOf(statement);
+	switch (ddl.verb) {
+	case CrossingVerb::CREATE:
+		ThrowIfCreateDeclaresForeignKey(ddl);
+		ThrowIfDdlCarriesExpression(ddl);
+		break;
+	case CrossingVerb::ALTER:
+		ThrowIfDdlCarriesExpression(ddl);
+		ThrowUnlessAlterGrantedOverFullTable(*grants, context, catalog, ddl);
+		ThrowIfAlterOrphansPolicy(*grants, ddl);
+		break;
+	default:
+		break;
+	}
+	if (ddl.verb != CrossingVerb::CREATE || CreateWouldCreate(*grants, context, catalog, ddl)) {
+		RecordDdl(grants, ledger, ddl);
+	}
+}
+
+//! One far transaction on the source, served on a thread of its own under the bridge's policies.
+class BridgeLink : public CrossingLink {
+public:
+	BridgeLink(shared_ptr<DatabaseInstance> db_p, SourcePin source_p, string catalog_p, shared_ptr<GrantBook> grants_p)
+	    : db(std::move(db_p)), source(std::move(source_p)), catalog(std::move(catalog_p)),
+	      grants(std::move(grants_p)), values(ContextSnapshot(*grants->context)),
+	      ledger(make_shared_ptr<GrantLedger>(grants)), connection(*db), far(connection, catalog, Options()) {
+		serving = std::thread([this]() {
+			try {
+				far.Serve(pair.Far());
+			} catch (...) { // NOLINT: Serve has closed the link with the error; nothing on this thread can report it
+			}
+		});
+	}
+	~BridgeLink() override {
+		if (serving.joinable()) {
+			serving.join();
+		}
+	}
+
+	idx_t Streams() override {
+		return pair.Near().Streams();
+	}
+	unique_ptr<CrossingStream> Open(idx_t id, optional_ptr<CrossingReceiver> receiver) override {
+		return pair.Near().Open(id, receiver);
+	}
+
+	const shared_ptr<GrantLedger> &Ledger() const {
+		return ledger;
+	}
+
+private:
+	//! The far connection, with the pinned source bound into its transaction.
+	ClientContext &Pinned() {
+		auto &context = *connection.context;
+		source.Use(context);
+		return context;
+	}
+
+	CrossingFarOptions Options() {
+		CrossingFarOptions options;
+		options.catalogs = [this](const string &named) {
+			auto pinned = source.Use(*connection.context);
+			if (!StringUtil::CIEquals(named, pinned)) {
+				throw PermissionException("vcatbridge: a plan names catalog '%s', but this bridge's source catalog "
+				                          "is '%s'",
+				                          named, pinned);
+			}
+		};
+		options.floors = [this](const CrossingFloor &floor) {
+			return PolicyFloor(Pinned(), *grants, values, catalog, floor);
+		};
+		options.writes = [this](SQLStatement &statement) {
+			ShapeWrite(Pinned(), catalog, *grants, values, statement);
+		};
+		options.ddl = [this](SQLStatement &statement) {
+			ShapeDdl(Pinned(), catalog, grants, *ledger, statement);
+		};
+		return options;
+	}
+
+	shared_ptr<DatabaseInstance> db;
+	SourcePin source;
+	string catalog;
+	shared_ptr<GrantBook> grants;
+	case_insensitive_map_t<Value> values;
+	shared_ptr<GrantLedger> ledger;
+	CrossingLinkPair pair;
+	Connection connection;
+	CrossingFar far;
+	std::thread serving;
+};
+
+void CollectLedgers(const CrossingOpenTransaction &transaction, vector<shared_ptr<GrantLedger>> &out) {
+	if (auto link = dynamic_cast<BridgeLink *>(transaction.link.get())) {
+		out.push_back(link->Ledger());
+	}
+	for (auto &finished : transaction.finished) {
+		CollectLedgers(*finished, out);
+	}
+}
+
+} // namespace
+
+vector<shared_ptr<GrantLedger>> GrantLedgersOf(const CrossingOpenTransaction &transaction) {
+	vector<shared_ptr<GrantLedger>> out;
+	CollectLedgers(transaction, out);
+	return out;
+}
+
+unique_ptr<CrossingLink> DuckDBSource::Connect(ClientContext &) {
 	ThrowUnlessBound();
-	auto autocommit = context.transaction.IsAutoCommit() ||
-	                  context.registered_state->Get<StreamingReadMarker>(StreamingReadMarkerKey()) != nullptr;
-	return make_uniq<DuckDBSession>(Database(), source, grants, autocommit);
+	auto db = Database();
+	string catalog;
+	WithSourceTransaction(*db, source, [&](Connection &, const string &name) { catalog = name; });
+	return make_uniq<BridgeLink>(std::move(db), source, std::move(catalog), grants);
 }
 
 shared_ptr<Connection> DuckDBSource::PlanningConnection() {
 	auto planning = make_shared_ptr<Connection>(*Database());
 	planning->BeginTransaction();
 	return planning;
-}
-
-CrossingPlan DuckDBSource::Plan(const CrossingPlanRequest &request) {
-	ThrowUnlessBound();
-	if (request.verb == CrossingVerb::SELECT) {
-		auto &described = *request.described;
-		return CrossingPlan::Of(
-		    MakeFloorNode(request.schema, request.table, described.column_names, described.column_types));
-	}
-	return CrossingPlan::Of(MakeSeamNode(request.seam.types));
 }
 
 bool DuckDBSource::SourceHasFunction(const BoundSimpleFunction &function, CatalogType type) {
@@ -2000,396 +2463,6 @@ CrossingVerdict DuckDBSource::AcceptsCall(const Expression &expr) {
 CrossingVerdict DuckDBSource::AcceptsType(const LogicalType &type) {
 	ThrowUnlessBound();
 	return CrossingVerdict::Yes();
-}
-
-CrossingWriter DuckDBSession::Write(ClientContext &, const CrossingQuery &query) {
-	return [this, &query](ClientContext &, const CrossingWaker &) {
-		auto write_conn = Shared();
-		auto &context = *write_conn->context;
-		auto catalog = source.Use(context);
-		CrossingWriteTarget target;
-		target.catalog = catalog;
-		target.schema = query.written.schema;
-		target.table = query.written.table;
-		target.verb = query.kind;
-		target.key_columns = query.key_columns;
-		target.set_columns = query.set_columns;
-		target.reads_rows = query.reads_rows;
-		auto shape = PolicyShaper(grants, target);
-		if (query.types.empty()) {
-			return CrossingWriteResult::Done(ExecuteWrite(context, target, unique_ptr<TableRef>(), shape));
-		}
-		if (auto rows = SeamRowsOf(query.plan)) {
-			return CrossingWriteResult::Done(ExecuteWrite(context, target, SeamRefOfRows(*rows), shape));
-		}
-		auto plan = DeserializeCrossingPlan(context, SerializeCrossingPlan(query.plan));
-		BindFloors(context, plan, catalog, PolicyResolver(grants, catalog));
-		return CrossingWriteResult::Done(ExecuteWrite(context, target, std::move(plan), shape));
-	};
-}
-
-void DuckDBSession::Ddl(ClientContext &, const CrossingDdl &ddl) {
-	auto ddl_conn = Shared();
-	auto &source_conn = *ddl_conn;
-	auto catalog = source.Use(*source_conn.context);
-	unique_ptr<SQLStatement> statement;
-	idx_t modification;
-	switch (ddl.verb) {
-	case CrossingVerb::CREATE: {
-		ThrowIfCreateDeclaresForeignKey(ddl);
-		ThrowIfDdlCarriesExpression(ddl);
-		auto create = make_uniq<CreateStatement>();
-		create->info = ddl.create->Copy();
-		create->info->SetCatalog(Identifier(catalog));
-		statement = std::move(create);
-		modification = DatabaseModificationType::CREATE_CATALOG_ENTRY;
-		break;
-	}
-	case CrossingVerb::ALTER: {
-		ThrowIfDdlCarriesExpression(ddl);
-		auto alter = make_uniq<AlterStatement>();
-		alter->info = ddl.alter->Copy();
-		auto &altered = alter->info->GetQualifiedName();
-		alter->info->SetQualifiedName(Identifier(catalog), altered.Schema(), altered.Name());
-		statement = std::move(alter);
-		modification = DatabaseModificationType::ALTER_TABLE;
-		break;
-	}
-	case CrossingVerb::DROP: {
-		auto drop = make_uniq<DropStatement>();
-		drop->info = ddl.drop->Copy();
-		drop->info->SetCatalog(Identifier(catalog));
-		statement = std::move(drop);
-		modification = DatabaseModificationType::DROP_CATALOG_ENTRY;
-		break;
-	}
-	default:
-		throw InternalException("vcatbridge: '%s' is not a DDL verb", CrossingVerbName(ddl.verb));
-	}
-
-	auto creates = ddl.verb != CrossingVerb::CREATE || CreateWouldCreate(source_conn, catalog, ddl);
-	if (ddl.verb == CrossingVerb::ALTER) {
-		ThrowUnlessAlterGrantedOverFullTable(*source_conn.context, catalog, ddl);
-		ThrowIfAlterOrphansPolicy(ddl);
-	}
-	auto &attached = Catalog::GetCatalog(*source_conn.context, Identifier(catalog)).GetAttached();
-	MetaTransaction::Get(*source_conn.context).ModifyDatabase(attached, modification);
-
-	auto result = source_conn.context->Query(std::move(statement), QueryParameters());
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("vcatbridge: ddl on source failed: ");
-	}
-	if (creates) {
-		RecordDdl(ddl_conn, catalog, ddl);
-	}
-}
-
-bool DuckDBSession::CreateWouldCreate(Connection &source_conn, const string &catalog, const CrossingDdl &ddl) {
-	auto existing = SourceTableEntry(*source_conn.context, catalog, ddl.schema, ddl.table);
-	if (!existing) {
-		return true;
-	}
-	switch (ddl.create->on_conflict) {
-	case OnCreateConflict::IGNORE_ON_CONFLICT:
-		return false;
-	case OnCreateConflict::REPLACE_ON_CONFLICT: {
-		lock_guard<mutex> guard(grants->lock);
-		if (!FindGrant(grants->tables, ddl.schema, ddl.table)) {
-			throw PermissionException("vcatbridge: '%s' does not have '%s' permission", ddl.table,
-			                          CrossingVerbName(CrossingVerb::DROP));
-		}
-		return true;
-	}
-	default:
-		return true;
-	}
-}
-
-void DuckDBSession::ThrowUnlessAlterGrantedOverFullTable(ClientContext &source_context, const string &catalog,
-                                                         const CrossingDdl &ddl) {
-	bool alter_granted = false;
-	bool select_granted = false;
-	unique_ptr<ParsedExpression> alter_using;
-	unique_ptr<ParsedExpression> select_using;
-	{
-		lock_guard<mutex> guard(grants->lock);
-		auto grant = FindGrant(grants->tables, ddl.schema, ddl.table);
-		if (grant) {
-			alter_granted = grant->Has(CrossingVerb::ALTER);
-			select_granted = grant->Has(CrossingVerb::SELECT);
-			alter_using = grant->CopyUsing(CrossingVerb::ALTER);
-			select_using = grant->CopyUsing(CrossingVerb::SELECT);
-		}
-	}
-	auto values = ContextSnapshot(*grants->context);
-	const auto holds = [&](bool granted, unique_ptr<ParsedExpression> &predicate) {
-		if (!granted || !predicate) {
-			return granted;
-		}
-		FillContext(predicate, values);
-		return PredicateFoldsToTrue(source_context, catalog, ddl.schema, ddl.table, *predicate);
-	};
-	if (!holds(alter_granted, alter_using)) {
-		throw PermissionException("vcatbridge: '%s' does not have '%s' permission", ddl.table,
-		                          CrossingVerbName(CrossingVerb::ALTER));
-	}
-	if (!holds(select_granted, select_using)) {
-		throw PermissionException("vcatbridge: the select policy on '%s.%s' hides rows, so the target "
-		                          "cannot see the full table and cannot alter it",
-		                          ddl.schema, ddl.table);
-	}
-}
-
-void DuckDBSession::ThrowIfCreateDeclaresForeignKey(const CrossingDdl &ddl) {
-	if (ddl.create->type != CatalogType::TABLE_ENTRY) {
-		return;
-	}
-	for (auto &constraint : ddl.create->Cast<CreateTableInfo>().constraints) {
-		if (constraint->type == ConstraintType::FOREIGN_KEY) {
-			throw PermissionException("vcatbridge: a table created from the target cannot declare a foreign key");
-		}
-	}
-}
-
-void DuckDBSession::ThrowIfDdlCarriesExpression(const CrossingDdl &ddl) {
-	if (ddl.create && ddl.create->type == CatalogType::TABLE_ENTRY) {
-		auto &create = ddl.create->Cast<CreateTableInfo>();
-		for (auto &column : create.columns.Logical()) {
-			ThrowIfColumnRunsOnSource(column);
-		}
-		for (auto &constraint : create.constraints) {
-			if (constraint->type == ConstraintType::CHECK) {
-				throw PermissionException(
-				    "vcatbridge: a table created from the target cannot declare a CHECK constraint");
-			}
-		}
-		return;
-	}
-	if (!ddl.alter || ddl.alter->type != AlterType::ALTER_TABLE) {
-		return;
-	}
-	auto &alter = ddl.alter->Cast<AlterTableInfo>();
-	switch (alter.alter_table_type) {
-	case AlterTableType::ADD_COLUMN:
-		ThrowIfColumnRunsOnSource(alter.Cast<AddColumnInfo>().new_column);
-		break;
-	case AlterTableType::ADD_FIELD:
-		ThrowIfColumnRunsOnSource(alter.Cast<AddFieldInfo>().new_field);
-		break;
-	case AlterTableType::SET_DEFAULT:
-		if (alter.Cast<SetDefaultInfo>().expression) {
-			ThrowUnlessConstantDefault(*alter.Cast<SetDefaultInfo>().expression);
-		}
-		break;
-	case AlterTableType::ALTER_COLUMN_TYPE:
-		ThrowIfTypeChangeHasUsing(alter.Cast<ChangeColumnTypeInfo>());
-		break;
-	default:
-		break;
-	}
-}
-
-void DuckDBSession::ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl) {
-	if (ddl.alter->type != AlterType::ALTER_TABLE) {
-		return;
-	}
-	auto &alter = ddl.alter->Cast<AlterTableInfo>();
-	string column;
-	switch (alter.alter_table_type) {
-	case AlterTableType::RENAME_COLUMN:
-		column = alter.Cast<RenameColumnInfo>().old_name.GetIdentifierName();
-		break;
-	case AlterTableType::REMOVE_COLUMN:
-		column = alter.Cast<RemoveColumnInfo>().removed_column.GetIdentifierName();
-		break;
-	case AlterTableType::ALTER_COLUMN_TYPE:
-		column = alter.Cast<ChangeColumnTypeInfo>().column_path[0].GetIdentifierName();
-		break;
-	default:
-		return;
-	}
-	lock_guard<mutex> guard(grants->lock);
-	auto found = FindGrant(grants->tables, ddl.schema, ddl.table);
-	if (!found) {
-		return;
-	}
-	auto &grant = *found;
-	bool orphaned = false;
-	for (auto &key_column : grant.key) {
-		orphaned = orphaned || StringUtil::CIEquals(key_column, column);
-	}
-	const auto mentions = [&](const ParsedExpression &expr) {
-		bool found = false;
-		std::function<void(const ParsedExpression &)> visit = [&](const ParsedExpression &node) {
-			if (node.GetExpressionClass() == ExpressionClass::COLUMN_REF &&
-			    node.Cast<ColumnRefExpression>().GetColumnName() == column) {
-				found = true;
-			}
-			ParsedExpressionIterator::EnumerateChildren(node, visit);
-		};
-		visit(expr);
-		return found;
-	};
-	for (idx_t v = 0; v < CrossingVerbs().size() && !orphaned; v++) {
-		orphaned = (grant.using_predicates[v] && mentions(*grant.using_predicates[v])) ||
-		           (grant.check_predicates[v] && mentions(*grant.check_predicates[v]));
-	}
-	if (orphaned) {
-		throw IOException("vcatbridge: '%s' is the key or a policy column of '%s.%s'", column, ddl.schema, ddl.table);
-	}
-}
-
-void DuckDBSession::RecordDdl(const shared_ptr<Connection> &source_conn, const string &catalog,
-                              const CrossingDdl &ddl) {
-	lock_guard<mutex> guard(grants->lock);
-	auto book = grants;
-	auto schema_name = ddl.schema;
-	auto table_name = ddl.table;
-	auto &schema = book->tables[schema_name];
-	switch (ddl.verb) {
-	case CrossingVerb::CREATE: {
-		SourceGrant grant;
-		auto entry = SourceTableEntry(*source_conn->context, catalog, schema_name, table_name);
-		if (entry && entry->type == CatalogType::TABLE_ENTRY) {
-			grant.discovered_key = DiscoverKeyColumns(entry->Cast<TableCatalogEntry>());
-			grant.key = grant.discovered_key;
-		}
-		for (auto verb : CrossingVerbs()) {
-			if ((verb == CrossingVerb::UPDATE || verb == CrossingVerb::DELETE_) && grant.key.empty()) {
-				continue;
-			}
-			grant.Allow(verb);
-		}
-		shared_ptr<SourceGrant> replaced;
-		auto it = schema.find(table_name);
-		if (it != schema.end()) {
-			replaced = make_shared_ptr<SourceGrant>(std::move(it->second));
-		}
-		schema[table_name] = std::move(grant);
-		book->shaping[schema_name + "." + table_name] = source_conn;
-		PushGrantUndo([book, schema_name, table_name, replaced]() {
-			if (replaced) {
-				book->tables[schema_name][table_name] = std::move(*replaced);
-			} else {
-				book->tables[schema_name].erase(table_name);
-			}
-		});
-		return;
-	}
-	case CrossingVerb::DROP: {
-		auto it = schema.find(table_name);
-		if (it == schema.end()) {
-			return;
-		}
-		auto dropped = make_shared_ptr<SourceGrant>(std::move(it->second));
-		schema.erase(it);
-		PushGrantUndo([book, schema_name, table_name, dropped]() {
-			book->tables[schema_name][table_name] = std::move(*dropped);
-		});
-		return;
-	}
-	default:
-		break;
-	}
-	book->shaping[schema_name + "." + table_name] = source_conn;
-	if (ddl.alter->type != AlterType::ALTER_TABLE) {
-		return;
-	}
-	auto &alter = ddl.alter->Cast<AlterTableInfo>();
-	if (alter.alter_table_type != AlterTableType::RENAME_TABLE) {
-		return;
-	}
-	auto it = schema.find(table_name);
-	if (it == schema.end()) {
-		return;
-	}
-	auto new_name = alter.Cast<RenameTableInfo>().new_table_name.GetIdentifierName();
-	auto moved = std::move(it->second);
-	schema.erase(it);
-	schema[new_name] = std::move(moved);
-	book->shaping[schema_name + "." + new_name] = source_conn;
-	PushGrantUndo([book, schema_name, table_name, new_name]() {
-		auto &tables = book->tables[schema_name];
-		auto renamed = tables.find(new_name);
-		if (renamed == tables.end()) {
-			return;
-		}
-		auto back = std::move(renamed->second);
-		tables.erase(renamed);
-		tables[table_name] = std::move(back);
-	});
-}
-
-namespace {
-
-unique_ptr<QueryResult> RunRead(Connection &source_conn, const CrossingQuery &query,
-                                const CrossingFloorResolver &resolver, const string &source_catalog) {
-	auto &context = *source_conn.context;
-	auto plan = DeserializeCrossingPlan(context, SerializeCrossingPlan(query.plan));
-	BindFloors(context, plan, source_catalog, resolver);
-
-	auto result = SubmitCrossingPlan(context, std::move(plan));
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("vcatbridge: plan on source failed: ");
-	}
-	return result;
-}
-
-//! Holds its connection alone: an open stream refuses every other query on it.
-CrossingScan StreamScanOf(const shared_ptr<Connection> &conn, unique_ptr<QueryResult> owned) {
-	auto stream = make_shared_ptr<QueryResultStream<ChunkFormat>>(std::move(owned));
-	CrossingScan scan;
-	scan.open = [conn, stream](ClientContext &, idx_t) -> CrossingReader {
-		return [conn, stream](ClientContext &, DataChunk &chunk, const CrossingWaker &) {
-			auto raw = stream->Fetch();
-			if (stream->HasError()) {
-				stream->GetErrorObject().Throw("vcatbridge: source query failed: ");
-			}
-			if (!raw || raw->size() == 0) {
-				return CrossingReadResult::Done();
-			}
-			chunk.Reference(*raw);
-			return CrossingReadResult::Rows();
-		};
-	};
-	return scan;
-}
-
-//! Collected before it returns, leaving the shared connection free for the transaction's next query.
-CrossingScan CollectedScanOf(const shared_ptr<Connection> &conn, unique_ptr<QueryResult> owned) {
-	shared_ptr<QueryResult> result(std::move(owned));
-	result->Complete();
-	if (result->HasError()) {
-		result->GetErrorObject().Throw("vcatbridge: source query failed: ");
-	}
-	CrossingScan scan;
-	scan.open = [conn, result](ClientContext &, idx_t) -> CrossingReader {
-		return [conn, result](ClientContext &, DataChunk &chunk, const CrossingWaker &) {
-			auto raw = result->FetchRaw();
-			if (!raw || raw->size() == 0) {
-				return CrossingReadResult::Done();
-			}
-			chunk.Reference(*raw);
-			return CrossingReadResult::Rows();
-		};
-	};
-	return scan;
-}
-
-} // namespace
-
-CrossingScan DuckDBSession::Read(ClientContext &, const CrossingQuery &query) {
-	if (autocommit) {
-		auto read_conn = make_shared_ptr<Connection>(*source_db);
-		read_conn->context->registered_state->Insert(StreamingReadMarkerKey(), make_shared_ptr<StreamingReadMarker>());
-		read_conn->BeginTransaction();
-		auto catalog = source.Use(*read_conn->context);
-		return StreamScanOf(read_conn, RunRead(*read_conn, query, PolicyResolver(grants, catalog), catalog));
-	}
-	auto shared = Shared();
-	auto catalog = source.Use(*shared->context);
-	lock_guard<mutex> guard(lock);
-	return CollectedScanOf(shared, RunRead(*shared, query, PolicyResolver(grants, catalog), catalog));
 }
 
 void RegisterBridgeFunctions(ExtensionLoader &loader) {

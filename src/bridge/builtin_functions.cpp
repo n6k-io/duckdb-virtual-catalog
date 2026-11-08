@@ -693,6 +693,7 @@ const case_insensitive_set_t &PushableBuiltins() {
 
 const case_insensitive_set_t &TargetOnlyBuiltins() {
 	static const case_insensitive_set_t names {
+	    "set_by_source",
 	    "current_connection_id",
 	    "current_database",
 	    "current_date",

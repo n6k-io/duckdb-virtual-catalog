@@ -22,13 +22,15 @@ SELECT vcatbridge_set_policy('v2_oc', 'main.users', 'insert', 'true');
 statement ok
 ATTACH '' AS ws (TYPE vcatbridge, ID 'v2_oc', TOKEN 'tok_oc');
 
-statement ok
+statement error
 UPDATE ws.main.users SET name = DEFAULT WHERE id = 1;
+----
+DEFAULT itself is not supported
 
 query II
 SELECT id, name FROM ws.main.users ORDER BY id;
 ----
-1	NULL
+1	a
 2	b
 
 statement ok

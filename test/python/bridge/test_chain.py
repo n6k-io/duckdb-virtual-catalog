@@ -51,7 +51,7 @@ def test_two_hop_filter_crosses_into_the_first_hop(hops):
     a, b, c = hops
     chain(a, b, c, {"users": READ}, {"users": READ})
     plan = c.execute("EXPLAIN SELECT name FROM app.main.users WHERE id = 2").fetchall()[0][1]
-    assert "Crossing Read" in plan
+    assert "Crossing Remote" in plan
     assert "Filter" in plan
 
 
