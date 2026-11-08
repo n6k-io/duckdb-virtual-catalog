@@ -65,7 +65,7 @@ def peak_operator_mb(source, run):
 @pytest.mark.parametrize("sql", PUSHED.values(), ids=PUSHED.keys())
 def test_pushed_work_stays_within_bridge_budget(big, sql):
     source, target = big
-    assert "Crossing Read" in target.execute(f"EXPLAIN {sql}").fetchall()[0][1]
+    assert "Crossing Remote" in target.execute(f"EXPLAIN {sql}").fetchall()[0][1]
 
     result, peak = peak_operator_mb(source, lambda: target.execute(sql).fetchall())
 

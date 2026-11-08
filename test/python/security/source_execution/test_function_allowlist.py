@@ -34,7 +34,7 @@ def world():
 
 def runs_on_target(target, sql, name):
     plan = target.execute("EXPLAIN " + sql).fetchall()[0][1]
-    return name in plan.split("Crossing Read")[0]
+    return name in plan.split("Crossing Remote")[0]
 
 
 def tag_query(target):

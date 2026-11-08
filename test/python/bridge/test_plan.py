@@ -47,8 +47,7 @@ def test_a_self_join_crosses_as_one_scan(bridged):
     _, target = bridged
     plan = explain(target, "SELECT count(*) FROM app.main.wide a JOIN app.main.wide b USING (id)")
     flat = plan.replace(" ", "")
-    assert len(re.findall(r"TableIndex:(\d+)", flat)) == 1
-    assert flat.count("CrossingRead") == 1
+    assert flat.count("CrossingRemote") == 1
     assert "ComparisonJoin" in flat
     assert flat.count("CrossingFloor") == 2
 
@@ -58,7 +57,7 @@ def test_scan_node_carries_the_source_plan(bridged):
     plan names the table with a floor; the source binds the real scan when it runs."""
     _, target = bridged
     plan = explain(target, "SELECT sum(score) FROM app.main.wide")
-    assert "Plan" in plan
+    assert "Runs on source" in plan
     assert "Crossing Floor" in plan
     assert "Seq Scan" not in plan
 
@@ -87,9 +86,12 @@ def test_filter_and_projection_match_source(bridged):
 
 
 def plan_columns(con, sql):
-    """How many columns the plan inside the fence reads from the source."""
+    """How many columns the plan that runs on the source reads from its floor: the projection just above it."""
     plan = explain(con, sql).replace(" ", "")
-    return int(re.search(r"PlanColumns:(\d+)", plan).group(1))
+    above_floor = plan[: plan.rindex("CrossingFloor")]
+    projected = above_floor[above_floor.rindex("Expressions:") + len("Expressions:") :]
+    projected = projected[: projected.index("╰")]
+    return len(re.findall(r"[A-Za-z_][\w()]*", projected))
 
 
 def test_plan_reads_only_the_columns_the_query_needs(bridged):
@@ -272,11 +274,9 @@ def test_insert_carries_a_plan(writable):
     """The write fence holds a plan whose leaf is the seam, not a bare pile of rows."""
     _, target = writable
     profile = target.execute(f"EXPLAIN ANALYZE INSERT INTO app.main.wide VALUES {ROW}").fetchall()[0][1]
-    assert "Plan" in profile
-    # A literal VALUES list is something the source can produce itself, so it goes into the seam while
-    # the plan is still being built and the statement runs there whole. A feed the source cannot hold
-    # fills the seam at execution instead, and shows a chunk scan.
-    assert "insert on source" in profile or "Column Data Scan" in profile or "Chunk Get" in profile
+    assert "Runs on source" in profile
+    assert "Crossing Seam" in profile
+    assert "Column Data Scan" in profile
 
 
 @pytest.fixture
@@ -419,14 +419,12 @@ def test_update_spanning_several_chunks_writes_every_row(source, target):
     assert source.execute("SELECT count(*) FROM big WHERE name = 'set'").fetchone() == (6000,)
 
 
-def test_update_refuses_a_declared_key_that_is_not_unique(source, target):
-    """The key is declared, not verified, so a duplicate would silently update several source rows
-    per key. The statement is refused instead."""
+def test_update_through_a_declared_key_that_is_not_unique_reaches_only_its_rows(source, target):
+    """Writes address rows by rowid, so a declared key that is not unique changes only the rows matched."""
     source.execute("CREATE TABLE dup(x INTEGER, y VARCHAR); INSERT INTO dup VALUES (1, 'a'), (1, 'b')")
     bridge(source, target, {"dup": ["select", "update"]}, pk_overrides={"dup": "x"})
-    with pytest.raises(duckdb.Error, match="is not unique on the source"):
-        target.execute("UPDATE app.main.dup SET y = 'A' WHERE x = 1")
-    assert source.execute("SELECT * FROM dup ORDER BY y").fetchall() == [(1, "a"), (1, "b")]
+    assert target.execute("UPDATE app.main.dup SET y = 'A' WHERE y = 'a'").fetchall() == [(1,)]
+    assert source.execute("SELECT * FROM dup ORDER BY y").fetchall() == [(1, "A"), (1, "b")]
 
 
 @pytest.fixture
@@ -535,12 +533,11 @@ def test_delete_with_a_composite_primary_key(source, target):
     ]
 
 
-def test_delete_refuses_a_declared_key_that_is_not_unique(source, target):
+def test_delete_through_a_declared_key_that_is_not_unique_reaches_only_its_rows(source, target):
     source.execute("CREATE TABLE dup(x INTEGER, y VARCHAR); INSERT INTO dup VALUES (1, 'a'), (1, 'b')")
     bridge(source, target, {"dup": ["select", "delete"]}, pk_overrides={"dup": "x"})
-    with pytest.raises(duckdb.Error, match="is not unique on the source"):
-        target.execute("DELETE FROM app.main.dup WHERE x = 1")
-    assert source.execute("SELECT count(*) FROM dup").fetchone() == (2,)
+    assert target.execute("DELETE FROM app.main.dup WHERE y = 'a'").fetchall() == [(1,)]
+    assert source.execute("SELECT * FROM dup").fetchall() == [(1, "b")]
 
 
 def test_delete_spanning_several_chunks_removes_every_row(source, target):

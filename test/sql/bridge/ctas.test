@@ -43,7 +43,7 @@ SELECT id, name FROM b.main.big ORDER BY id;
 query I
 SELECT verbs FROM vcatbridge_table_permissions('b') WHERE name = 'big';
 ----
-[select, insert, create, alter, drop]
+[select, insert, update, delete, create, alter, drop]
 
 # From the target's own rows.
 statement ok

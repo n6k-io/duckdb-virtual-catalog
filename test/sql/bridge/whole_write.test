@@ -27,19 +27,18 @@ ATTACH '' AS w (TYPE vcatbridge, ID 'ww', TOKEN 'tok_ww');
 
 # ---------------------------------------------------------------------------
 # Everything the statement holds is something the source can compute, so the source runs it alone.
-# "Crossing: update on source" is the whole write; the streaming path renders "rows -> main.orders"
-# instead, which is what the last case in this file asserts.
+# "Runs on source" names the whole write.
 # ---------------------------------------------------------------------------
 
 query II
 EXPLAIN UPDATE w.main.orders SET amt = 0 WHERE tenant = 1;
 ----
-physical_plan	<REGEX>:.*Crossing:.*update on source.*
+physical_plan	<REGEX>:.*Runs on source:.*UPDATE main.orders.*
 
 query II
 EXPLAIN DELETE FROM w.main.orders WHERE tenant = 2;
 ----
-physical_plan	<REGEX>:.*Crossing:.*delete on source.*
+physical_plan	<REGEX>:.*Runs on source:.*DELETE.*main.orders.*
 
 # A whole write is still a write: the rows change and the count is what the source changed.
 
@@ -91,7 +90,7 @@ ATTACH '' AS s (TYPE vcatbridge, ID 'ws', TOKEN 'tok_ws');
 query II
 EXPLAIN UPDATE s.main.scoped SET amt = 99;
 ----
-physical_plan	<REGEX>:.*Crossing:.*update on source.*
+physical_plan	<REGEX>:.*Runs on source:.*UPDATE main.scoped.*
 
 query I
 UPDATE s.main.scoped SET amt = 99;
@@ -105,13 +104,13 @@ SELECT id, tenant, amt FROM memory.main.scoped ORDER BY id;
 2	2	20
 
 # ---------------------------------------------------------------------------
-# A SET the source cannot compute keeps the write on the target, and the plan says so.
+# A SET the source cannot compute is computed on the target and sent to the source's update.
 # ---------------------------------------------------------------------------
 
 query II
 EXPLAIN UPDATE w.main.orders SET amt = (SELECT max(amt) FROM memory.main.orders);
 ----
-physical_plan	<REGEX>:.*Not whole because.*
+physical_plan	<REGEX>:.*Runs on source:.*UPDATE main.orders.*Crossing Seam.*Sends:.*Seq Scan.*memory.main.orders.*
 
 statement ok
 DETACH w;

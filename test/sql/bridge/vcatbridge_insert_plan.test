@@ -21,14 +21,14 @@ ATTACH '' AS w (TYPE vcatbridge, ID 'ins_plan', TOKEN 'tok_ins_plan');
 
 # ---------------------------------------------------------------------------
 # EXPLAIN says where the rows are going, and how. A literal VALUES list is rows the target holds, so
-# they cross -- but into the seam of the source's own insert, which is one statement rather than one
-# per chunk. A feed the source cannot hold renders "rows -> main.t" instead.
+# they cross -- into the seam of the source's own insert, which is one statement rather than one
+# per chunk.
 # ---------------------------------------------------------------------------
 
 query II
 EXPLAIN INSERT INTO w.main.t VALUES (1, 2, 'a');
 ----
-physical_plan	<REGEX>:.*Crossing:.*insert on source.*
+physical_plan	<REGEX>:.*Runs on source:.*INSERT main.t.*Crossing Seam.*Sends:.*
 
 # ---------------------------------------------------------------------------
 # The plan is executed as a LogicalPlanStatement, which does not register the source as modified on

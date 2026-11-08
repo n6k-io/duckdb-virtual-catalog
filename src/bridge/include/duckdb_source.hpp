@@ -13,6 +13,7 @@
 namespace duckdb {
 
 class CrossingAttach;
+struct CrossingOpenTransaction;
 class ExtensionLoader;
 
 static constexpr const char *VCATBRIDGE_TYPE = "vcatbridge";
@@ -103,7 +104,6 @@ struct GrantBook {
 	case_insensitive_map_t<case_insensitive_map_t<SourceGrant>> tables;
 	case_insensitive_set_t create_schemas;
 	FunctionGrants functions;
-	case_insensitive_map_t<shared_ptr<Connection>> shaping;
 	shared_ptr<BridgeContext> context;
 	//! The target's attach, refreshed when a grant changes after ATTACH. Null once the target catalog is gone.
 	optional_ptr<CrossingAttach> target;
@@ -114,78 +114,56 @@ struct GrantBook {
 	idx_t uncommitted_ddl = 0;
 };
 
-class DuckDBSession {
+//! Grant changes from DDL a far transaction ran, undone unless the target's transaction commits.
+class GrantLedger {
 public:
-	DuckDBSession(shared_ptr<DatabaseInstance> source_db, SourcePin source, shared_ptr<GrantBook> grants,
-	              bool autocommit);
-	~DuckDBSession();
+	explicit GrantLedger(shared_ptr<GrantBook> grants);
+	~GrantLedger();
 
-	CrossingScan Read(ClientContext &context, const CrossingQuery &query);
-	CrossingWriter Write(ClientContext &context, const CrossingQuery &query);
-	void Ddl(ClientContext &context, const CrossingDdl &ddl);
-	void Commit();
-	void Rollback();
+	//! Caller holds the GrantBook's lock.
+	void Push(std::function<void()> undo);
+	void Resolve(bool committed);
 
 private:
-	shared_ptr<Connection> Shared();
-	bool CreateWouldCreate(Connection &source_conn, const string &catalog, const CrossingDdl &ddl);
-	//! Throws unless both the alter grant and the select policy fold to true under the current context: an ALTER
-	//! runs over every row on the source, including rows the select policy would hide from this target.
-	void ThrowUnlessAlterGrantedOverFullTable(ClientContext &source_context, const string &catalog,
-	                                          const CrossingDdl &ddl);
-	void ThrowIfAlterOrphansPolicy(const CrossingDdl &ddl);
-	//! The source checks a foreign key over every referenced row, hidden ones included.
-	void ThrowIfCreateDeclaresForeignKey(const CrossingDdl &ddl);
-	//! Non-constant defaults, CHECKs and generated columns are stored on the source and run on the owner's later
-	//! inserts; an ALTER COLUMN TYPE ... USING cast runs on the source at once. Each would run over rows the
-	//! target cannot see.
-	void ThrowIfDdlCarriesExpression(const CrossingDdl &ddl);
-	void RecordDdl(const shared_ptr<Connection> &source_conn, const string &catalog, const CrossingDdl &ddl);
 	//! Caller holds the GrantBook's lock.
-	void PushGrantUndo(std::function<void()> undo);
-	void ForgetGrantUndo();
-	void UndoGrants();
-	void ForgetShaping();
+	void Forget();
 
-	shared_ptr<DatabaseInstance> source_db;
-	SourcePin source;
 	shared_ptr<GrantBook> grants;
-	bool autocommit;
-	mutex lock;
-	shared_ptr<Connection> conn;
-	vector<std::function<void()>> grant_undo;
+	vector<std::function<void()>> undo;
 };
 
-class DuckDBSource {
-public:
-	using Session = DuckDBSession;
+vector<shared_ptr<GrantLedger>> GrantLedgersOf(const CrossingOpenTransaction &transaction);
 
+class DuckDBSource : public CrossingSource {
+public:
 	DuckDBSource(string bridge_id, const shared_ptr<DatabaseInstance> &source_db, DatabaseInstance &target_db,
 	             SourcePin source, shared_ptr<GrantBook> grants);
 	//! Unbound: every call throws until Bind. The target's main database starts this way, since it opens before
 	//! any token can be redeemed.
 	DuckDBSource();
-	~DuckDBSource();
+	~DuckDBSource() override;
 
 	//! Once, before any call can pass ThrowUnlessBound. Takes over `redeemed`, leaving it unbound.
 	void Bind(DuckDBSource &redeemed);
 	bool IsBound() const;
 
-	vector<string> Schemas();
-	vector<string> Tables(const string &schema);
-	CrossingTable Describe(const string &schema, const string &name);
-	CrossingSchema DescribeSchema(const string &schema);
-	CrossingPlan Plan(const CrossingPlanRequest &request);
-	CrossingVerdict AcceptsCall(const Expression &expr);
-	CrossingVerdict AcceptsType(const LogicalType &type);
-	unique_ptr<DuckDBSession> Begin(ClientContext &context);
+	vector<string> Schemas() override;
+	vector<string> Tables(const string &schema) override;
+	CrossingTable Describe(const string &schema, const string &name) override;
+	CrossingSchema DescribeSchema(const string &schema) override;
+	CrossingVerdict AcceptsCall(const Expression &expr) override;
+	CrossingVerdict AcceptsType(const LogicalType &type) override;
+	unique_ptr<CrossingLink> Connect(ClientContext &context) override;
+	void DescribeChanged(const string &schema, CrossingTable &table) override;
 	void SetTarget(optional_ptr<CrossingAttach> target);
+	vector<string> GrantedKey(const string &schema, const string &name);
 	// No Group(): PolicyResolver and GrantBook key on schema.table in this source's catalog, so a floor
 	// naming another catalog would bind the wrong table under the wrong policy.
 
 private:
 	void ThrowUnlessBound() const;
 	shared_ptr<Connection> PlanningConnection();
+	vector<CrossingVerb> GrantedVerbs(const string &schema, const string &name);
 	shared_ptr<DatabaseInstance> Database() const;
 
 	//! Looks the function up where the source's plan deserializer will.

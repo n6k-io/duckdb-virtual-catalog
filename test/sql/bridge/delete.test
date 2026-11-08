@@ -58,11 +58,14 @@ SELECT count(*) FROM memory.main.orders WHERE id = 3;
 ----
 1
 
-# A table with no key cannot address rows at all.
-statement error
+# A table with no key is addressed by rowid.
+statement ok
 DELETE FROM b.main.nokey WHERE x = 1;
+
+query I
+SELECT count(*) FROM memory.main.nokey;
 ----
-has no key
+0
 
 # Deleting everything the delete policy reaches leaves the hidden row behind.
 statement ok
