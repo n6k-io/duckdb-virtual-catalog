@@ -19,6 +19,8 @@ source_db.execute("LOAD vcatbridge")
 source_db.execute("""
     CREATE TABLE users (id INTEGER PRIMARY KEY, tenant_id INTEGER, name VARCHAR);
     INSERT INTO users VALUES (1, 42, 'ada'), (2, 42, 'grace'), (3, 7, 'linus');
+    CREATE TABLE orders (user_id INTEGER, tenant_id INTEGER, amount DECIMAL(10, 2));
+    INSERT INTO orders VALUES (1, 42, 10), (2, 42, 20), (3, 7, 30);
     CREATE TABLE secrets (k VARCHAR, v VARCHAR);
 """)
 
@@ -27,6 +29,7 @@ token = source_db.execute("SELECT vcatbridge_register_source('b1', 'memory')").f
 source_db.execute("SELECT vcatbridge_set_context('b1', 'tenant', 42)")
 for verb in ["select", "insert", "update"]:
     source_db.execute(f"SELECT vcatbridge_set_policy('b1', 'main.users', '{verb}', 'tenant_id = $tenant')")
+source_db.execute("SELECT vcatbridge_set_policy('b1', 'main.orders', 'select', 'tenant_id = $tenant')")
 
 # 3. SharedDB: what you hand to someone else
 shared_db = duckdb.connect("vcatbridge:", config=CONFIG)
@@ -36,6 +39,8 @@ run(shared_db, "SELECT * FROM users")
 run(shared_db, "INSERT INTO users VALUES (5, 7, 'mallory')")
 run(shared_db, "DELETE FROM users WHERE id = 2")
 run(shared_db, "FROM secrets")
+run(shared_db, "SELECT name, sum(amount) FROM users JOIN orders ON id = user_id GROUP BY name")
+print(shared_db.execute("EXPLAIN SELECT name, sum(amount) FROM users JOIN orders ON id = user_id GROUP BY name").fetchone()[1])
 
 # 4. Serve SharedDB over Quack
 shared_db.execute("""

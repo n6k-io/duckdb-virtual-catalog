@@ -12,14 +12,16 @@ LOAD vcatbridge;
 
 CREATE TABLE users (id INTEGER PRIMARY KEY, tenant_id INTEGER, name VARCHAR);
 INSERT INTO users VALUES (1, 42, 'ada'), (2, 42, 'grace'), (3, 7, 'linus');
+CREATE TABLE orders (user_id INTEGER, tenant_id INTEGER, amount DECIMAL(10, 2));
+INSERT INTO orders VALUES (1, 42, 10), (2, 42, 20), (3, 7, 30);
 CREATE TABLE secrets (k VARCHAR, v VARCHAR);
 ```
 
-Two tenants in `users`, and a `secrets` table nobody else should see.
+Two tenants in `users` and `orders`, and a `secrets` table nobody else should see.
 
 **2. Set up the bridge on SourceDB**
 
-Register a bridge, say which tenant it's for, and grant `users` to that tenant. `secrets` gets no policy, and there's no `delete` on anything.
+Register a bridge, say which tenant it's for, and grant `users` and `orders` to that tenant. `secrets` gets no policy, and there's no `delete` on anything.
 
 ```sql
 -- SourceDB
@@ -28,6 +30,7 @@ SELECT vcatbridge_set_context('b1', 'tenant', 42);
 SELECT vcatbridge_set_policy('b1', 'main.users', 'select', 'tenant_id = $tenant');
 SELECT vcatbridge_set_policy('b1', 'main.users', 'insert', 'tenant_id = $tenant');
 SELECT vcatbridge_set_policy('b1', 'main.users', 'update', 'tenant_id = $tenant');
+SELECT vcatbridge_set_policy('b1', 'main.orders', 'select', 'tenant_id = $tenant');
 ```
 
 Only SourceDB can change these. The policy and context functions refuse any instance other than the one that registered the bridge.
@@ -68,30 +71,17 @@ EXPLAIN SELECT name, sum(amount) FROM users JOIN orders ON id = user_id GROUP BY
 ```
 
 ```
-╭─ Crossing Remote ─────────────────────────────────────────╮
-│ Runs on source:                                           │
-│ ╭─ Projection ──────────────╮,                            │
-│ │ Expressions: name,        │,                            │
-│ │              sum(amount)  │,                            │
-│ ╰─────────────┬─────────────╯,                            │
-│ ╭─ Aggregate ─┴─────────────╮,                            │
-│ │ Groups: name              │,                            │
-│ │ Expressions: sum(amount)  │,                            │
-│ ╰─────────────┬─────────────╯,                            │
-│ ╭─ Comparison Join ─────────╮,                            │
-│ │ Join Type: INNER          │,                            │
-│ │ Conditions: id = user_id  │,                            │
-│ ╰─────────────┬─────────────╯,                            │
-│               ├────────────────────────────╮,             │
-│ ╭─ Projection ┴─────────────╮  ╭─ Projection ──────────╮, │
-│ │ Expressions: id, name     │  │ Expressions: user_id, │, │
-│ ╰─────────────┬─────────────╯  │              amount   │, │
-│ ╭─ Crossing Floor ──────────╮  ╰───────────┬───────────╯, │
-│ ╰───────────────────────────╯  ╭─ Crossing Floor ──────╮, │
-│                                ╰───────────────────────╯  │
-│ Returns: rows                                             │
-╰───────────────────────────────────────────────────────────╯
+Crossing Remote                        ← everything below runs on SourceDB
+└─ Projection       name, sum(amount)
+   └─ Aggregate     group by name
+      └─ Join       INNER, id = user_id
+         ├─ Projection  id, name
+         │  └─ Crossing Floor   users
+         └─ Projection  user_id, amount
+            └─ Crossing Floor   orders
 ```
+
+Each `Crossing Floor` is a table that SharedDB doesn't scan itself. SourceDB swaps it for a scan of the table with its row filter (`tenant_id = $tenant`) applied, so the filter never appears in SharedDB's plan.
 
 A function crosses to SourceDB only if it's on the bridge's whitelist. Anything else, such as `current_setting`, runs on SharedDB.
 
