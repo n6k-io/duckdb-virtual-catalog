@@ -62,13 +62,35 @@ FROM secrets;
 
 The query crosses to SourceDB as a plan, never as SQL text. Filters, joins and aggregates go with it, and the row filter is applied on SourceDB, under everything else. For a join of `users` with an `orders` table:
 
+```sql
+-- SharedDB
+EXPLAIN SELECT name, sum(amount) FROM users JOIN orders ON id = user_id GROUP BY name;
 ```
-CROSSING_READ                      ← everything below runs on SourceDB
-└─ PROJECTION   name, sum(amount)
-   └─ AGGREGATE  group by name
-      └─ JOIN    id = user_id
-         ├─ users    (row filter: tenant_id = $tenant)
-         └─ orders
+
+```
+╭─ Crossing Remote ─────────────────────────────────────────╮
+│ Runs on source:                                           │
+│ ╭─ Projection ──────────────╮,                            │
+│ │ Expressions: name,        │,                            │
+│ │              sum(amount)  │,                            │
+│ ╰─────────────┬─────────────╯,                            │
+│ ╭─ Aggregate ─┴─────────────╮,                            │
+│ │ Groups: name              │,                            │
+│ │ Expressions: sum(amount)  │,                            │
+│ ╰─────────────┬─────────────╯,                            │
+│ ╭─ Comparison Join ─────────╮,                            │
+│ │ Join Type: INNER          │,                            │
+│ │ Conditions: id = user_id  │,                            │
+│ ╰─────────────┬─────────────╯,                            │
+│               ├────────────────────────────╮,             │
+│ ╭─ Projection ┴─────────────╮  ╭─ Projection ──────────╮, │
+│ │ Expressions: id, name     │  │ Expressions: user_id, │, │
+│ ╰─────────────┬─────────────╯  │              amount   │, │
+│ ╭─ Crossing Floor ──────────╮  ╰───────────┬───────────╯, │
+│ ╰───────────────────────────╯  ╭─ Crossing Floor ──────╮, │
+│                                ╰───────────────────────╯  │
+│ Returns: rows                                             │
+╰───────────────────────────────────────────────────────────╯
 ```
 
 A function crosses to SourceDB only if it's on the bridge's whitelist. Anything else, such as `current_setting`, runs on SharedDB.
