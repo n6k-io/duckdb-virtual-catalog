@@ -12,41 +12,41 @@ def run(con, sql, *params):
         print(f"{type(e).__name__}: {e}")
 
 
-# 1. DB1: the data
-db1 = duckdb.connect(config=CONFIG)
-db1.execute(f"INSTALL vcatbridge FROM '{REPO}'")
-db1.execute("LOAD vcatbridge")
-db1.execute("""
+# 1. SourceDB: the data
+source_db = duckdb.connect(config=CONFIG)
+source_db.execute(f"INSTALL vcatbridge FROM '{REPO}'")
+source_db.execute("LOAD vcatbridge")
+source_db.execute("""
     CREATE TABLE users (id INTEGER PRIMARY KEY, tenant_id INTEGER, name VARCHAR);
     INSERT INTO users VALUES (1, 42, 'ada'), (2, 42, 'grace'), (3, 7, 'linus');
     CREATE TABLE secrets (k VARCHAR, v VARCHAR);
 """)
 
-# 2. DB1: the bridge and its policy
-token = db1.execute("SELECT vcatbridge_register_source('b1', 'memory')").fetchone()[0]
-db1.execute("SELECT vcatbridge_set_context('b1', 'tenant', 42)")
+# 2. SourceDB: the bridge and its policy
+token = source_db.execute("SELECT vcatbridge_register_source('b1', 'memory')").fetchone()[0]
+source_db.execute("SELECT vcatbridge_set_context('b1', 'tenant', 42)")
 for verb in ["select", "insert", "update"]:
-    db1.execute(f"SELECT vcatbridge_set_policy('b1', 'main.users', '{verb}', 'tenant_id = $tenant')")
+    source_db.execute(f"SELECT vcatbridge_set_policy('b1', 'main.users', '{verb}', 'tenant_id = $tenant')")
 
-# 3. DB2: what you hand to someone else
-db2 = duckdb.connect("vcatbridge:", config=CONFIG)
-db2.execute("SELECT vcatbridge_init('b1', $1)", [token])
+# 3. SharedDB: what you hand to someone else
+shared_db = duckdb.connect("vcatbridge:", config=CONFIG)
+shared_db.execute("SELECT vcatbridge_init('b1', $1)", [token])
 
-run(db2, "SELECT * FROM users")
-run(db2, "INSERT INTO users VALUES (5, 7, 'mallory')")
-run(db2, "DELETE FROM users WHERE id = 2")
-run(db2, "FROM secrets")
+run(shared_db, "SELECT * FROM users")
+run(shared_db, "INSERT INTO users VALUES (5, 7, 'mallory')")
+run(shared_db, "DELETE FROM users WHERE id = 2")
+run(shared_db, "FROM secrets")
 
-# 4. Serve DB2 over Quack
-db2.execute("""
+# 4. Serve SharedDB over Quack
+shared_db.execute("""
     SET allow_persistent_secrets = false;
     INSTALL quack;  LOAD quack;
     INSTALL httpfs; LOAD httpfs;
 """)
-db2.execute("CALL quack_serve('quack:localhost:9494', token = 'super_secret')")
+shared_db.execute("CALL quack_serve('quack:localhost:9494', token = 'super_secret')")
 
-# 5. Lock DB2 down
-db2.execute("SELECT vcatbridge_lockdown('1GB', 2, ['quack_serve'])")
+# 5. Lock SharedDB down
+shared_db.execute("SELECT vcatbridge_lockdown('1GB', 2, ['quack_serve'])")
 
 # 6. A client, as from any DuckDB
 client = duckdb.connect()
@@ -59,4 +59,4 @@ client.execute("""
 run(client, "SELECT * FROM app.users")
 run(client, "FROM quack_query('quack:localhost:9494', 'SELECT * FROM read_csv(''/etc/passwd'')')")
 
-db2.execute("CALL quack_stop('quack:localhost:9494')")
+shared_db.execute("CALL quack_stop('quack:localhost:9494')")
