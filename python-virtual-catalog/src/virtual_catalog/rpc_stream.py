@@ -38,7 +38,12 @@ def connect(ws):
     return con
 ```
 
-`registry` is `{name: (callable, pa.Schema)}`. The callable takes
+`registry` is `{name: (callable, pa.Schema)}` or
+`{name: (callable, pa.Schema, params, description)}`. `params` is
+`[(name, duckdb_type), ...]`, e.g. `[("region", "VARCHAR"), ("sims", "BIGINT")]`;
+when given, the table function takes exactly those typed arguments instead of
+any arguments. `params` and `description` (either may be `None`) are what
+`duckdb_functions()` reports for the function. The callable takes
 `(scalars, table)` — the RPC's positional arguments, and the rows a
 `RPC_TABLE` call pushed (`None` for `RPC_SCALAR`) — and is either:
 
@@ -108,7 +113,10 @@ class StreamingRpc:
 
 
 RpcEntryFn = FiniteRpcFn | StreamingRpc
-RpcRegistry = dict[str, tuple[RpcEntryFn, pa.Schema]]
+RpcParams = list[tuple[str, str]]
+RpcRegistry = dict[
+    str, tuple[RpcEntryFn, pa.Schema] | tuple[RpcEntryFn, pa.Schema, RpcParams | None, str | None]
+]
 
 
 def _drop_leading_message(data: bytes) -> bytes:
@@ -289,7 +297,7 @@ class HostStreamUdfs:
         entry = self.registry.get(function)
         if entry is None:
             raise KeyError(f"no host RPC named {function!r} is registered on this connection")
-        fn, schema = entry
+        fn, schema = entry[0], entry[1]
         scalars = json.loads(args_json) if args_json else []
         table = ipc.open_stream(input_ipc).read_all() if input_ipc else None
 
@@ -409,13 +417,15 @@ def register_rpc_streams(
     con.begin()
     try:
         for name, entry in registry.items():
-            fn, schema = entry
+            fn, schema = entry[0], entry[1]
+            params, description = (entry[2], entry[3]) if len(entry) == 4 else (None, None)
             if not isinstance(schema, pa.Schema):
                 raise TypeError(f"RPC {name!r} needs a pa.Schema, got {type(schema).__name__}")
             handle.registry[name] = (fn, schema)
+            params_json = None if params is None else json.dumps([{"name": n, "type": t} for n, t in params])
             con.execute(
-                "SELECT vcatprovider_create_stream_function(?, ?, ?, ?, ?, ?)",
-                [catalog, RPC_SCHEMA, name, open_udf, next_udf, close_udf],
+                "SELECT vcatprovider_create_stream_function(?, ?, ?, ?, ?, ?, ?, ?)",
+                [catalog, RPC_SCHEMA, name, open_udf, next_udf, close_udf, params_json, description],
             )
             handle.created.append((catalog, name))
     except Exception:

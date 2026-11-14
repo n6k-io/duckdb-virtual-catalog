@@ -156,3 +156,25 @@ def test_dropping_the_stream_function_removes_it(con, gen):
     assert con.execute("SELECT count(*) FROM vcatprovider_stream_functions() WHERE catalog = 'app'").fetchone() == (0,)
     with pytest.raises(Exception):
         con.execute("SELECT * FROM app.main.gen()").fetchall()
+
+
+def test_declared_params_and_description_show_in_duckdb_functions_and_still_stream(con):
+    con.execute("ATTACH ':memory:' AS typed (TYPE vcatprovider)")
+    g = Generator(con, batches(1), SCHEMA)
+    g.register(prefix="t")
+    params = json.dumps([{"name": "region", "type": "VARCHAR"}, {"name": "sims", "type": "BIGINT"}])
+    con.execute(
+        "SELECT vcatprovider_create_stream_function('typed', 'main', 'forecast', 't_open', 't_next', 't_close', ?, ?)",
+        [params, "Simulate demand."],
+    ).fetchall()
+
+    row = con.execute(
+        "SELECT parameters, parameter_types, varargs, description FROM duckdb_functions() "
+        "WHERE database_name = 'typed' AND function_name = 'forecast'"
+    ).fetchone()
+    assert row == (["region", "sims"], ["VARCHAR", "BIGINT"], None, "Simulate demand.")
+
+    rows = con.execute("SELECT * FROM typed.main.forecast('north', 3) ORDER BY id").fetchall()
+    assert rows == [(0, "r0"), (1, "r1"), (2, "r2")]
+    opens = [c for c in g.calls if c[0] == "open"]
+    assert json.loads(opens[-1][3]) == ["north", 3]

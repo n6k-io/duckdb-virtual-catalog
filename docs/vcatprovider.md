@@ -178,8 +178,21 @@ SELECT vcatprovider_create_stream_function('app', 'main', 'events',
 SELECT * FROM app.main.events('since', 42);
 ```
 
-The created entry takes arbitrary arguments (`ANY` varargs), delivered to
-`open_udf` as a JSON array. Types with no JSON form — dates, decimals, 128-bit
+By default the created entry takes arbitrary arguments (`ANY` varargs). Two
+optional trailing arguments, `params` and `description`, declare its signature:
+
+```sql
+SELECT vcatprovider_create_stream_function('app', 'main', 'forecast',
+    'fc_open', 'fc_next', 'fc_close',
+    '[{"name": "region", "type": "VARCHAR"}, {"name": "sims", "type": "BIGINT"}]',
+    'Simulate demand for a region.');
+```
+
+With `params`, the entry takes exactly those typed positional arguments and the
+binder rejects any other call. Both show in `duckdb_functions()` (`parameters`,
+`parameter_types`, `description`); either may be NULL.
+
+The call's arguments are delivered to `open_udf` as a JSON array. Types with no JSON form — dates, decimals, 128-bit
 ints — cross as strings. `handle` is a per-bind opaque string, so two concurrent
 calls to one function do not share state.
 

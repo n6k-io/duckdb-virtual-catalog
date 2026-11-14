@@ -76,10 +76,14 @@ ATTACH '' AS app (TYPE vcatprovider, list p_list, schema p_schema, scan p_scan);
 
 | Function | Arguments |
 |---|---|
-| `vcatprovider_create_stream_function` | `catalog, schema, entry_name, open_udf, next_udf, close_udf` — re-registration replaces |
+| `vcatprovider_create_stream_function` | `catalog, schema, entry_name, open_udf, next_udf, close_udf [, params, description]` — re-registration replaces |
 | `vcatprovider_drop_stream_function` | `catalog, schema, entry_name` |
 
-The created entry is a table function taking arbitrary arguments (`ANY` varargs).
+The created entry is a table function. Without `params` (or with NULL) it takes
+arbitrary arguments (`ANY` varargs). `params` is a JSON array
+`[{"name": ..., "type": ...}]` of DuckDB type names; the entry then takes exactly
+those positional arguments. `params` and `description` are reported by
+`duckdb_functions()`.
 The three host UDFs it drives:
 
 | UDF | Called as | Returns |
