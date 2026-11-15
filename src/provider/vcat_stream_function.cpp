@@ -346,7 +346,11 @@ vector<StreamParam> ParseStreamParams(ClientContext &context, const std::string 
 				    "%s: params[%llu] must be {\"name\": <non-empty string>, \"type\": <string>}", kFn,
 				    static_cast<uint64_t>(idx));
 			}
-			params.push_back({yyjson_get_str(name), TransformStringToLogicalType(yyjson_get_str(type), context)});
+			const std::string type_str = yyjson_get_str(type);
+			// The type parser has no spelling for ANY, but an untyped param is still a named one.
+			auto logical_type = StringUtil::CIEquals(type_str, "ANY") ? LogicalType::ANY
+			                                                          : TransformStringToLogicalType(type_str, context);
+			params.push_back({yyjson_get_str(name), std::move(logical_type)});
 		}
 	} catch (...) {
 		yyjson_doc_free(doc);
