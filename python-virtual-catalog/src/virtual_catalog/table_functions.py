@@ -114,11 +114,10 @@ def _signature(fn: Callable[..., Any], inject: Mapping[str, Any]) -> tuple[list[
 
 
 def _as_table(value: Any, returns: pa.Schema) -> pa.Table | pa.RecordBatch:
-    if not isinstance(value, (pa.Table, pa.RecordBatch)):
-        value = pa.table(value)
-    if value.schema.equals(returns):
-        return value
-    return value.select(returns.names).cast(returns)
+    table: pa.Table | pa.RecordBatch = value if isinstance(value, (pa.Table, pa.RecordBatch)) else pa.table(value)
+    if table.schema.equals(returns):
+        return table
+    return table.select(returns.names).cast(returns)
 
 
 def _adapt(spec: TableFunction, name: str) -> tuple[Any, pa.Schema, list[tuple[str, str]], str | None]:

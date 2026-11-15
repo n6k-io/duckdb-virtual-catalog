@@ -16,6 +16,7 @@ CONN_CONFIG: dict[str, Any] = {"allow_unsigned_extensions": "true"}
 _OUT_FIELDS: list[pa.Field[Any]] = [pa.field("region", pa.string()), pa.field("n", pa.int64())]
 OUT = pa.schema(_OUT_FIELDS)
 
+
 def _con() -> duckdb.DuckDBPyConnection:
     if local_extension_path(VCATPROVIDER) is None:
         pytest.skip("vcatprovider extension not built")

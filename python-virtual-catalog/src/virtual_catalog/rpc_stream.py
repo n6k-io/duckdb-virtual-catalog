@@ -114,9 +114,7 @@ class StreamingRpc:
 
 RpcEntryFn = FiniteRpcFn | StreamingRpc
 RpcParams = list[tuple[str, str]]
-RpcRegistry = dict[
-    str, tuple[RpcEntryFn, pa.Schema] | tuple[RpcEntryFn, pa.Schema, RpcParams | None, str | None]
-]
+RpcRegistry = dict[str, tuple[RpcEntryFn, pa.Schema] | tuple[RpcEntryFn, pa.Schema, RpcParams | None, str | None]]
 
 
 def _drop_leading_message(data: bytes) -> bytes:
