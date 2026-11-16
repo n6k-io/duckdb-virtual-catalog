@@ -1,0 +1,58 @@
+# name: test/sql/bridge/comments.test
+# description: a bridged table or view carries the source's table and column comments.
+# group: [bridge]
+
+require vcatbridge
+
+statement ok
+CREATE TABLE memory.main.orders(id INTEGER PRIMARY KEY, name VARCHAR, amt INTEGER);
+
+statement ok
+COMMENT ON TABLE memory.main.orders IS 'All orders.';
+
+statement ok
+COMMENT ON COLUMN memory.main.orders.amt IS 'In cents.';
+
+statement ok
+CREATE TABLE memory.main.plain(x INTEGER);
+
+statement ok
+CREATE VIEW memory.main.big_orders(order_id, amount) AS SELECT id, amt FROM memory.main.orders WHERE amt > 100;
+
+statement ok
+COMMENT ON VIEW memory.main.big_orders IS 'Orders over 100.';
+
+statement ok
+COMMENT ON COLUMN memory.main.big_orders.amount IS 'View amount.';
+
+statement ok
+SELECT vcatbridge_register_source('v_comments', 'memory', 'tok_comments');
+
+statement ok
+SELECT vcatbridge_set_policy('v_comments', 'main.orders', 'select', 'true');
+
+statement ok
+SELECT vcatbridge_set_policy('v_comments', 'main.plain', 'select', 'true');
+
+statement ok
+SELECT vcatbridge_set_policy('v_comments', 'main.big_orders', 'select', 'true');
+
+statement ok
+ATTACH '' AS b (TYPE vcatbridge, ID 'v_comments', TOKEN 'tok_comments');
+
+query II
+SELECT table_name, comment FROM duckdb_tables() WHERE database_name = 'b' ORDER BY table_name;
+----
+big_orders	Orders over 100.
+orders	All orders.
+plain	NULL
+
+query III
+SELECT table_name, column_name, comment FROM duckdb_columns() WHERE database_name = 'b' ORDER BY table_name, column_index;
+----
+big_orders	order_id	NULL
+big_orders	amount	View amount.
+orders	id	NULL
+orders	name	NULL
+orders	amt	In cents.
+plain	x	NULL

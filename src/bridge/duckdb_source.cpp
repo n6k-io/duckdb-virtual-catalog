@@ -1902,6 +1902,10 @@ vector<string> DuckDBSource::GrantedKey(const string &schema, const string &name
 	return grant ? grant->key : vector<string>();
 }
 
+static string CommentText(const Value &comment) {
+	return comment.IsNull() ? string() : comment.ToString();
+}
+
 CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 	ThrowUnlessBound();
 	{
@@ -1919,6 +1923,7 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 		if (!IsGrantable(entry)) {
 			throw CatalogException("vcatbridge: '%s.%s' is no longer on the source", schema, name);
 		}
+		table.comment = CommentText(entry->comment);
 		if (entry->type == CatalogType::VIEW_ENTRY) {
 			auto &view = entry->Cast<ViewCatalogEntry>();
 			view.BindView(context);
@@ -1926,6 +1931,7 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 			auto names = BindContext::AliasColumnNames(Identifier(name), columns->names, view.aliases);
 			for (idx_t i = 0; i < names.size(); i++) {
 				table.Column(names[i].GetIdentifierName(), columns->types[i]);
+				table.column_comments.push_back(CommentText(view.GetColumnComment(i)));
 			}
 			table.row_ids = false;
 			return;
@@ -1933,6 +1939,7 @@ CrossingTable DuckDBSource::Describe(const string &schema, const string &name) {
 		auto &source_table = entry->Cast<TableCatalogEntry>();
 		for (auto &column : source_table.GetColumns().Logical()) {
 			table.Column(column.GetName().GetIdentifierName(), column.GetType());
+			table.column_comments.push_back(CommentText(column.Comment()));
 		}
 		for (auto &constraint : source_table.GetConstraints()) {
 			if (constraint->type == ConstraintType::FOREIGN_KEY) {
