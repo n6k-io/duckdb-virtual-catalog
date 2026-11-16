@@ -224,6 +224,41 @@ async def test_register_rpc_streams_creates_a_callable_table_function() -> None:
 
 
 @pytest.mark.asyncio
+async def test_register_rpc_streams_passes_params_and_description() -> None:
+    from virtual_catalog.extension import VCATPROVIDER, load_vcatprovider
+
+    def echo(scalars: list[Any], table: pa.Table | None) -> pa.Table:
+        return pa.table({"seq": [scalars[1]]}, schema=TICK)
+
+    if local_extension_path(VCATPROVIDER) is None:
+        pytest.skip("vcatprovider extension not built")
+    con = duckdb.connect(config=CONN_CONFIG)
+    load_vcatprovider(con)
+    con.execute("ATTACH ':memory:' AS db")
+    handle = await asyncio.to_thread(
+        register_rpc_streams,
+        con,
+        catalog="db",
+        registry={
+            "typed": (echo, TICK, [("region", "VARCHAR"), ("n", "BIGINT")], "Echo n."),
+            "plain": (echo, TICK),
+        },
+        main_loop=asyncio.get_running_loop(),
+    )
+
+    rows = con.execute(
+        "SELECT function_name, parameters, parameter_types, varargs, description FROM duckdb_functions() "
+        "WHERE database_name = 'db' AND function_type = 'table' ORDER BY function_name"
+    ).fetchall()
+    assert rows == [
+        ("plain", [], [], "ANY", None),
+        ("typed", ["region", "n"], ["VARCHAR", "BIGINT"], None, "Echo n."),
+    ]
+    assert await asyncio.to_thread(lambda: con.execute("SELECT * FROM db.main.typed('x', 5)").fetchall()) == [(5,)]
+    await asyncio.to_thread(handle.unregister_and_close_streams)
+
+
+@pytest.mark.asyncio
 async def test_unregister_tears_down_a_still_open_stream() -> None:
     """Shutting the reactor down interrupts its workers, so a stream can outlive
     the request that opened it. Scope teardown must still close it — from the

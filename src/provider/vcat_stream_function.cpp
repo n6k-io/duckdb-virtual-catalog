@@ -310,6 +310,56 @@ std::string ArgString(DataChunk &args, idx_t col, idx_t row) {
 	return FlatVector::GetData<string_t>(args.data[col])[row].GetString();
 }
 
+bool ArgIsNull(DataChunk &args, idx_t col, idx_t row) {
+	return !FlatVector::Validity(args.data[col]).RowIsValid(row);
+}
+
+struct StreamParam {
+	std::string name;
+	LogicalType type;
+};
+
+vector<StreamParam> ParseStreamParams(ClientContext &context, const std::string &json) {
+	using namespace duckdb_yyjson; // NOLINT
+	constexpr const char *kFn = "vcatprovider_create_stream_function";
+	std::string text = json;
+	yyjson_read_err error;
+	auto *doc = yyjson_read_opts(&text[0], text.size(), YYJSON_READ_NOFLAG, nullptr, &error);
+	if (!doc) {
+		throw InvalidInputException("%s: params is not valid JSON: %s at byte %llu", kFn, error.msg,
+		                            static_cast<uint64_t>(error.pos));
+	}
+	vector<StreamParam> params;
+	try {
+		auto *root = yyjson_doc_get_root(doc);
+		if (!yyjson_is_arr(root)) {
+			throw InvalidInputException("%s: params must be a JSON array of {\"name\", \"type\"} objects", kFn);
+		}
+		size_t idx;
+		size_t max;
+		yyjson_val *item;
+		yyjson_arr_foreach(root, idx, max, item) {
+			auto *name = yyjson_obj_get(item, "name");
+			auto *type = yyjson_obj_get(item, "type");
+			if (!yyjson_is_obj(item) || !yyjson_is_str(name) || !yyjson_is_str(type) || yyjson_get_len(name) == 0) {
+				throw InvalidInputException(
+				    "%s: params[%llu] must be {\"name\": <non-empty string>, \"type\": <string>}", kFn,
+				    static_cast<uint64_t>(idx));
+			}
+			const std::string type_str = yyjson_get_str(type);
+			// The type parser has no spelling for ANY, but an untyped param is still a named one.
+			auto logical_type = StringUtil::CIEquals(type_str, "ANY") ? LogicalType::ANY
+			                                                          : TransformStringToLogicalType(type_str, context);
+			params.push_back({yyjson_get_str(name), std::move(logical_type)});
+		}
+	} catch (...) {
+		yyjson_doc_free(doc);
+		throw;
+	}
+	yyjson_doc_free(doc);
+	return params;
+}
+
 void CreateStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &context = state.GetContext();
 	const auto count = args.size();
@@ -319,6 +369,12 @@ void CreateStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector
 	auto result_data = FlatVector::GetDataMutable<string_t>(result);
 
 	for (idx_t i = 0; i < count; i++) {
+		for (idx_t c = 0; c < 6; c++) {
+			if (ArgIsNull(args, c, i)) {
+				throw InvalidInputException("vcatprovider_create_stream_function: argument %llu cannot be NULL",
+				                            static_cast<uint64_t>(c + 1));
+			}
+		}
 		const auto catalog_name = ArgString(args, 0, i);
 		const auto schema_name = ArgString(args, 1, i);
 		const auto name = ArgString(args, 2, i);
@@ -338,10 +394,26 @@ void CreateStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector
 		TableFunction tf(Identifier(name), vector<LogicalType> {}, ArrowTableFunction::ArrowScanFunction,
 		                 OpenStreamAndBindSchema, ArrowTableFunction::ArrowScanInitGlobal,
 		                 ArrowTableFunction::ArrowScanInitLocal);
-		tf.GetSignature().AddArgs("args", LogicalType::ANY);
+		const bool has_extras = args.ColumnCount() == 8;
+		const bool has_params = has_extras && !ArgIsNull(args, 6, i);
+		const bool has_description = has_extras && !ArgIsNull(args, 7, i);
+		FunctionDescription description;
+		if (has_params) {
+			for (auto &param : ParseStreamParams(context, ArgString(args, 6, i))) {
+				tf.GetSignature().AddPositionalOnly(Identifier(param.name), param.type);
+				description.parameter_names.push_back(param.name);
+				description.parameter_types.push_back(param.type);
+			}
+		} else {
+			tf.GetSignature().AddArgs("args", LogicalType::ANY);
+		}
 		tf.function_info = std::move(stream_info);
 
 		CreateTableFunctionInfo create_info(std::move(tf));
+		if (has_description) {
+			description.description = ArgString(args, 7, i);
+			create_info.descriptions.push_back(std::move(description));
+		}
 		create_info.SetQualifiedName(
 		    QualifiedName(Identifier(catalog_name), Identifier(schema_name), Identifier(name)));
 		// The constructor hardcodes internal=true, which is rejected outside the system catalog.
@@ -467,13 +539,23 @@ void StreamFunctionsScan(ClientContext &context, TableFunctionInput &data_p, Dat
 } // namespace
 
 void RegisterStreamFunctionCreators(ExtensionLoader &loader) {
-	ScalarFunction create_func("vcatprovider_create_stream_function",
-	                           {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+	ScalarFunctionSet create_set("vcatprovider_create_stream_function");
+	ScalarFunction create_func({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
 	                            LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                           LogicalType::VARCHAR, CreateStreamFunctionEntries);
 	create_func.SetVolatile();
 	create_func.SetFallible();
-	loader.RegisterFunction(create_func);
+	create_set.AddFunction(create_func);
+	// params and description are nullable, so NULLs must reach the function instead of short-circuiting it.
+	ScalarFunction create_described_func({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+	                                      LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+	                                      LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                     LogicalType::VARCHAR, CreateStreamFunctionEntries);
+	create_described_func.SetVolatile();
+	create_described_func.SetFallible();
+	create_described_func.SetNullHandling(FunctionNullHandling::SPECIAL_HANDLING);
+	create_set.AddFunction(create_described_func);
+	loader.RegisterFunction(create_set);
 
 	ScalarFunction drop_func("vcatprovider_drop_stream_function",
 	                         {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,

@@ -1,0 +1,95 @@
+# name: test/sql/provider/stream_function_signature.test
+# description: params and description given to vcatprovider_create_stream_function show in duckdb_functions()
+# group: [provider]
+
+require vcatprovider
+
+statement ok
+ATTACH ':memory:' AS app (TYPE vcatprovider)
+
+statement ok
+BEGIN
+
+query I
+SELECT vcatprovider_create_stream_function('app', 'main', 'forecast', 'o', 'n', 'c',
+    '[{"name": "region", "type": "VARCHAR"}, {"name": "sims", "type": "BIGINT"}]',
+    'Simulate demand for a region.')
+----
+ok
+
+query I
+SELECT vcatprovider_create_stream_function('app', 'main', 'untyped', 'o', 'n', 'c')
+----
+ok
+
+query I
+SELECT vcatprovider_create_stream_function('app', 'main', 'described_only', 'o', 'n', 'c', NULL, 'Just a description.')
+----
+ok
+
+query I
+SELECT vcatprovider_create_stream_function('app', 'main', 'no_args', 'o', 'n', 'c', '[]', NULL)
+----
+ok
+
+query I
+SELECT vcatprovider_create_stream_function('app', 'main', 'loose', 'o', 'n', 'c',
+    '[{"name": "anything", "type": "any"}, {"name": "day", "type": "DATE"}]', NULL)
+----
+ok
+
+statement ok
+COMMIT
+
+query IIIII
+SELECT function_name, parameters, parameter_types, varargs, description
+FROM duckdb_functions()
+WHERE database_name = 'app' AND function_type = 'table'
+ORDER BY function_name
+----
+described_only	[]	[]	ANY	Just a description.
+forecast	[region, sims]	[VARCHAR, BIGINT]	NULL	Simulate demand for a region.
+loose	[anything, day]	[ANY, DATE]	NULL	NULL
+no_args	[]	[]	NULL	NULL
+untyped	[]	[]	ANY	NULL
+
+# Declared params are checked by the binder, before the host is ever asked to open.
+statement error
+SELECT * FROM app.main.forecast('north')
+----
+<REGEX>:Binder Error:.*forecast.*
+
+statement error
+SELECT * FROM app.main.forecast('north', 'not a number')
+----
+Could not convert string 'not a number' to INT64
+
+statement error
+SELECT * FROM app.main.no_args(1)
+----
+<REGEX>:Binder Error:.*no_args.*
+
+statement error
+SELECT vcatprovider_create_stream_function('app', 'main', 'bad', 'o', 'n', 'c', 'not json', NULL)
+----
+params is not valid JSON
+
+statement error
+SELECT vcatprovider_create_stream_function('app', 'main', 'bad', 'o', 'n', 'c', '{"name": "x"}', NULL)
+----
+params must be a JSON array
+
+statement error
+SELECT vcatprovider_create_stream_function('app', 'main', 'bad', 'o', 'n', 'c', '[{"name": "x"}]', NULL)
+----
+params[0] must be
+
+statement error
+SELECT vcatprovider_create_stream_function('app', 'main', 'bad', 'o', 'n', 'c', '[{"name": "x", "type": "NOT_A_TYPE"}]', NULL)
+----
+NOT_A_TYPE
+
+statement error
+SELECT vcatprovider_create_stream_function('app', NULL, 'bad', 'o', 'n', 'c', NULL, NULL)
+----
+argument 2 cannot be NULL
