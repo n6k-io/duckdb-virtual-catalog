@@ -49,6 +49,27 @@ jobs:
             echo "::error::VERSION must be bumped above $base (is $head)"
             exit 1
           fi
+      - name: pyproject version bumped
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --quiet "$BASE_SHA" HEAD -- python-virtual-catalog/; then
+            echo "no changes under python-virtual-catalog/"
+            exit 0
+          fi
+          head="$(python3 -c 'import tomllib; print(tomllib.load(open("python-virtual-catalog/pyproject.toml","rb"))["project"]["version"])')"
+          base="$(git tag --list 'python/v[0-9]*' --sort=-v:refname | head -1)"
+          base="${base#python/v}"
+          base="${base:-0.0.0}"
+          echo "latest release=$base head=$head"
+          if [[ ! "$head" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::pyproject version '$head' is not <major>.<minor>.<patch>"
+            exit 1
+          fi
+          if [[ "$head" == "$base" || "$(printf '%s\n%s\n' "$base" "$head" | sort -V | tail -1)" != "$head" ]]; then
+            echo "::error::python-virtual-catalog changed: pyproject version must be bumped above $base (is $head)"
+            exit 1
+          fi
 
   no-sql-strings:
     name: No SQL assembled from strings
