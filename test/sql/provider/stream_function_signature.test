@@ -38,6 +38,14 @@ SELECT vcatprovider_create_stream_function('app', 'main', 'loose', 'o', 'n', 'c'
 ----
 ok
 
+query I
+SELECT vcatprovider_create_stream_function('app', 'main', 'defaults', 'o', 'n', 'c',
+    '[{"name": "region", "type": "VARCHAR"}, {"name": "sims", "type": "BIGINT", "default": 3},
+      {"name": "day", "type": "DATE", "default": "2024-01-02"}, {"name": "tag", "type": "VARCHAR", "default": null}]',
+    NULL)
+----
+ok
+
 statement ok
 COMMIT
 
@@ -47,6 +55,7 @@ FROM duckdb_functions()
 WHERE database_name = 'app' AND function_type = 'table'
 ORDER BY function_name
 ----
+defaults	[region, sims, day, tag]	[VARCHAR, BIGINT, DATE, VARCHAR]	NULL	NULL
 described_only	[]	[]	ANY	Just a description.
 forecast	[region, sims]	[VARCHAR, BIGINT]	NULL	Simulate demand for a region.
 loose	[anything, day]	[ANY, DATE]	NULL	NULL
@@ -68,6 +77,33 @@ statement error
 SELECT * FROM app.main.no_args(1)
 ----
 <REGEX>:Binder Error:.*no_args.*
+
+statement error
+SELECT * FROM app.main.forecast(region => 'north', bogus => 1)
+----
+<REGEX>:Binder Error:.*Invalid named parameter.*bogus.*
+
+statement error
+SELECT * FROM app.main.forecast(sims => 1)
+----
+<REGEX>:Binder Error:.*forecast.*
+
+statement error
+SELECT * FROM app.main.forecast('north', region => 'south')
+----
+<REGEX>:Binder Error:.*already been provided as a positional argument.*
+
+statement error
+SELECT vcatprovider_create_stream_function('app', 'main', 'bad', 'o', 'n', 'c',
+    '[{"name": "x", "type": "BIGINT", "default": "not a number"}]', NULL)
+----
+Could not convert string 'not a number' to INT64
+
+statement error
+SELECT vcatprovider_create_stream_function('app', 'main', 'bad', 'o', 'n', 'c',
+    '[{"name": "x", "type": "BIGINT", "default": [1]}]', NULL)
+----
+default of param "x" must be null, a bool, a number or a string
 
 statement error
 SELECT vcatprovider_create_stream_function('app', 'main', 'bad', 'o', 'n', 'c', 'not json', NULL)

@@ -81,8 +81,9 @@ ATTACH '' AS app (TYPE vcatprovider, list p_list, schema p_schema, scan p_scan);
 
 The created entry is a table function. Without `params` (or with NULL) it takes
 arbitrary arguments (`ANY` varargs). `params` is a JSON array
-`[{"name": ..., "type": ...}]` of DuckDB type names; the entry then takes exactly
-those positional arguments. `params` and `description` are reported by
+`[{"name": ..., "type": ..., "default": ...}]` of DuckDB type names, `"default"`
+optional; the entry then takes exactly those arguments, by position or by name,
+and a defaulted one may be left out. `params` and `description` are reported by
 `duckdb_functions()`.
 The three host UDFs it drives:
 
