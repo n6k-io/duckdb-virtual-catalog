@@ -317,7 +317,34 @@ bool ArgIsNull(DataChunk &args, idx_t col, idx_t row) {
 struct StreamParam {
 	std::string name;
 	LogicalType type;
+	optional<Value> default_value;
 };
+
+Value StreamParamDefault(duckdb_yyjson::yyjson_val *val, const std::string &name, const LogicalType &type) {
+	using namespace duckdb_yyjson; // NOLINT
+	Value value;
+	if (yyjson_is_null(val)) {
+		value = Value(type);
+	} else if (yyjson_is_bool(val)) {
+		value = Value::BOOLEAN(yyjson_get_bool(val));
+	} else if (yyjson_is_sint(val)) {
+		value = Value::BIGINT(yyjson_get_sint(val));
+	} else if (yyjson_is_uint(val)) {
+		value = Value::UBIGINT(yyjson_get_uint(val));
+	} else if (yyjson_is_real(val)) {
+		value = Value::DOUBLE(yyjson_get_real(val));
+	} else if (yyjson_is_str(val)) {
+		value = Value(std::string(yyjson_get_str(val), yyjson_get_len(val)));
+	} else {
+		throw InvalidInputException(
+		    "vcatprovider_create_stream_function: default of param \"%s\" must be null, a bool, a number or a string",
+		    name);
+	}
+	if (type.id() == LogicalTypeId::ANY) {
+		return value;
+	}
+	return value.DefaultCastAs(type);
+}
 
 vector<StreamParam> ParseStreamParams(ClientContext &context, const std::string &json) {
 	using namespace duckdb_yyjson; // NOLINT
@@ -333,7 +360,8 @@ vector<StreamParam> ParseStreamParams(ClientContext &context, const std::string 
 	try {
 		auto *root = yyjson_doc_get_root(doc);
 		if (!yyjson_is_arr(root)) {
-			throw InvalidInputException("%s: params must be a JSON array of {\"name\", \"type\"} objects", kFn);
+			throw InvalidInputException(
+			    "%s: params must be a JSON array of {\"name\", \"type\"[, \"default\"]} objects", kFn);
 		}
 		size_t idx;
 		size_t max;
@@ -350,7 +378,11 @@ vector<StreamParam> ParseStreamParams(ClientContext &context, const std::string 
 			// The type parser has no spelling for ANY, but an untyped param is still a named one.
 			auto logical_type = StringUtil::CIEquals(type_str, "ANY") ? LogicalType::ANY
 			                                                          : TransformStringToLogicalType(type_str, context);
-			params.push_back({yyjson_get_str(name), std::move(logical_type)});
+			optional<Value> default_value;
+			if (auto *default_val = yyjson_obj_get(item, "default")) {
+				default_value = StreamParamDefault(default_val, yyjson_get_str(name), logical_type);
+			}
+			params.push_back({yyjson_get_str(name), std::move(logical_type), std::move(default_value)});
 		}
 	} catch (...) {
 		yyjson_doc_free(doc);
@@ -400,7 +432,7 @@ void CreateStreamFunctionEntries(DataChunk &args, ExpressionState &state, Vector
 		FunctionDescription description;
 		if (has_params) {
 			for (auto &param : ParseStreamParams(context, ArgString(args, 6, i))) {
-				tf.GetSignature().AddPositionalOnly(Identifier(param.name), param.type);
+				tf.GetSignature().AddParameter(Identifier(param.name), param.type, param.default_value);
 				description.parameter_names.push_back(param.name);
 				description.parameter_types.push_back(param.type);
 			}

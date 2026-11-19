@@ -24,6 +24,8 @@ from virtual_catalog.extension import local_extension_path
 from virtual_catalog.rpc_stream import (
     ArrowFrameEncoder,
     HostStreamUdfs,
+    RpcEntry,
+    RpcParam,
     RpcRegistry,
     StreamingRpc,
     register_rpc_streams,
@@ -31,6 +33,10 @@ from virtual_catalog.rpc_stream import (
 
 CONN_CONFIG: dict[str, Any] = {"allow_unsigned_extensions": "true"}
 TICK = pa.schema([("seq", pa.int64())])
+
+
+def _untyped(fn: Any) -> RpcEntry:
+    return RpcEntry(fn=fn, schema=TICK, params=None, description=None)
 
 
 def _scope(registry: RpcRegistry, loop: asyncio.AbstractEventLoop) -> tuple[duckdb.DuckDBPyConnection, HostStreamUdfs]:
@@ -100,7 +106,7 @@ async def test_finite_rpc_sends_a_table_and_ends() -> None:
     def echo(scalars: list[Any], table: pa.Table | None) -> pa.Table:
         return pa.table({"seq": [int(scalars[0])]}, schema=TICK)
 
-    con, scope = _scope({"echo": (echo, TICK)}, asyncio.get_running_loop())
+    con, scope = _scope({"echo": _untyped(echo)}, asyncio.get_running_loop())
     messages, chunks = await asyncio.to_thread(_drive, con, scope, "echo", "[7]")
     assert chunks == 1
     assert _read(messages).column("seq").to_pylist() == [7]
@@ -112,7 +118,7 @@ async def test_streaming_rpc_yields_one_chunk_per_yield() -> None:
         for seq in range(int(scalars[0])):
             yield pa.record_batch({"seq": [seq]}, schema=TICK)
 
-    con, scope = _scope({"ticker": (StreamingRpc(ticker), TICK)}, asyncio.get_running_loop())
+    con, scope = _scope({"ticker": _untyped(StreamingRpc(ticker))}, asyncio.get_running_loop())
     messages, chunks = await asyncio.to_thread(_drive, con, scope, "ticker", "[3]")
     assert chunks == 3
     assert _read(messages).column("seq").to_pylist() == [0, 1, 2]
@@ -127,7 +133,7 @@ async def test_empty_yield_is_not_end_of_stream() -> None:
         yield pa.table({"seq": []}, schema=TICK)
         yield pa.record_batch({"seq": [42]}, schema=TICK)
 
-    con, scope = _scope({"sparse": (StreamingRpc(sparse), TICK)}, asyncio.get_running_loop())
+    con, scope = _scope({"sparse": _untyped(StreamingRpc(sparse))}, asyncio.get_running_loop())
     messages, chunks = await asyncio.to_thread(_drive, con, scope, "sparse")
     assert chunks == 1
     assert _read(messages).column("seq").to_pylist() == [42]
@@ -148,7 +154,7 @@ async def test_unbounded_stream_stops_at_close_and_runs_teardown() -> None:
         finally:
             closed.set()
 
-    con, scope = _scope({"forever": (StreamingRpc(forever), TICK)}, asyncio.get_running_loop())
+    con, scope = _scope({"forever": _untyped(StreamingRpc(forever))}, asyncio.get_running_loop())
     messages, chunks = await asyncio.to_thread(_drive, con, scope, "forever", stop_after=4)
     assert chunks == 4
     assert closed.is_set()
@@ -168,7 +174,7 @@ async def test_pushed_rows_arrive_as_a_table() -> None:
     with ipc.new_stream(sink, body.schema) as writer:
         writer.write_table(body)
 
-    con, scope = _scope({"total": (total, TICK)}, asyncio.get_running_loop())
+    con, scope = _scope({"total": _untyped(total)}, asyncio.get_running_loop())
     messages, _ = await asyncio.to_thread(_drive, con, scope, "total", "[]", sink.getvalue().to_pybytes())
     assert _read(messages).column("seq").to_pylist() == [6]
 
@@ -179,7 +185,7 @@ async def test_generator_error_surfaces_as_a_query_error() -> None:
         yield pa.record_batch({"seq": [0]}, schema=TICK)
         raise ValueError("upstream is down")
 
-    con, scope = _scope({"boom": (StreamingRpc(boom), TICK)}, asyncio.get_running_loop())
+    con, scope = _scope({"boom": _untyped(StreamingRpc(boom))}, asyncio.get_running_loop())
     with pytest.raises(duckdb.Error, match="upstream is down"):
         await asyncio.to_thread(_drive, con, scope, "boom")
 
@@ -209,7 +215,7 @@ async def test_register_rpc_streams_creates_a_callable_table_function() -> None:
         register_rpc_streams,
         con,
         catalog="db",
-        registry={"echo": (echo, TICK)},
+        registry={"echo": _untyped(echo)},
         main_loop=asyncio.get_running_loop(),
     )
 
@@ -240,8 +246,13 @@ async def test_register_rpc_streams_passes_params_and_description() -> None:
         con,
         catalog="db",
         registry={
-            "typed": (echo, TICK, [("region", "VARCHAR"), ("n", "BIGINT")], "Echo n."),
-            "plain": (echo, TICK),
+            "typed": RpcEntry(
+                fn=echo,
+                schema=TICK,
+                params=[RpcParam("region", "VARCHAR"), RpcParam("n", "BIGINT")],
+                description="Echo n.",
+            ),
+            "plain": _untyped(echo),
         },
         main_loop=asyncio.get_running_loop(),
     )
@@ -272,7 +283,7 @@ async def test_unregister_tears_down_a_still_open_stream() -> None:
         finally:
             closed.set()
 
-    con, scope = _scope({"forever": (StreamingRpc(forever), TICK)}, asyncio.get_running_loop())
+    con, scope = _scope({"forever": _untyped(StreamingRpc(forever))}, asyncio.get_running_loop())
     open_udf = scope.udfs[0]
     await asyncio.to_thread(con.execute, f"SELECT {open_udf}(?, ?, ?, ?)", ["h1", "forever", "[]", None])
     await asyncio.to_thread(con.execute, f"SELECT {scope.udfs[1]}(?)", ["h1"])
@@ -283,3 +294,23 @@ async def test_unregister_tears_down_a_still_open_stream() -> None:
     # Scheduled on this loop rather than run inline, so it lands on the next turn.
     await asyncio.sleep(0)
     assert closed.is_set()
+
+
+def test_register_rpc_streams_rejects_a_bare_tuple() -> None:
+    from virtual_catalog.extension import VCATPROVIDER, load_vcatprovider
+
+    if local_extension_path(VCATPROVIDER) is None:
+        pytest.skip("vcatprovider extension not built")
+    con = duckdb.connect(config=CONN_CONFIG)
+    load_vcatprovider(con)
+    con.execute("ATTACH ':memory:' AS db")
+
+    def echo(scalars: list[Any], table: pa.Table | None) -> pa.Table:
+        raise AssertionError
+
+    loop = asyncio.new_event_loop()
+    try:
+        with pytest.raises(TypeError, match="needs an RpcEntry, got tuple"):
+            register_rpc_streams(con, catalog="db", registry={"echo": (echo, TICK)}, main_loop=loop)  # type: ignore[dict-item]
+    finally:
+        loop.close()

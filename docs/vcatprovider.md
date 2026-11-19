@@ -188,9 +188,11 @@ SELECT vcatprovider_create_stream_function('app', 'main', 'forecast',
     'Simulate demand for a region.');
 ```
 
-With `params`, the entry takes exactly those typed positional arguments and the
-binder rejects any other call. Both show in `duckdb_functions()` (`parameters`,
-`parameter_types`, `description`); either may be NULL.
+With `params`, the entry takes exactly those typed arguments, by position or by
+name (`forecast(sims => 10, region => 'north')`), and the binder rejects any other
+call. A param with a `"default"` (null, a bool, a number or a string, cast to its
+type at registration) may be left out; the binder fills it in. Both show in
+`duckdb_functions()` (`parameters`, `parameter_types`, `description`); either may be NULL.
 
 The call's arguments are delivered to `open_udf` as a JSON array. Types with no JSON form — dates, decimals, 128-bit
 ints — cross as strings. `handle` is a per-bind opaque string, so two concurrent

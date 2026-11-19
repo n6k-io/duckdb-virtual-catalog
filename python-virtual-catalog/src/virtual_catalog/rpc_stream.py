@@ -17,7 +17,7 @@ and `SELECT * FROM <catalog>.main.<name>(...)` works locally with no server.
 
 ```python
 import pyarrow as pa
-from virtual_catalog.rpc_stream import StreamingRpc, register_rpc_streams
+from virtual_catalog.rpc_stream import RpcEntry, RpcParam, StreamingRpc, register_rpc_streams
 
 TICK = pa.schema([("seq", pa.int64()), ("value", pa.float64())])
 
@@ -34,16 +34,17 @@ def connect(ws):
     con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
     load_vcatprovider(con)
     con.execute("ATTACH ':memory:' AS db")
-    register_rpc_streams(con, catalog="db", registry={"random_walk": (StreamingRpc(random_walk), TICK)})
+    entry = RpcEntry(fn=StreamingRpc(random_walk), schema=TICK, params=[RpcParam("n", "BIGINT")], description=None)
+    register_rpc_streams(con, catalog="db", registry={"random_walk": entry})
     return con
 ```
 
-`registry` is `{name: (callable, pa.Schema)}` or
-`{name: (callable, pa.Schema, params, description)}`. `params` is
-`[(name, duckdb_type), ...]`, e.g. `[("region", "VARCHAR"), ("sims", "BIGINT")]`;
-when given, the table function takes exactly those typed arguments instead of
-any arguments. `params` and `description` (either may be `None`) are what
-`duckdb_functions()` reports for the function. The callable takes
+`registry` is `{name: RpcEntry}`. `params` is a list of `RpcParam`, e.g.
+`[RpcParam("region", "VARCHAR"), RpcParam("sims", "BIGINT", has_default=True, default=100)]`,
+and the table function takes exactly those typed arguments, by position or by name,
+with a defaulted one optional; `params=None` makes it take any arguments.
+`params` and `description` are what `duckdb_functions()` reports for the
+function. Every field is required. The callable takes
 `(scalars, table)` — the RPC's positional arguments, and the rows a
 `RPC_TABLE` call pushed (`None` for `RPC_SCALAR`) — and is either:
 
@@ -113,8 +114,41 @@ class StreamingRpc:
 
 
 RpcEntryFn = FiniteRpcFn | StreamingRpc
-RpcParams = list[tuple[str, str]]
-RpcRegistry = dict[str, tuple[RpcEntryFn, pa.Schema] | tuple[RpcEntryFn, pa.Schema, RpcParams | None, str | None]]
+
+# A JSON scalar; the extension casts it to the param's type at registration.
+RpcDefault = None | bool | int | float | str
+
+
+@dataclass(frozen=True)
+class RpcParam:
+    """`has_default` rather than a sentinel because `None` is a valid default (SQL NULL)."""
+
+    name: str
+    type: str
+    has_default: bool = False
+    default: RpcDefault = None
+
+    def to_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"name": self.name, "type": self.type}
+        if self.has_default:
+            out["default"] = self.default
+        return out
+
+
+RpcParams = list[RpcParam]
+
+
+@dataclass(frozen=True, kw_only=True)
+class RpcEntry:
+    """`params=None` makes the table function take any arguments; it has to be written out."""
+
+    fn: RpcEntryFn
+    schema: pa.Schema
+    params: RpcParams | None
+    description: str | None
+
+
+RpcRegistry = dict[str, RpcEntry]
 
 
 def _drop_leading_message(data: bytes) -> bytes:
@@ -295,7 +329,7 @@ class HostStreamUdfs:
         entry = self.registry.get(function)
         if entry is None:
             raise KeyError(f"no host RPC named {function!r} is registered on this connection")
-        fn, schema = entry[0], entry[1]
+        fn, schema = entry.fn, entry.schema
         scalars = json.loads(args_json) if args_json else []
         table = ipc.open_stream(input_ipc).read_all() if input_ipc else None
 
@@ -415,15 +449,15 @@ def register_rpc_streams(
     con.begin()
     try:
         for name, entry in registry.items():
-            fn, schema = entry[0], entry[1]
-            params, description = (entry[2], entry[3]) if len(entry) == 4 else (None, None)
-            if not isinstance(schema, pa.Schema):
-                raise TypeError(f"RPC {name!r} needs a pa.Schema, got {type(schema).__name__}")
-            handle.registry[name] = (fn, schema)
-            params_json = None if params is None else json.dumps([{"name": n, "type": t} for n, t in params])
+            if not isinstance(entry, RpcEntry):
+                raise TypeError(f"RPC {name!r} needs an RpcEntry, got {type(entry).__name__}")
+            if not isinstance(entry.schema, pa.Schema):
+                raise TypeError(f"RPC {name!r} needs a pa.Schema, got {type(entry.schema).__name__}")
+            handle.registry[name] = entry
+            params_json = None if entry.params is None else json.dumps([p.to_json() for p in entry.params])
             con.execute(
                 "SELECT vcatprovider_create_stream_function(?, ?, ?, ?, ?, ?, ?, ?)",
-                [catalog, RPC_SCHEMA, name, open_udf, next_udf, close_udf, params_json, description],
+                [catalog, RPC_SCHEMA, name, open_udf, next_udf, close_udf, params_json, entry.description],
             )
             handle.created.append((catalog, name))
     except Exception:
