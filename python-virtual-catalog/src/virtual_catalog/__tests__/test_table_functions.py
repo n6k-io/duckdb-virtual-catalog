@@ -293,3 +293,17 @@ def test_unsupported_default_fails_at_registration() -> None:
     con = _con()
     with pytest.raises(TypeError, match="'n': default \\[1\\] is not"):
         register_table_functions(con, catalog="db", functions=[TableFunction(f, returns=OUT)])
+
+
+@pytest.mark.asyncio
+async def test_trailing_defaults_fill_in_when_the_binder_is_bypassed() -> None:
+    def f(region: str, n: int = 3) -> Any:
+        return {"region": region, "n": n}
+
+    con = _con()
+    handle = await _register(con, TableFunction(f, returns=OUT))
+    finite = handle.registry["f"].fn
+    assert finite(["a"], None).to_pylist() == [{"region": "a", "n": 3}]
+    assert finite(["a", 5], None).to_pylist() == [{"region": "a", "n": 5}]
+    with pytest.raises(TypeError, match="takes 1 to 2 argument"):
+        finite([], None)

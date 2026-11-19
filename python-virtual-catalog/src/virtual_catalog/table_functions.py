@@ -181,10 +181,16 @@ def _as_table(value: Any, returns: pa.Schema) -> pa.Table | pa.RecordBatch:
 def _adapt(spec: TableFunction, name: str) -> RpcEntry:
     fn = spec.fn
     sql_params, table_param = _signature(fn, spec.inject)
+    required_count = sum(1 for p in sql_params if not p.has_default)
 
     def call_with(stack: ExitStack, scalars: list[Any], table: pa.Table | None) -> Any:
-        if len(scalars) != len(sql_params):
-            raise TypeError(f"table function {name!r} takes {len(sql_params)} argument(s), got {len(scalars)}")
+        # A caller that bypasses the binder (n6k's positional RPC path) sends only the arguments
+        # it was given; the trailing defaulted ones then take the function's own defaults.
+        if not required_count <= len(scalars) <= len(sql_params):
+            expected = (
+                str(len(sql_params)) if required_count == len(sql_params) else f"{required_count} to {len(sql_params)}"
+            )
+            raise TypeError(f"table function {name!r} takes {expected} argument(s), got {len(scalars)}")
         kwargs = {
             p.name: (p.parse(v) if p.parse is not None and isinstance(v, str) else v)
             for p, v in zip(sql_params, scalars)

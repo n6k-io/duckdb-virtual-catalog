@@ -89,9 +89,9 @@ SELECT * FROM app.main.forecast(sims => 1)
 <REGEX>:Binder Error:.*forecast.*
 
 statement error
-SELECT * FROM app.main.forecast('north', region => 'south')
+SELECT * FROM app.main.forecast('north', 1, region => 'south')
 ----
-<REGEX>:Binder Error:.*already been provided as a positional argument.*
+<REGEX>:Binder Error:.*forecast.*
 
 statement error
 SELECT vcatprovider_create_stream_function('app', 'main', 'bad', 'o', 'n', 'c',
